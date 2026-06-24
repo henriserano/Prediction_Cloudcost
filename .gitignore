@@ -5,3 +5,5 @@ Cloud Run Revision - Container CPU Utilization.csv
 Cloud Run Revision - Instance Count.csv
 Cloud Run Revision - Request Count.csv
 Cloud Run Revision - Request Latency.csv
+daily_costs.parquet
+daily_per_service.parquet
