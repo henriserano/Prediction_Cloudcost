@@ -1,0 +1,19 @@
+# Copy this file to terraform.tfvars and fill in your values.
+# terraform.tfvars is gitignored — never commit it.
+
+aws_region = "eu-west-1"
+env        = "dev"
+app_name   = "finops"
+
+# Networking
+vpc_cidr  = "10.0.0.0/16"
+az_count  = 2
+
+# ECS / Fargate
+container_cpu    = 512   # 0.5 vCPU
+container_memory = 1024  # 1 GB
+desired_count    = 1
+
+# HTTPS — set to your ACM certificate ARN to enable TLS
+# certificate_arn = "arn:aws:acm:eu-west-1:123456789012:certificate/xxxxxxxx"
+certificate_arn = ""

@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
-from pathlib import Path
-from typing import List, Literal
+from typing import Literal
 
 from pydantic import Field
 
@@ -17,10 +16,7 @@ except Exception as e:  # pragma: no cover
 class Settings(BaseSettings):
     """Application settings.
 
-    Priority:
-      1) env vars
-      2) .env file (if present)
-      3) defaults below
+    Priority: env vars > .env file > defaults.
     """
 
     model_config = SettingsConfigDict(
@@ -32,7 +28,7 @@ class Settings(BaseSettings):
 
     # App
     app_name: str = Field(default="FinOps Analyser")
-    app_version: str = Field(default="0.1.0")
+    app_version: str = Field(default="0.2.0")
     env: Literal["dev", "test", "prod"] = Field(default="dev")
     debug: bool = Field(default=False)
 
@@ -40,8 +36,14 @@ class Settings(BaseSettings):
     host: str = Field(default="0.0.0.0")
     port: int = Field(default=8080)
 
+    # CORS — comma-separated origins; "*" in dev
+    cors_origins: str = Field(default="*")
+
+    @property
+    def cors_origins_list(self) -> list[str]:
+        return [o.strip() for o in self.cors_origins.split(",")]
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    """Cached settings accessor."""
     return Settings()
