@@ -28,6 +28,12 @@ export interface STLPoint {
   residual: number
 }
 
+export interface STLStrengths {
+  ft: number
+  fs: number
+  period: number
+}
+
 export interface ForecastPoint {
   date: string
   forecast: number
@@ -36,6 +42,16 @@ export interface ForecastPoint {
   low95: number
   high95: number
   actual?: number
+}
+
+export interface ForecastSummary {
+  horizonDays: number
+  totalForecast: number
+  dailyAvgForecast: number
+  bestModel: string
+  bestModelMae: number
+  bestModelMape: number
+  modelsEvaluated: number
 }
 
 export interface ModelBenchmark {
@@ -53,12 +69,14 @@ export interface ModelBenchmark {
 export interface KPIData {
   totalSpend: number
   dailyAvg: number
-  trend: number
+  trendSlope: number
   forecastNext30: number
   anomalyCount: number
   topService: string
   topServicePct: number
   dataPoints: number
+  periodStart: string
+  periodEnd: string
 }
 
 export interface DescriptiveStats {
@@ -72,4 +90,22 @@ export interface DescriptiveStats {
   mad: number
   min: number
   max: number
+}
+
+export interface StationarityTest {
+  statistic: number
+  pValue: number
+  isStationary: boolean
+  lagsUsed: number
+}
+
+export interface StationarityResult {
+  adf: StationarityTest
+  kpss: StationarityTest
+}
+
+export interface ACFPoint {
+  lag: number
+  acf: number
+  pacf: number
 }
