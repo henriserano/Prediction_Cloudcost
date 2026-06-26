@@ -15,8 +15,10 @@ resource "aws_ecs_cluster_capacity_providers" "main" {
   cluster_name       = aws_ecs_cluster.main.name
   capacity_providers = ["FARGATE", "FARGATE_SPOT"]
 
+  # Always default to FARGATE — SPOT is unreliable for persistent services
+  # (tasks get reclaimed without warning, causing false "blocked" deployments)
   default_capacity_provider_strategy {
-    capacity_provider = var.env == "prod" ? "FARGATE" : "FARGATE_SPOT"
+    capacity_provider = "FARGATE"
     weight            = 1
     base              = 1
   }
@@ -60,12 +62,13 @@ resource "aws_ecs_task_definition" "app" {
         }
       }
 
+      # python:3.11-slim has no curl — use python instead
       healthCheck = {
-        command     = ["CMD-SHELL", "curl -f http://localhost:${var.app_port}/health || exit 1"]
+        command     = ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:${var.app_port}/health')\" || exit 1"]
         interval    = 30
-        timeout     = 5
+        timeout     = 10
         retries     = 3
-        startPeriod = 60
+        startPeriod = 120
       }
 
       readonlyRootFilesystem = false

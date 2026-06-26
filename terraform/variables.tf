@@ -38,15 +38,15 @@ variable "az_count" {
 # ── ECS / Fargate ──────────────────────────────────────────────────────────────
 
 variable "container_cpu" {
-  description = "CPU units for the Fargate task (256 = 0.25 vCPU)"
+  description = "CPU units for the Fargate task (1024 = 1 vCPU)"
   type        = number
-  default     = 512
+  default     = 1024
 }
 
 variable "container_memory" {
-  description = "Memory (MiB) for the Fargate task"
+  description = "Memory (MiB) for the Fargate task — numpy/scipy/statsmodels need ≥ 1.5 GB at cold start"
   type        = number
-  default     = 1024
+  default     = 2048
 }
 
 variable "desired_count" {

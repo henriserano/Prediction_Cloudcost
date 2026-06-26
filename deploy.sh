@@ -30,7 +30,6 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-PREFIX="${APP_NAME}-${ENV}"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "  FinOps Deploy"
 echo "  env    : $ENV"
@@ -38,9 +37,22 @@ echo "  region : $REGION"
 echo "  tag    : $TAG"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-# ── Step 1 — Read Terraform outputs ───────────────────────────────────────────
-echo "[1/5] Reading Terraform outputs..."
+# ── Step 1 — Terraform apply (infra only — no image_tag change yet) ───────────
+# We apply infra first so ECR exists before the docker push.
+# image_tag is intentionally NOT passed here; ECS lifecycle ignores task_definition.
+echo "[1/6] Applying Terraform (infra)..."
 cd "$TF_DIR"
+terraform apply \
+  -var "env=${ENV}" \
+  -var "aws_region=${REGION}" \
+  -target=aws_ecr_repository.app \
+  -target=aws_vpc_endpoint.ecr_api \
+  -target=aws_vpc_endpoint.ecr_dkr \
+  -target=aws_vpc_endpoint.logs \
+  -target=aws_vpc_endpoint.s3 \
+  -auto-approve
+
+# Read outputs after ECR is guaranteed to exist
 ECR_URL=$(terraform output -raw ecr_repository_url)
 CLUSTER=$(terraform output -raw ecs_cluster_name)
 SERVICE=$(terraform output -raw ecs_service_name)
@@ -51,7 +63,7 @@ echo "  ECS  : $CLUSTER / $SERVICE"
 echo "  URL  : $API_URL"
 
 # ── Step 2 — Docker build ─────────────────────────────────────────────────────
-echo "[2/5] Building Docker image..."
+echo "[2/6] Building Docker image (linux/amd64)..."
 cd "$BACK_DIR"
 docker build \
   --platform linux/amd64 \
@@ -60,15 +72,16 @@ docker build \
   .
 
 # ── Step 3 — ECR login & push ─────────────────────────────────────────────────
-echo "[3/5] Pushing image to ECR..."
+echo "[3/6] Pushing image to ECR..."
 aws ecr get-login-password --region "$REGION" \
   | docker login --username AWS --password-stdin "$ECR_URL"
 
 docker push "${ECR_URL}:${TAG}"
 docker push "${ECR_URL}:latest"
 
-# ── Step 4 — Terraform image_tag update ───────────────────────────────────────
-echo "[4/5] Updating task definition (image_tag=$TAG)..."
+# ── Step 4 — Full Terraform apply with the new image tag ──────────────────────
+# Image is in ECR now — safe to update the task definition
+echo "[4/6] Updating task definition (image_tag=$TAG)..."
 cd "$TF_DIR"
 terraform apply \
   -var "image_tag=${TAG}" \
@@ -77,18 +90,31 @@ terraform apply \
   -auto-approve
 
 # ── Step 5 — Force new ECS deployment ─────────────────────────────────────────
-echo "[5/5] Triggering rolling deployment..."
+echo "[5/6] Triggering rolling deployment..."
+TASK_DEF=$(aws ecs describe-services \
+  --cluster "$CLUSTER" \
+  --services "$SERVICE" \
+  --region "$REGION" \
+  --query 'services[0].taskDefinition' \
+  --output text)
+
 aws ecs update-service \
   --cluster "$CLUSTER" \
   --service "$SERVICE" \
+  --task-definition "$TASK_DEF" \
   --force-new-deployment \
   --region "$REGION" \
   --output json | jq -r '.service.deployments[0] | "  deployment: \(.id)  status: \(.status)"'
 
+# ── Step 6 — Wait for stability ───────────────────────────────────────────────
+echo "[6/6] Waiting for service to stabilise (up to 5 min)..."
+aws ecs wait services-stable \
+  --cluster "$CLUSTER" \
+  --services "$SERVICE" \
+  --region "$REGION"
+
 echo ""
-echo "✓ Deploy kicked off. Monitor progress:"
-echo "  aws ecs describe-services --cluster $CLUSTER --services $SERVICE --region $REGION --query 'services[0].deployments'"
-echo ""
+echo "  Deployment stable!"
 echo "  API base URL : $API_URL"
 echo "  Health check : $API_URL/health"
 echo "  Swagger docs : $API_URL/docs"
