@@ -16,7 +16,7 @@ export const api = axios.create({
 // --------------------------------------------------------------------------
 
 function toCamel(s: string): string {
-  return s.replace(/_([a-z])/g, (_, c) => c.toUpperCase())
+  return s.replace(/_([a-z0-9])/g, (_, c) => c.toUpperCase())
 }
 
 function transformKeys(obj: unknown): unknown {
