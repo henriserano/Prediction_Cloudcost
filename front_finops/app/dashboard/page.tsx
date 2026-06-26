@@ -109,7 +109,7 @@ export default function DashboardPage() {
                   <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
                   <XAxis dataKey="date" tickFormatter={(v) => v.slice(5)} tick={{ fontSize: 10 }} tickLine={false} interval={9} />
                   <YAxis tick={{ fontSize: 10 }} tickLine={false} unit=" €" width={56} />
-                  <Tooltip formatter={(v: number, n: string) => [`${v.toFixed(2)} €`, n]} labelFormatter={(l) => `Date : ${l}`} />
+                  <Tooltip formatter={(v: unknown, n: string) => { const x = v as number; return [`${x.toFixed(2)} €`, n] }} labelFormatter={(l) => `Date : ${l}`} />
                   <Area type="monotone" dataKey="ciHigh" stroke="none" fill="url(#ciGrad)" isAnimationActive={false} />
                   <Area type="monotone" dataKey="ciLow" stroke="none" fill="white" isAnimationActive={false} />
                   <Line type="monotone" dataKey="cost" stroke="#94a3b8" strokeWidth={1.5} dot={false} name="Coût" />
@@ -193,7 +193,7 @@ export default function DashboardPage() {
                   <CartesianGrid strokeDasharray="3 3" horizontal={false} className="stroke-border" />
                   <XAxis type="number" tick={{ fontSize: 10 }} tickLine={false} unit="%" />
                   <YAxis type="category" dataKey="service" tick={{ fontSize: 9 }} tickLine={false} width={75} />
-                  <Tooltip formatter={(v: number) => [`${v.toFixed(1)}%`, "CV"]} />
+                  <Tooltip formatter={(v: unknown) => { const x = v as number; return [`${x.toFixed(1)}%`, "CV"] }} />
                   <Bar dataKey="cv" radius={[0, 4, 4, 0]}>
                     {services.slice(0, 6).map((_, i) => (
                       <Cell key={i} fill={SERVICE_COLORS[i]} />

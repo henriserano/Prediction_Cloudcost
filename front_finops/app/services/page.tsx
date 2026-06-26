@@ -90,8 +90,7 @@ export default function ServicesPage() {
                 <XAxis dataKey="service" tick={{ fontSize: 9 }} tickLine={false} />
                 <YAxis yAxisId="left" tick={{ fontSize: 10 }} tickLine={false} unit=" €" width={56} />
                 <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10 }} tickLine={false} unit="%" domain={[0, 100]} width={36} />
-                <Tooltip formatter={(v: number, name: string) =>
-                  name === "cumPct" ? [`${v.toFixed(1)}%`, "% cumulé"] : [`${v.toFixed(0)} €`, "Coût"]} />
+                <Tooltip formatter={(v: unknown, name: string) => { const x = v as number; return name === "cumPct" ? [`${x.toFixed(1)}%`, "% cumulé"] : [`${x.toFixed(0)} €`, "Coût"] }} />
                 <ReferenceLine yAxisId="right" y={80} stroke="#dc2626" strokeDasharray="4 2"
                   label={{ value: "80%", position: "right", fontSize: 10, fill: "#dc2626" }} />
                 <Bar yAxisId="left" dataKey="cost" radius={[4, 4, 0, 0]} name="Coût">
