@@ -57,7 +57,7 @@ export default function DashboardPage() {
     >
       {/* KPI cards */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        {kpiLoading ? (
+        {(kpiLoading || !kpi) ? (
           Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-28" />)
         ) : (
           <>
@@ -98,7 +98,7 @@ export default function DashboardPage() {
             <CardDescription>Coût brut + Moyenne mobile 7 jours + bandes IC 95%</CardDescription>
           </CardHeader>
           <CardContent>
-            {dailyLoading ? (
+            {(dailyLoading || !daily) ? (
               <Skeleton className="h-[280px]" />
             ) : (
               <ResponsiveContainer width="100%" height={280}>
@@ -129,7 +129,7 @@ export default function DashboardPage() {
             <CardDescription>Part de dépense totale</CardDescription>
           </CardHeader>
           <CardContent>
-            {servicesLoading ? (
+            {(servicesLoading || !services) ? (
               <Skeleton className="h-[200px]" />
             ) : (
               <div className="space-y-2.5 mt-1">
@@ -189,7 +189,7 @@ export default function DashboardPage() {
             <CardDescription>Coefficient de variation (%)</CardDescription>
           </CardHeader>
           <CardContent>
-            {servicesLoading ? (
+            {(servicesLoading || !services) ? (
               <Skeleton className="h-[200px]" />
             ) : (
               <ResponsiveContainer width="100%" height={200}>

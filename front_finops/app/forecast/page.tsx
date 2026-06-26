@@ -34,7 +34,7 @@ export default function ForecastPage() {
     >
       {/* Summary cards */}
       <div className="grid grid-cols-3 gap-4">
-        {summaryLoading ? (
+        {(summaryLoading || !summary) ? (
           Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-24" />)
         ) : (
           <>
@@ -78,7 +78,7 @@ export default function ForecastPage() {
           <CardDescription>Valeurs réelles (gris) + prévision (bleu) + IC 80% / 95%</CardDescription>
         </CardHeader>
         <CardContent>
-          {forecastLoading ? (
+          {(forecastLoading || !points) ? (
             <Skeleton className="h-[360px]" />
           ) : (
             <ResponsiveContainer width="100%" height={360}>
@@ -130,7 +130,7 @@ export default function ForecastPage() {
           <CardDescription>Walk-forward cross-validation — 5 folds × 14 jours</CardDescription>
         </CardHeader>
         <CardContent>
-          {benchLoading ? (
+          {(benchLoading || !benchmarks) ? (
             <Skeleton className="h-[200px]" />
           ) : (
             <>

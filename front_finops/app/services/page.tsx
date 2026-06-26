@@ -44,7 +44,7 @@ export default function ServicesPage() {
     >
       {/* Summary cards */}
       <div className="grid grid-cols-3 gap-4">
-        {servicesLoading || kpiLoading ? (
+        {(servicesLoading || kpiLoading || !services || !kpi) ? (
           Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-24" />)
         ) : (
           <>
@@ -82,7 +82,7 @@ export default function ServicesPage() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          {servicesLoading ? (
+          {(servicesLoading || !services) ? (
             <Skeleton className="h-[320px]" />
           ) : (
             <ResponsiveContainer width="100%" height={320}>
@@ -130,7 +130,7 @@ export default function ServicesPage() {
           <CardDescription>Coût, part, volatilité (CV) et profil de risque</CardDescription>
         </CardHeader>
         <CardContent>
-          {servicesLoading ? (
+          {(servicesLoading || !services) ? (
             <Skeleton className="h-[200px]" />
           ) : (
             <div className="overflow-x-auto">

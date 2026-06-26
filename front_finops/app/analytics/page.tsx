@@ -48,7 +48,7 @@ export default function AnalyticsPage() {
             <CardDescription>Distribution des coûts quotidiens (€)</CardDescription>
           </CardHeader>
           <CardContent className="pt-2">
-            {statsLoading ? (
+            {(statsLoading || !stats) ? (
               <Skeleton className="h-[260px]" />
             ) : (
               <>
@@ -76,7 +76,7 @@ export default function AnalyticsPage() {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            {stlLoading ? (
+            {(stlLoading || !stl) ? (
               <Skeleton className="h-[260px]" />
             ) : (
               <>
@@ -141,7 +141,7 @@ export default function AnalyticsPage() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          {anomaliesLoading || statsLoading ? (
+          {(anomaliesLoading || statsLoading || !anomalies || !stats) ? (
             <Skeleton className="h-[300px]" />
           ) : (
             <ResponsiveContainer width="100%" height={300}>
@@ -191,7 +191,7 @@ export default function AnalyticsPage() {
             <CardDescription>ADF + KPSS</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3 pt-2">
-            {statLoading ? (
+            {(statLoading || !stationarity) ? (
               <Skeleton className="h-[160px]" />
             ) : (
               <>
@@ -236,7 +236,7 @@ export default function AnalyticsPage() {
             <CardDescription>Force de tendance et saisonnalité</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3 pt-2">
-            {strengthsLoading ? (
+            {(strengthsLoading || !strengths) ? (
               <Skeleton className="h-[160px]" />
             ) : (
               <>
