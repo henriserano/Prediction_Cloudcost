@@ -100,7 +100,7 @@ export function useForecast(horizon = 60, model = "AutoETS") {
   return useQuery<ForecastPoint[]>({
     queryKey: ["forecast", horizon, model],
     queryFn: () =>
-      api.get("/api/forecast/", { params: { horizon, model } }).then((r) => r.data),
+      api.get("/api/forecast", { params: { horizon, model } }).then((r) => r.data),
     staleTime: STALE,
   })
 }

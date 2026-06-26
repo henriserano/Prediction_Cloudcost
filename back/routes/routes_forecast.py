@@ -11,7 +11,7 @@ from core.errors import BadRequest
 router = APIRouter(prefix="/api/forecast", tags=["forecast"])
 
 
-@router.get("/", response_model=List[ForecastPoint])
+@router.get("", response_model=List[ForecastPoint])
 def forecast(
     horizon: Annotated[int, Query(ge=7, le=180, description="Forecast horizon in days")] = 60,
     model: Annotated[str, Query(description="Model name")] = "AutoETS",
