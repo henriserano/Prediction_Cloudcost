@@ -86,9 +86,10 @@ export default function ForecastPage() {
                 <XAxis dataKey="date" tickFormatter={(v) => v.slice(5)} tick={{ fontSize: 10 }} tickLine={false} interval={7} />
                 <YAxis tick={{ fontSize: 10 }} tickLine={false} unit=" €" width={56} />
                 <Tooltip
-                  formatter={(v: number | undefined, name: string) =>
-                    v !== undefined ? [`${v.toFixed(2)} €`, name] : ["-", name]
-                  }
+                  formatter={(v: unknown, name: string) => {
+                    const n = typeof v === "number" ? v : undefined
+                    return n !== undefined ? [`${n.toFixed(2)} €`, name] : ["-", name]
+                  }}
                   labelFormatter={(l) => `Date : ${l}`}
                 />
                 {lastActualDate && (
