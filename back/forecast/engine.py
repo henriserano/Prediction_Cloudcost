@@ -9,6 +9,7 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error
 
 from data.loader import load_daily_costs
 from schemas.forecast import ForecastPoint, ForecastSummary, ModelBenchmark
+from core.cache import app_cache
 
 
 # ---------------------------------------------------------------------------
@@ -212,6 +213,10 @@ def _walk_forward_cv(arr: np.ndarray, fn, n_splits: int = 5, h: int = 14) -> dic
 # ---------------------------------------------------------------------------
 
 def get_model_benchmarks() -> List[ModelBenchmark]:
+    cached = app_cache.get("forecast:benchmarks")
+    if cached is not None:
+        return cached
+
     df = load_daily_costs()
     arr = df["y"].values.astype(float)
 
@@ -239,12 +244,18 @@ def get_model_benchmarks() -> List[ModelBenchmark]:
                 winner=(rank == 1),
             )
         )
+    app_cache.set("forecast:benchmarks", result)
     return result
 
 
 def get_forecast(horizon: int = 60, model: str = "AutoETS") -> tuple[List[ForecastPoint], ForecastSummary]:
     if model not in MODELS:
         raise ValueError(f"Unknown model '{model}'. Available: {list(MODELS.keys())}")
+
+    _cache_key = f"forecast:{model}:{horizon}"
+    _cached = app_cache.get(_cache_key)
+    if _cached is not None:
+        return _cached
 
     df = load_daily_costs()
     arr = df["y"].values.astype(float)
@@ -301,4 +312,5 @@ def get_forecast(horizon: int = 60, model: str = "AutoETS") -> tuple[List[Foreca
         best_model_mape=winner.mape,
         models_evaluated=len(MODELS),
     )
+    app_cache.set(f"forecast:{model}:{horizon}", (points, summary))
     return points, summary

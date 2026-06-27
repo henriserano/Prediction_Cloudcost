@@ -18,6 +18,7 @@ from schemas.analytics import (
     StationarityResult,
     StationarityTest,
 )
+from core.cache import app_cache
 
 
 # ---------------------------------------------------------------------------
@@ -45,6 +46,11 @@ def _trend_ci(s: pd.Series, z: float = 1.96) -> tuple[pd.Series, pd.Series]:
 # ---------------------------------------------------------------------------
 
 def get_daily_series(last_n: int | None = None) -> List[DailyPoint]:
+    _cache_key = "analytics:daily" if last_n is None else f"analytics:daily:{last_n}"
+    _cached = app_cache.get(_cache_key)
+    if _cached is not None:
+        return _cached
+
     s = _series()
     if last_n:
         s = s.iloc[-last_n:]
@@ -52,7 +58,7 @@ def get_daily_series(last_n: int | None = None) -> List[DailyPoint]:
     ma = _rolling_mean(s)
     ci_low, ci_high = _trend_ci(s)
 
-    return [
+    result = [
         DailyPoint(
             date=idx.strftime("%Y-%m-%d"),
             cost=round(float(val), 4),
@@ -62,13 +68,18 @@ def get_daily_series(last_n: int | None = None) -> List[DailyPoint]:
         )
         for idx, val in s.items()
     ]
+    app_cache.set(_cache_key, result)
+    return result
 
 
 def get_descriptive_stats() -> DescriptiveStats:
+    cached = app_cache.get("analytics:stats")
+    if cached is not None:
+        return cached
     s = _series()
     arr = s.values.astype(float)
     q1, q3 = np.percentile(arr, [25, 75])
-    return DescriptiveStats(
+    result = DescriptiveStats(
         mean=round(float(np.mean(arr)), 4),
         median=round(float(np.median(arr)), 4),
         std=round(float(np.std(arr, ddof=1)), 4),
@@ -80,9 +91,14 @@ def get_descriptive_stats() -> DescriptiveStats:
         min=round(float(np.min(arr)), 4),
         max=round(float(np.max(arr)), 4),
     )
+    app_cache.set("analytics:stats", result)
+    return result
 
 
 def get_stationarity() -> StationarityResult:
+    cached = app_cache.get("analytics:stationarity")
+    if cached is not None:
+        return cached
     from statsmodels.tsa.stattools import adfuller, kpss
 
     s = _series()
@@ -106,19 +122,24 @@ def get_stationarity() -> StationarityResult:
         lags_used=int(kpss_res[2]),
     )
 
-    return StationarityResult(adf=adf, kpss=kpss_stat)
+    result = StationarityResult(adf=adf, kpss=kpss_stat)
+    app_cache.set("analytics:stationarity", result)
+    return result
 
 
 def get_stl_decomposition() -> tuple[List[STLPoint], STLStrengths]:
+    cached = app_cache.get("analytics:stl")
+    if cached is not None:
+        return cached
     from statsmodels.tsa.seasonal import STL
 
     s = _series()
     stl = STL(s, period=7, robust=True)
-    result = stl.fit()
+    stl_fit = stl.fit()
 
-    trend = result.trend
-    seasonal = result.seasonal
-    residual = result.resid
+    trend = stl_fit.trend
+    seasonal = stl_fit.seasonal
+    residual = stl_fit.resid
 
     # Force of trend / seasonality (Wang 2006)
     var_r = float(np.var(residual.values, ddof=1))
@@ -135,15 +156,21 @@ def get_stl_decomposition() -> tuple[List[STLPoint], STLStrengths]:
         for idx in s.index
     ]
     strengths = STLStrengths(ft=round(ft, 4), fs=round(fs, 4), period=7)
-    return points, strengths
+    result = (points, strengths)
+    app_cache.set("analytics:stl", result)
+    return result
 
 
 def get_anomalies(z_threshold: float = 2.0) -> List[AnomalyPoint]:
+    _cache_key = f"analytics:anomalies:{z_threshold}"
+    cached = app_cache.get(_cache_key)
+    if cached is not None:
+        return cached
     s = _series()
     arr = s.values.astype(float)
     mean_, std_ = float(np.mean(arr)), float(np.std(arr, ddof=1))
 
-    return [
+    result = [
         AnomalyPoint(
             date=idx.strftime("%Y-%m-%d"),
             cost=round(float(val), 4),
@@ -152,9 +179,15 @@ def get_anomalies(z_threshold: float = 2.0) -> List[AnomalyPoint]:
         )
         for idx, val in s.items()
     ]
+    app_cache.set(_cache_key, result)
+    return result
 
 
 def get_acf_pacf(nlags: int = 28) -> List[ACFPoint]:
+    _cache_key = f"analytics:acf:{nlags}"
+    cached = app_cache.get(_cache_key)
+    if cached is not None:
+        return cached
     from statsmodels.tsa.stattools import acf, pacf
 
     s = _series()
@@ -162,7 +195,9 @@ def get_acf_pacf(nlags: int = 28) -> List[ACFPoint]:
     acf_vals = acf(arr, nlags=nlags, fft=True)
     pacf_vals = pacf(arr, nlags=nlags)
 
-    return [
+    result = [
         ACFPoint(lag=i, acf=round(float(acf_vals[i]), 6), pacf=round(float(pacf_vals[i]), 6))
         for i in range(1, nlags + 1)
     ]
+    app_cache.set(_cache_key, result)
+    return result

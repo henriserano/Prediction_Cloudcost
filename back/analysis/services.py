@@ -7,6 +7,7 @@ import pandas as pd
 
 from data.loader import load_daily_costs, load_daily_per_service
 from schemas.analytics import KPIData, ServiceShare
+from core.cache import app_cache
 
 
 def _service_cols(df: pd.DataFrame) -> List[str]:
@@ -14,6 +15,9 @@ def _service_cols(df: pd.DataFrame) -> List[str]:
 
 
 def get_service_shares() -> List[ServiceShare]:
+    cached = app_cache.get("analytics:services")
+    if cached is not None:
+        return cached
     df = load_daily_per_service()
     services = _service_cols(df)
 
@@ -43,10 +47,14 @@ def get_service_shares() -> List[ServiceShare]:
                 cum_pct=round(cum, 2),
             )
         )
+    app_cache.set("analytics:services", result)
     return result
 
 
 def get_kpi() -> KPIData:
+    cached = app_cache.get("analytics:kpi")
+    if cached is not None:
+        return cached
     daily = load_daily_costs()
     svc_df = load_daily_per_service()
 
@@ -73,7 +81,7 @@ def get_kpi() -> KPIData:
     top_svc = max(totals, key=lambda k: totals[k])
     top_pct = round(totals[top_svc] / total_spend * 100, 2)
 
-    return KPIData(
+    kpi = KPIData(
         total_spend=round(total_spend, 2),
         daily_avg=round(daily_avg, 4),
         trend_slope=round(float(slope), 6),
@@ -85,3 +93,5 @@ def get_kpi() -> KPIData:
         period_start=daily["ds"].iloc[0].strftime("%Y-%m-%d"),
         period_end=daily["ds"].iloc[-1].strftime("%Y-%m-%d"),
     )
+    app_cache.set("analytics:kpi", kpi)
+    return kpi

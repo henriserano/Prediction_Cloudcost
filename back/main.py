@@ -22,12 +22,14 @@ logger = get_logger(__name__)
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     setup_logging(level="INFO", json_logs=True)
 
-    # Eagerly load parquet files into LRU cache so first request is fast
     from data.loader import load_daily_costs, load_daily_per_service
-
     load_daily_costs()
     load_daily_per_service()
-    logger.info("Data loaded into cache")
+    logger.info("data_loaded")
+
+    from core.precompute import warm_cache
+    precompute_summary = await warm_cache()
+    logger.info("cache_ready", extra={"ok": precompute_summary["ok"], "total": precompute_summary["total"]})
 
     yield
 
