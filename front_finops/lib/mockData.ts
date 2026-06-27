@@ -123,12 +123,14 @@ export const MODEL_BENCHMARKS: ModelBenchmark[] = [
 export const KPI_DATA: KPIData = {
   totalSpend: 3400.2,
   dailyAvg: 19.57,
-  trend: 0.0782,
+  trendSlope: 0.0782,
   forecastNext30: 677,
   anomalyCount: 4,
   topService: "Cloud SQL",
   topServicePct: 33.1,
   dataPoints: 170,
+  periodStart: "2026-01-05",
+  periodEnd: "2026-06-23",
 }
 
 export const DESCRIPTIVE_STATS: DescriptiveStats = {
