@@ -94,8 +94,7 @@ function ConnectCard() {
         <div className="space-y-2 max-w-md">
           <h2 className="text-xl font-bold text-foreground">Connectez votre compte Google Cloud</h2>
           <p className="text-sm text-muted-foreground">
-            L'autorisation demande un accès en lecture seule à votre facturation GCP, vos journaux
-            d'audit et la liste de vos projets. Aucune donnée n'est modifiée.
+            {"L'autorisation demande un accès en lecture seule à votre facturation GCP, vos journaux d'audit et la liste de vos projets. Aucune donnée n'est modifiée."}
           </p>
         </div>
         <div className="flex flex-wrap justify-center gap-2 text-xs text-muted-foreground">
