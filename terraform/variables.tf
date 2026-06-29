@@ -80,3 +80,30 @@ variable "health_check_path" {
   type        = string
   default     = "/health"
 }
+
+# ── Google OAuth2 ──────────────────────────────────────────────────────────────
+
+variable "google_client_id" {
+  description = "Google OAuth2 client ID"
+  type        = string
+  default     = ""
+}
+
+variable "google_client_secret" {
+  description = "Google OAuth2 client secret"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "google_redirect_uri" {
+  description = "OAuth2 redirect URI — must match what is registered in Google Cloud Console"
+  type        = string
+  default     = ""
+}
+
+variable "frontend_url" {
+  description = "Frontend URL for post-OAuth redirects"
+  type        = string
+  default     = ""
+}

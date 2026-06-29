@@ -18,3 +18,9 @@ desired_count    = 1
 # HTTPS — set to your ACM certificate ARN to enable TLS
 # certificate_arn = "arn:aws:acm:eu-west-1:123456789012:certificate/xxxxxxxx"
 certificate_arn = ""
+
+# Google OAuth2 — register at https://console.cloud.google.com/apis/credentials
+google_client_id     = ""
+google_client_secret = ""
+google_redirect_uri  = "http://<your-alb-dns>/api/gcp/callback"
+frontend_url         = "https://<your-vercel-url>"
