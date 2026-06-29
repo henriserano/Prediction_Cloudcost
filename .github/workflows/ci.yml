@@ -20,7 +20,7 @@ jobs:
   frontend-lint-build:
     name: Frontend — lint / build
     runs-on: ubuntu-latest
-
+    
     defaults:
       run:
         working-directory: front_finops
