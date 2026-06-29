@@ -1,7 +1,7 @@
 # ── Application Auto Scaling for ECS ──────────────────────────────────────────
 
 resource "aws_appautoscaling_target" "ecs" {
-  max_capacity       = var.env == "prod" ? 6 : 2
+  max_capacity       = var.env == "prod" ? 2 : 1
   min_capacity       = var.desired_count
   resource_id        = "service/${aws_ecs_cluster.main.name}/${aws_ecs_service.app.name}"
   scalable_dimension = "ecs:service:DesiredCount"

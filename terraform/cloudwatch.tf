@@ -2,7 +2,7 @@
 
 resource "aws_cloudwatch_log_group" "app" {
   name              = "/ecs/${local.prefix}"
-  retention_in_days = var.env == "prod" ? 90 : 14
+  retention_in_days = var.env == "prod" ? 30 : 7
 
   tags = { Name = "${local.prefix}-logs" }
 }

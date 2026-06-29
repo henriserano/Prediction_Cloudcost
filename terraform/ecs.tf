@@ -5,7 +5,7 @@ resource "aws_ecs_cluster" "main" {
 
   setting {
     name  = "containerInsights"
-    value = "enabled"
+    value = "disabled"
   }
 
   tags = { Name = "${local.prefix}-cluster" }
@@ -15,12 +15,10 @@ resource "aws_ecs_cluster_capacity_providers" "main" {
   cluster_name       = aws_ecs_cluster.main.name
   capacity_providers = ["FARGATE", "FARGATE_SPOT"]
 
-  # Always default to FARGATE — SPOT is unreliable for persistent services
-  # (tasks get reclaimed without warning, causing false "blocked" deployments)
   default_capacity_provider_strategy {
-    capacity_provider = "FARGATE"
-    weight            = 1
-    base              = 1
+    capacity_provider = "FARGATE_SPOT"
+    weight            = 4
+    base              = 0
   }
 }
 
@@ -94,7 +92,7 @@ resource "aws_ecs_service" "app" {
   }
 
   network_configuration {
-    subnets          = aws_subnet.private[*].id
+    subnets          = aws_subnet.public[*].id
     security_groups  = [aws_security_group.ecs.id]
     assign_public_ip = true
   }
