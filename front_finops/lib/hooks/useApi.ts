@@ -1,6 +1,6 @@
 "use client"
 
-import { useQuery } from "@tanstack/react-query"
+import { useQuery, useMutation } from "@tanstack/react-query"
 import { api } from "@/lib/api"
 import type {
   DailyPoint,
@@ -15,6 +15,13 @@ import type {
   DescriptiveStats,
   StationarityResult,
   ACFPoint,
+  GCPAuthStatus,
+  GCPProject,
+  GCPBillingResponse,
+  GCPLogEntry,
+  GCPServiceInfo,
+  EventsIngestRequest,
+  EventsIngestResponse,
 } from "@/lib/types"
 
 // --------------------------------------------------------------------------
@@ -119,5 +126,68 @@ export function useModelBenchmarks() {
     queryKey: ["model-benchmarks"],
     queryFn: () => api.get("/api/forecast/models").then((r) => r.data),
     staleTime: STALE,
+  })
+}
+
+// --------------------------------------------------------------------------
+// GCP hooks
+// --------------------------------------------------------------------------
+
+export function useGCPStatus() {
+  return useQuery<GCPAuthStatus>({
+    queryKey: ["gcp-status"],
+    queryFn: () => api.get("/api/gcp/status").then((r) => r.data),
+    staleTime: 30_000,
+  })
+}
+
+export function useGCPProjects() {
+  const { data: status } = useGCPStatus()
+  return useQuery<GCPProject[]>({
+    queryKey: ["gcp-projects"],
+    queryFn: () => api.get("/api/gcp/projects").then((r) => r.data),
+    staleTime: STALE,
+    enabled: status?.authenticated === true,
+  })
+}
+
+export function useGCPBilling(projectId?: string, months = 6) {
+  return useQuery<GCPBillingResponse>({
+    queryKey: ["gcp-billing", projectId, months],
+    queryFn: () =>
+      api.get("/api/gcp/billing", { params: { project_id: projectId, months } }).then((r) => r.data),
+    staleTime: STALE,
+    enabled: !!projectId,
+  })
+}
+
+export function useGCPLogs(projectId?: string, limit = 50, severity?: string) {
+  return useQuery<GCPLogEntry[]>({
+    queryKey: ["gcp-logs", projectId, limit, severity],
+    queryFn: () =>
+      api
+        .get("/api/gcp/logs", {
+          params: { project_id: projectId, limit, ...(severity ? { severity } : {}) },
+        })
+        .then((r) => r.data),
+    staleTime: STALE,
+    enabled: !!projectId,
+  })
+}
+
+export function useGCPServices(projectId?: string) {
+  return useQuery<GCPServiceInfo[]>({
+    queryKey: ["gcp-services", projectId],
+    queryFn: () =>
+      api.get("/api/gcp/services", { params: { project_id: projectId } }).then((r) => r.data),
+    staleTime: STALE,
+    enabled: !!projectId,
+  })
+}
+
+export function useIngestEvents() {
+  return useMutation<EventsIngestResponse, Error, EventsIngestRequest>({
+    mutationFn: (body: EventsIngestRequest) =>
+      api.post("/api/events", body).then((r) => r.data),
   })
 }

@@ -2,7 +2,7 @@
 
 import Link from "next/link"
 import { usePathname } from "next/navigation"
-import { BarChart2, LineChart, Layers, FlaskConical, X, CloudCog } from "lucide-react"
+import { BarChart2, LineChart, Layers, FlaskConical, X, CloudCog, Cloud } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useSidebar } from "@/lib/context/sidebar-context"
 
@@ -11,6 +11,7 @@ const NAV = [
   { href: "/forecast", label: "Prévision", icon: LineChart },
   { href: "/services", label: "Services", icon: Layers },
   { href: "/analytics", label: "Analytique", icon: FlaskConical },
+  { href: "/gcp-connect", label: "GCP Connect", icon: Cloud },
 ]
 
 export default function Sidebar() {

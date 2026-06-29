@@ -14,6 +14,8 @@ from core.logging import get_logger, request_id_ctx, setup_logging
 from routes.routes_analytics import router as analytics_router
 from routes.routes_forecast import router as forecast_router
 from routes.routes_health import router as health_router
+from routes.routes_gcp import router as gcp_router
+from routes.routes_events import router as events_router
 
 logger = get_logger(__name__)
 
@@ -26,6 +28,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     load_daily_costs()
     load_daily_per_service()
     logger.info("data_loaded")
+    logger.info(
+        "startup_config",
+        extra={
+            "google_redirect_uri": settings.google_redirect_uri,
+            "frontend_url": settings.frontend_url,
+        },
+    )
 
     from core.precompute import warm_cache
     precompute_summary = await warm_cache()
@@ -75,3 +84,5 @@ async def app_error_handler(request: Request, exc: AppError):
 app.include_router(health_router)
 app.include_router(analytics_router)
 app.include_router(forecast_router)
+app.include_router(gcp_router)
+app.include_router(events_router)

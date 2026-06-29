@@ -39,6 +39,12 @@ class Settings(BaseSettings):
     # CORS — comma-separated origins; "*" in dev
     cors_origins: str = Field(default="*")
 
+    # Google OAuth2
+    google_client_id: str = Field(default="")
+    google_client_secret: str = Field(default="")
+    google_redirect_uri: str = Field(default="http://localhost:8080/api/gcp/callback")
+    frontend_url: str = Field(default="http://localhost:3000")
+
     @property
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",")]

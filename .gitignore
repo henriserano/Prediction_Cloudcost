@@ -7,3 +7,8 @@ Cloud Run Revision - Request Count.csv
 Cloud Run Revision - Request Latency.csv
 daily_costs.parquet
 daily_per_service.parquet
+./.claude
+./lightning_logs
+./back/.env
+.env
+.env.*

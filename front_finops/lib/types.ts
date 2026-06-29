@@ -109,3 +109,15 @@ export interface ACFPoint {
   acf: number
   pacf: number
 }
+
+// GCP Connect types
+export interface GCPAuthStatus { authenticated: boolean; email: string | null; projectId: string | null }
+export interface GCPProject { projectId: string; name: string; projectNumber: string }
+export interface GCPBillingByService { service: string; cost: number; pct: number }
+export interface GCPBillingByMonth { month: string; cost: number }
+export interface GCPBillingResponse { projectId: string; period: { start: string; end: string }; total: number; byService: GCPBillingByService[]; byMonth: GCPBillingByMonth[]; currency: string }
+export interface GCPLogEntry { timestamp: string; severity: string; resourceType: string; service: string; message: string; labels: Record<string, string> }
+export interface GCPServiceInfo { serviceId: string; name: string; enabled: boolean; category: string }
+export interface BillingEvent { date: string; service: string; cost: number; description?: string }
+export interface EventsIngestRequest { events: BillingEvent[]; replace?: boolean }
+export interface EventsIngestResponse { ingested: number; totalRows: number; dateRange: { start: string; end: string }; previewKpi: { totalSpend: number; dailyAvg: number } }
