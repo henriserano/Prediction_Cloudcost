@@ -14,6 +14,9 @@ resource "aws_iam_role" "ecs_execution" {
   })
 }
 
+# AmazonECSTaskExecutionRolePolicy is the AWS-managed policy scoped to the
+# minimum actions required by the ECS agent (ECR pull + CloudWatch Logs).
+# No additional permissions are granted — this is intentionally minimal.
 resource "aws_iam_role_policy_attachment" "ecs_execution_managed" {
   role       = aws_iam_role.ecs_execution.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
@@ -35,6 +38,9 @@ resource "aws_iam_role" "ecs_task" {
   })
 }
 
+# Minimal task-role permissions: only CloudWatch log writes to the app log group.
+# The application has no S3, DynamoDB, SQS or other AWS service permissions —
+# principle of least privilege is satisfied.
 # Allow the app to write structured logs to CloudWatch
 resource "aws_iam_role_policy" "ecs_task_logs" {
   name = "${local.prefix}-task-logs"

@@ -45,13 +45,28 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 settings = get_settings()
 
+# SEC-008: Warn loudly if cors_origins is left as wildcard in production.
+# In prod, CORS_ORIGINS must be set to the specific frontend domain (e.g.
+# "https://finops.example.com") — never "*". The wildcard default is
+# only acceptable for local development.
+if settings.env == "prod" and "*" in settings.cors_origins_list:
+    logger.warning(
+        "SECURITY: cors_origins is set to '*' in production. "
+        "Set CORS_ORIGINS to the specific frontend domain to prevent credential theft.",
+    )
+
+# SEC-011: Disable interactive API docs in production to avoid exposing the
+# full API surface and enabling direct endpoint invocation by attackers.
+_docs_url = "/docs" if settings.env != "prod" else None
+_redoc_url = "/redoc" if settings.env != "prod" else None
+
 app = FastAPI(
     title=settings.app_name,
     version=settings.app_version,
     description="FinOps GCP — REST API for cost analysis and forecasting",
     lifespan=lifespan,
-    docs_url="/docs",
-    redoc_url="/redoc",
+    docs_url=_docs_url,
+    redoc_url=_redoc_url,
 )
 
 app.add_middleware(
@@ -61,6 +76,20 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def security_headers_middleware(request: Request, call_next):
+    """SEC-009: Add security response headers to every response."""
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    if settings.env == "prod":
+        response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains"
+    return response
 
 
 @app.middleware("http")

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import os
+import re
 import secrets
+import time
 import urllib.parse
 from typing import Annotated, List, Optional
 
@@ -9,7 +11,8 @@ import httpx
 from fastapi import APIRouter, Query
 from fastapi.responses import RedirectResponse
 
-from core.errors import AppError
+from core.errors import AppError, BadRequest
+from core.logging import get_logger
 from schemas.gcp import (
     GCPAuthStatus,
     GCPBillingByMonth,
@@ -21,14 +24,71 @@ from schemas.gcp import (
     DateRange,
 )
 
+logger = get_logger(__name__)
+
 router = APIRouter(prefix="/api/gcp", tags=["gcp"])
 
 # ---------------------------------------------------------------------------
 # Module-level state
 # ---------------------------------------------------------------------------
 
-_oauth_states: dict[str, str] = {}   # state_token → "pending"
+# WARNING: _oauth_states and _token_store are in-process dicts.
+# MULTI-WORKER LIMITATION: This app MUST run with a single uvicorn worker
+# (--workers 1). Under multiple workers, OAuth state set in worker-1 will not
+# be visible in worker-2, causing CSRF validation failures for ~(N-1)/N
+# requests. Migrate to a Redis/DB-backed session store before enabling
+# multi-worker deployments.
+
+_OAUTH_STATE_TTL = 600  # seconds — states older than this are rejected
+
+_oauth_states: dict[str, dict] = {}  # state_token → {"created_at": float, "status": str}
 _token_store: dict[str, dict] = {}   # "default" → token info dict
+
+
+# Allowed OAuth error values returned by Google — anything else is mapped to
+# a generic code to prevent log injection and reflected XSS via the ?error=
+# query parameter.
+_ALLOWED_OAUTH_ERRORS = frozenset({
+    "access_denied",
+    "invalid_scope",
+    "invalid_request",
+    "unauthorized_client",
+    "unsupported_response_type",
+    "server_error",
+    "temporarily_unavailable",
+    "interaction_required",
+    "login_required",
+    "account_selection_required",
+    "consent_required",
+})
+
+# Allowed GCP log severity values (used to validate the ?severity= parameter
+# to prevent log-filter injection).
+_ALLOWED_SEVERITIES = frozenset({
+    "DEFAULT", "DEBUG", "INFO", "NOTICE", "WARNING",
+    "ERROR", "CRITICAL", "ALERT", "EMERGENCY",
+})
+
+# Regex for valid GCP project IDs per GCP naming rules.
+_PROJECT_ID_RE = re.compile(r'^[a-z][a-z0-9\-]{4,28}[a-z0-9]$')
+
+
+def _cleanup_expired_states() -> None:
+    """Remove OAuth state entries older than _OAUTH_STATE_TTL seconds."""
+    now = time.time()
+    expired = [k for k, v in _oauth_states.items() if now - v["created_at"] > _OAUTH_STATE_TTL]
+    for k in expired:
+        _oauth_states.pop(k, None)
+
+
+def _validate_project_id(project_id: str) -> None:
+    """Raise BadRequest if project_id does not match GCP naming rules."""
+    if not _PROJECT_ID_RE.match(project_id):
+        raise BadRequest(
+            "Invalid project_id format. Must match GCP project ID rules "
+            "(lowercase letters, digits, hyphens; 6-30 chars; start with letter).",
+            details={"field": "project_id"},
+        )
 
 _SCOPES = [
     "https://www.googleapis.com/auth/cloud-billing.readonly",
@@ -67,6 +127,8 @@ def _build_auth_headers(token: dict) -> dict[str, str]:
 
 @router.get("/auth", summary="Redirect to Google OAuth2 consent screen")
 def gcp_auth() -> RedirectResponse:
+    _cleanup_expired_states()
+
     client_id = _get_env("GOOGLE_CLIENT_ID")
     redirect_uri = _get_env("GOOGLE_REDIRECT_URI", "http://localhost:8080/api/gcp/callback")
 
@@ -78,7 +140,7 @@ def gcp_auth() -> RedirectResponse:
         )
 
     state = secrets.token_urlsafe(16)
-    _oauth_states[state] = "pending"
+    _oauth_states[state] = {"created_at": time.time(), "status": "pending"}
 
     params = {
         "client_id": client_id,
@@ -103,15 +165,25 @@ def gcp_callback(
     frontend_url = _get_env("FRONTEND_URL", "http://localhost:3000")
 
     if error:
-        redirect_url = f"{frontend_url}/gcp-connect?error={urllib.parse.quote(error)}"
+        # Allowlist permitted OAuth error codes to prevent log injection and
+        # reflected XSS via the ?error= parameter (SEC-002).
+        safe_error = error if error in _ALLOWED_OAUTH_ERRORS else "oauth_error"
+        redirect_url = f"{frontend_url}/gcp-connect?error={urllib.parse.quote(safe_error)}"
         return RedirectResponse(url=redirect_url, status_code=302)
 
     if not code:
         redirect_url = f"{frontend_url}/gcp-connect?error=missing_code"
         return RedirectResponse(url=redirect_url, status_code=302)
 
-    if state not in _oauth_states:
+    state_entry = _oauth_states.get(state)
+    if state_entry is None:
         redirect_url = f"{frontend_url}/gcp-connect?error=invalid_state"
+        return RedirectResponse(url=redirect_url, status_code=302)
+
+    # Reject states that have exceeded the TTL (SEC-003).
+    if time.time() - state_entry["created_at"] > _OAUTH_STATE_TTL:
+        _oauth_states.pop(state, None)
+        redirect_url = f"{frontend_url}/gcp-connect?error=state_expired"
         return RedirectResponse(url=redirect_url, status_code=302)
 
     _oauth_states.pop(state, None)
@@ -135,7 +207,11 @@ def gcp_callback(
         resp.raise_for_status()
         token_data = resp.json()
     except Exception as exc:
-        redirect_url = f"{frontend_url}/gcp-connect?error={urllib.parse.quote(str(exc))}"
+        # SEC-001: Never forward upstream exception text to the client — it may
+        # contain the client_secret, proxy credentials, or TLS details.
+        # Log the actual error server-side with a correlation ID instead.
+        logger.error("token_exchange_failed", extra={"error": repr(exc)})
+        redirect_url = f"{frontend_url}/gcp-connect?error=token_exchange_failed"
         return RedirectResponse(url=redirect_url, status_code=302)
 
     # Fetch user email
@@ -169,6 +245,13 @@ def gcp_status() -> GCPAuthStatus:
     )
 
 
+@router.get("/logout", summary="Clear stored GCP OAuth token")
+def gcp_logout() -> dict:
+    """Clear the in-memory token store, effectively logging the user out."""
+    _token_store.pop("default", None)
+    return {"logged_out": True}
+
+
 # ---------------------------------------------------------------------------
 # GCP Resource Manager — projects
 # ---------------------------------------------------------------------------
@@ -197,7 +280,8 @@ def gcp_projects() -> List[GCPProject]:
             details={"upstream_status": exc.response.status_code},
         )
     except Exception as exc:
-        raise AppError(str(exc), code="GCP_API_ERROR", status_code=502)
+        logger.error("gcp_projects_error", extra={"error": repr(exc)})
+        raise AppError("Upstream connectivity error.", code="GCP_API_ERROR", status_code=502)
 
     projects: List[GCPProject] = []
     for p in data.get("projects", []):
@@ -220,6 +304,7 @@ def gcp_billing(
     project_id: Annotated[str, Query(description="GCP project ID")],
     months: Annotated[int, Query(ge=1, le=24, description="Number of months to look back")] = 6,
 ) -> GCPBillingResponse:
+    _validate_project_id(project_id)
     token = _get_credentials()
     headers = _build_auth_headers(token)
 
@@ -355,8 +440,9 @@ def gcp_billing(
             currency="EUR",
         )
     except Exception as exc:
+        logger.error("gcp_billing_error", extra={"error": repr(exc)})
         raise AppError(
-            f"Could not retrieve billing data: {exc}",
+            "Could not retrieve billing data.",
             code="GCP_BILLING_ERROR",
             status_code=502,
         )
@@ -372,13 +458,26 @@ def gcp_logs(
     limit: Annotated[int, Query(ge=1, le=500)] = 50,
     severity: Annotated[Optional[str], Query(description="Minimum severity filter e.g. ERROR")] = None,
 ) -> List[GCPLogEntry]:
+    # SEC-004: Validate inputs before interpolating into the GCP filter string.
+    _validate_project_id(project_id)
+    if severity is not None:
+        severity_upper = severity.upper()
+        if severity_upper not in _ALLOWED_SEVERITIES:
+            raise BadRequest(
+                f"Invalid severity value '{severity}'. "
+                f"Allowed values: {sorted(_ALLOWED_SEVERITIES)}",
+                details={"field": "severity", "allowed": sorted(_ALLOWED_SEVERITIES)},
+            )
+    else:
+        severity_upper = None
+
     token = _get_credentials()
     headers = _build_auth_headers(token)
     headers["Content-Type"] = "application/json"
 
     filter_parts = [f'resource.labels.project_id="{project_id}"']
-    if severity:
-        filter_parts.append(f'severity>={severity.upper()}')
+    if severity_upper:
+        filter_parts.append(f'severity>={severity_upper}')
 
     body = {
         "resourceNames": [f"projects/{project_id}"],
@@ -406,7 +505,8 @@ def gcp_logs(
             details={"upstream_status": exc.response.status_code},
         )
     except Exception as exc:
-        raise AppError(str(exc), code="GCP_API_ERROR", status_code=502)
+        logger.error("gcp_logs_error", extra={"error": repr(exc)})
+        raise AppError("Upstream connectivity error.", code="GCP_API_ERROR", status_code=502)
 
     entries: List[GCPLogEntry] = []
     for entry in data.get("entries", []):
@@ -452,6 +552,7 @@ def gcp_logs(
 def gcp_services(
     project_id: Annotated[str, Query(description="GCP project ID")],
 ) -> List[GCPService]:
+    _validate_project_id(project_id)
     token = _get_credentials()
     headers = _build_auth_headers(token)
 
@@ -519,7 +620,8 @@ def gcp_services(
                 details={"upstream_status": exc.response.status_code},
             )
         except Exception as exc:
-            raise AppError(str(exc), code="GCP_API_ERROR", status_code=502)
+            logger.error("gcp_services_error", extra={"error": repr(exc)})
+            raise AppError("Upstream connectivity error.", code="GCP_API_ERROR", status_code=502)
 
         for svc in data.get("services", []):
             config = svc.get("config", {})

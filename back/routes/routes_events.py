@@ -13,6 +13,9 @@ router = APIRouter(prefix="/api", tags=["events"])
 # Module-level store: list of normalised row dicts
 _injected_events: list[dict] = []
 
+# Absolute upper bound on total rows kept in the in-memory store (SEC-005).
+_MAX_STORE_SIZE = 100_000
+
 
 def _build_dataframe(rows: list[dict]) -> pd.DataFrame:
     """Build a DataFrame from the stored event dicts, matching daily_costs schema."""
@@ -37,15 +40,15 @@ def ingest_events(body: EventsIngestRequest) -> EventsIngestResponse:
     if not body.events:
         raise BadRequest("events list must not be empty")
 
-    # Normalise incoming events to row dicts
     new_rows: list[dict] = []
     for evt in body.events:
-        try:
-            pd.Timestamp(evt.date)  # validate date string
-        except Exception:
+        # Pydantic validators on BillingEvent already enforce date format,
+        # non-negative cost, and service max length (SEC-005, SEC-006).
+        # Re-validate cost at the route level as a defence-in-depth measure.
+        if evt.cost < 0:
             raise BadRequest(
-                f"Invalid date format: '{evt.date}'. Expected YYYY-MM-DD.",
-                details={"offending_date": evt.date},
+                f"cost must be >= 0, got {evt.cost}",
+                details={"offending_cost": evt.cost},
             )
         new_rows.append(
             {
@@ -59,7 +62,15 @@ def ingest_events(body: EventsIngestRequest) -> EventsIngestResponse:
     if body.replace:
         _injected_events = new_rows
     else:
-        _injected_events = _injected_events + new_rows
+        # Enforce absolute store cap before appending (SEC-005).
+        if len(_injected_events) + len(new_rows) > _MAX_STORE_SIZE:
+            raise BadRequest(
+                f"Appending {len(new_rows)} events would exceed the maximum store size "
+                f"of {_MAX_STORE_SIZE} rows. Use replace=True to reset the store first.",
+                details={"current_size": len(_injected_events), "incoming": len(new_rows), "max": _MAX_STORE_SIZE},
+            )
+        # Use extend instead of concatenation to avoid O(N) list copy (SEC-005).
+        _injected_events.extend(new_rows)
 
     # Invalidate downstream caches so analytics/forecast see fresh data
     try:

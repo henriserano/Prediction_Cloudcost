@@ -50,6 +50,15 @@ resource "aws_ecs_task_definition" "app" {
         { name = "ENV", value = var.env },
         { name = "PORT", value = tostring(var.app_port) }
       ]
+      # For production: use AWS Secrets Manager instead of plain env vars for
+      # any sensitive values (OAuth secrets, API keys, etc.).
+      # secrets = [
+      #   {
+      #     name      = "GOOGLE_CLIENT_SECRET"
+      #     valueFrom = "arn:aws:secretsmanager:<region>:<account>:secret:finops/google-client-secret"
+      #   }
+      # ]
+      # Grant the ecs_execution role secretsmanager:GetSecretValue on those ARNs.
 
       logConfiguration = {
         logDriver = "awslogs"
@@ -69,6 +78,10 @@ resource "aws_ecs_task_definition" "app" {
         startPeriod = 120
       }
 
+      # SECURITY NOTE (INFRA-009): readonlyRootFilesystem = true is the recommended
+      # hardening posture. Set to true and mount explicit tmpfs volumes for any
+      # paths the app writes to (e.g. /tmp). Requires verifying the app starts
+      # cleanly with a read-only root.
       readonlyRootFilesystem = false
       user                   = "1000"
     }
@@ -91,6 +104,13 @@ resource "aws_ecs_service" "app" {
     ignore_changes = [task_definition, desired_count]
   }
 
+  # SECURITY NOTE (INFRA-001): Tasks are placed in public subnets with
+  # assign_public_ip = true because no NAT gateway is provisioned (cost
+  # trade-off for this deployment size). The ECS security group restricts
+  # inbound traffic to the ALB security group on the app port only — tasks
+  # are not directly reachable from the internet on the application port.
+  # For a higher-security posture: add private subnets + a NAT gateway,
+  # move tasks to aws_subnet.private[*].id, and set assign_public_ip = false.
   network_configuration {
     subnets          = aws_subnet.public[*].id
     security_groups  = [aws_security_group.ecs.id]

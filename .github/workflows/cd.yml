@@ -1,0 +1,93 @@
+# CD pipeline — deploys the backend to AWS ECS Fargate on push to main.
+# Only triggered when back/ or terraform/ files change to avoid spurious deploys.
+#
+# Required GitHub Secrets (Settings → Secrets → Actions):
+#   AWS_ACCESS_KEY_ID      — IAM user key with ecr:GetAuthorizationToken,
+#                            ecr:BatchCheckLayerAvailability, ecr:PutImage,
+#                            ecs:UpdateService, ecs:DescribeServices
+#   AWS_SECRET_ACCESS_KEY  — corresponding secret
+#   ECR_REGISTRY           — e.g. 123456789012.dkr.ecr.eu-west-1.amazonaws.com
+#   ECR_REPOSITORY         — e.g. finops-dev-backend
+#   ECS_CLUSTER            — e.g. finops-dev-cluster
+#   ECS_SERVICE            — e.g. finops-dev-service
+name: CD
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "back/**"
+      - "terraform/**"
+
+# Restrict GITHUB_TOKEN to the minimum permissions required.
+# This workflow only reads the repo and uses AWS credentials from secrets — no GitHub write access needed.
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Build, push & deploy to ECS
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      # Configure AWS credentials via environment variables
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: eu-west-1
+
+      # Authenticate Docker to the private ECR registry
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # Build and push image — tag with the first 8 characters of the commit SHA
+      # for traceability; also tag :latest for convenience
+      - name: Build, tag and push Docker image
+        env:
+          ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
+          ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          SHORT_SHA="${IMAGE_TAG:0:8}"
+          FULL_IMAGE="$ECR_REGISTRY/$ECR_REPOSITORY:$SHORT_SHA"
+
+          echo "Building image: $FULL_IMAGE"
+          docker build -t "$FULL_IMAGE" ./back
+          docker tag "$FULL_IMAGE" "$ECR_REGISTRY/$ECR_REPOSITORY:latest"
+
+          docker push "$FULL_IMAGE"
+          docker push "$ECR_REGISTRY/$ECR_REPOSITORY:latest"
+
+          echo "image=$FULL_IMAGE" >> "$GITHUB_OUTPUT"
+
+      # Force ECS to pull the new :latest image and start a rolling replacement
+      - name: Update ECS service (force new deployment)
+        env:
+          ECS_CLUSTER: ${{ secrets.ECS_CLUSTER }}
+          ECS_SERVICE: ${{ secrets.ECS_SERVICE }}
+        run: |
+          aws ecs update-service \
+            --cluster "$ECS_CLUSTER" \
+            --service "$ECS_SERVICE" \
+            --force-new-deployment \
+            --region eu-west-1
+
+      # Block the workflow until ECS reports the service as stable.
+      # Timeout: aws-cli default is 10 minutes (40 polls × 15 s).
+      - name: Wait for ECS service to stabilize
+        env:
+          ECS_CLUSTER: ${{ secrets.ECS_CLUSTER }}
+          ECS_SERVICE: ${{ secrets.ECS_SERVICE }}
+        run: |
+          aws ecs wait services-stable \
+            --cluster "$ECS_CLUSTER" \
+            --services "$ECS_SERVICE" \
+            --region eu-west-1
+          echo "Deployment stable."

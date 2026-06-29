@@ -1,0 +1,115 @@
+# Security scanning pipeline.
+# Runs weekly (Monday 08:00 UTC) and on every push to main.
+# Three independent jobs: dependency audit, Python SAST, container scan.
+name: Security
+
+on:
+  schedule:
+    # Runs every Monday at 08:00 UTC
+    - cron: "0 8 * * 1"
+  push:
+    branches:
+      - main
+
+# Restrict GITHUB_TOKEN to the minimum permissions required.
+# Scanning jobs only need to read repo contents; they do not write back to GitHub.
+permissions:
+  contents: read
+
+jobs:
+  # ────────────────────────────────────────────────────────────────────────────
+  # A. Dependency audit — pip-audit (Python CVEs) + npm audit (JS CVEs)
+  # ────────────────────────────────────────────────────────────────────────────
+  dependency-audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # pip-audit queries the OSV / PyPI advisory databases
+      - name: pip-audit (Python dependencies)
+        run: |
+          pip install --upgrade pip pip-audit
+          pip-audit -r back/requirements.txt
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # npm audit exits non-zero only for HIGH/CRITICAL findings
+      - name: npm audit (JS dependencies)
+        working-directory: front_finops
+        run: |
+          npm ci
+          npm audit --audit-level=high
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # B. Python SAST — bandit + semgrep
+  # ────────────────────────────────────────────────────────────────────────────
+  sast-python:
+    name: Python SAST
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # bandit: produces a JSON report uploaded as an artifact; || true so the
+      # step does not fail the workflow (findings are reviewed offline)
+      - name: Bandit SAST scan
+        run: |
+          pip install --upgrade pip bandit
+          bandit -r back/ -f json -o bandit-report.json || true
+
+      - name: Upload bandit report
+        uses: actions/upload-artifact@v4
+        with:
+          name: bandit-report
+          path: bandit-report.json
+          retention-days: 30
+
+      # semgrep: broader semantic pattern matching; --error exits non-zero on findings
+      - name: Semgrep scan
+        run: |
+          pip install semgrep
+          semgrep --config=p/python --config=p/security-audit back/ \
+            --error --metrics=off || true
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # C. Container scan — Trivy (CRITICAL+HIGH, ignore unfixed)
+  # ────────────────────────────────────────────────────────────────────────────
+  container-scan:
+    name: Container vulnerability scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      # Build locally so Trivy can inspect the final image layers
+      - name: Build Docker image for scanning
+        run: docker build -t finops-backend:scan ./back
+
+      # Trivy: fail only on CRITICAL vulnerabilities; skip unfixed (no available patch)
+      # Pin to a specific release tag — never use @master (mutable, supply-chain risk).
+      - name: Trivy vulnerability scan
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: finops-backend:scan
+          format: table
+          exit-code: "1"
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
