@@ -38,7 +38,6 @@ echo "  tag    : $TAG"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 # ── Step 1 — Terraform apply (infra only — no image_tag change yet) ───────────
-# We apply infra first so ECR exists before the docker push.
 # image_tag is intentionally NOT passed here; ECS lifecycle ignores task_definition.
 echo "[1/6] Applying Terraform (infra)..."
 cd "$TF_DIR"
