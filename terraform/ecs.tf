@@ -47,8 +47,12 @@ resource "aws_ecs_task_definition" "app" {
       ]
 
       environment = [
-        { name = "ENV", value = var.env },
-        { name = "PORT", value = tostring(var.app_port) }
+        { name = "ENV",                    value = var.env },
+        { name = "PORT",                   value = tostring(var.app_port) },
+        { name = "GOOGLE_CLIENT_ID",       value = var.google_client_id },
+        { name = "GOOGLE_CLIENT_SECRET",   value = var.google_client_secret },
+        { name = "GOOGLE_REDIRECT_URI",    value = var.google_redirect_uri },
+        { name = "FRONTEND_URL",           value = var.frontend_url },
       ]
       # For production: use AWS Secrets Manager instead of plain env vars for
       # any sensitive values (OAuth secrets, API keys, etc.).
