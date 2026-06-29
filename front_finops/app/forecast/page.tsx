@@ -15,9 +15,19 @@ function Skeleton({ className = "" }: { className?: string }) {
   return <div className={`animate-pulse rounded-xl bg-muted ${className}`} />
 }
 
-function SummaryCard({ label, children, sub }: { label: string; children: React.ReactNode; sub?: string }) {
+function SummaryCard({
+  label,
+  children,
+  sub,
+  className = "",
+}: {
+  label: string
+  children: React.ReactNode
+  sub?: string
+  className?: string
+}) {
   return (
-    <Card className="relative overflow-hidden">
+    <Card className={`relative overflow-hidden ${className}`}>
       <div className="absolute top-0 left-0 h-0.5 w-full bg-gradient-to-r from-[oklch(0.48_0.24_264)] to-transparent" />
       <CardHeader><CardDescription className="text-xs font-medium uppercase tracking-wider">{label}</CardDescription></CardHeader>
       <CardContent>
