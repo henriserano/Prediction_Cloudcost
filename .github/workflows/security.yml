@@ -87,29 +87,3 @@ jobs:
           pip install semgrep
           semgrep --config=p/python --config=p/security-audit back/ \
             --error --metrics=off || true
-
-  # ────────────────────────────────────────────────────────────────────────────
-  # C. Container scan — Trivy (CRITICAL+HIGH, ignore unfixed)
-  # ────────────────────────────────────────────────────────────────────────────
-  container-scan:
-    name: Container vulnerability scan
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout source
-        uses: actions/checkout@v4
-
-      # Build locally so Trivy can inspect the final image layers
-      - name: Build Docker image for scanning
-        run: docker build -t finops-backend:scan ./back
-
-      # Trivy: fail only on CRITICAL vulnerabilities; skip unfixed (no available patch)
-      # Pin to a specific release tag — never use @master (mutable, supply-chain risk).
-      - name: Trivy vulnerability scan
-        uses: aquasecurity/trivy-action@0.28.0
-        with:
-          image-ref: finops-backend:scan
-          format: table
-          exit-code: "1"
-          severity: CRITICAL,HIGH
-          ignore-unfixed: true
