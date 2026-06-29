@@ -41,7 +41,7 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
-          pip install ruff bandit safety pytest anyio pytest-anyio httpx
+          pip install ruff bandit safety pytest anyio[trio] pytest-asyncio httpx
 
       # ruff: fast linter — select only actionable rule sets; ignore E501 (line-length)
       - name: Ruff lint
