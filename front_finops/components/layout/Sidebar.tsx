@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation"
 import { BarChart2, LineChart, Layers, FlaskConical, X, CloudCog, Cloud } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useSidebar } from "@/lib/context/sidebar-context"
+import { useModelBenchmarks } from "@/lib/hooks/useApi"
 
 const NAV = [
   { href: "/dashboard", label: "Vue d'ensemble", icon: BarChart2 },
@@ -17,6 +18,8 @@ const NAV = [
 export default function Sidebar() {
   const path = usePathname()
   const { open, close } = useSidebar()
+  const { data: benchmarks } = useModelBenchmarks()
+  const bestModel = benchmarks?.find((m) => m.winner)?.model ?? "AutoETS"
 
   return (
     <>
@@ -99,8 +102,8 @@ export default function Sidebar() {
             <p className="text-xs text-white/70">Jan – Juin 2026</p>
           </div>
           <div className="rounded-lg bg-[oklch(0.48_0.24_264)]/20 border border-[oklch(0.48_0.24_264)]/20 px-3 py-2.5">
-            <p className="text-[10px] text-[oklch(0.70_0.16_264)] uppercase tracking-widest font-semibold mb-0.5">Modèle actif</p>
-            <p className="text-xs text-white font-semibold">AutoETS</p>
+            <p className="text-[10px] text-[oklch(0.70_0.16_264)] uppercase tracking-widest font-semibold mb-0.5">Meilleur modèle</p>
+            <p className="text-xs text-white font-semibold">{bestModel}</p>
           </div>
         </div>
 
