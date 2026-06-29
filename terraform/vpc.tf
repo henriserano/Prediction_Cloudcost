@@ -28,17 +28,6 @@ resource "aws_subnet" "public" {
   tags = { Name = "${local.prefix}-public-${count.index + 1}" }
 }
 
-# ── Private Subnets (ECS tasks live here) ─────────────────────────────────────
-
-resource "aws_subnet" "private" {
-  count = var.az_count
-
-  vpc_id            = aws_vpc.main.id
-  cidr_block        = local.private_subnets[count.index]
-  availability_zone = local.azs[count.index]
-
-  tags = { Name = "${local.prefix}-private-${count.index + 1}" }
-}
 
 
 # ── Route Tables ───────────────────────────────────────────────────────────────

@@ -10,8 +10,8 @@ vpc_cidr  = "10.0.0.0/16"
 az_count  = 2
 
 # ECS / Fargate
-# numpy + scipy + statsmodels need ≥ 1.5 GB at cold start — 2 GB is the safe minimum
-container_cpu    = 1024  # 1 vCPU
+# 0.5 vCPU is sufficient — scipy/numpy cold start fits in 2 GB
+container_cpu    = 512   # 0.5 vCPU
 container_memory = 2048  # 2 GB
 desired_count    = 1
 
