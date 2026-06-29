@@ -127,6 +127,11 @@ resource "aws_ecs_service" "app" {
     container_port   = var.app_port
   }
 
+  # Terraform ne bloque plus en attendant la stabilisation du déploiement.
+  # Le déploiement ECS continue en arrière-plan — vérifie via la console AWS ou:
+  # aws ecs describe-services --cluster <cluster> --services <service>
+  wait_for_steady_state = false
+
   deployment_circuit_breaker {
     enable   = true
     rollback = true
