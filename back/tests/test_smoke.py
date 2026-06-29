@@ -15,8 +15,9 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-# pytest-anyio registers the anyio backend and the @pytest.mark.anyio marker
-pytest_plugins = ("anyio",)
+pytest_plugins = ("asyncio",)
+
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Fixtures
@@ -107,7 +108,7 @@ def test_billing_event_valid():
 # 3. Route tests — ASGI transport (no real HTTP, no network)
 # ─────────────────────────────────────────────────────────────────────────────
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_health_endpoint_returns_200():
     """GET /health must return HTTP 200."""
     import httpx
@@ -122,7 +123,7 @@ async def test_health_endpoint_returns_200():
     assert body.get("status") == "ok"
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_gcp_status_unauthenticated():
     """GET /api/gcp/status without a token must return authenticated=false."""
     import httpx
@@ -137,7 +138,7 @@ async def test_gcp_status_unauthenticated():
     assert body.get("authenticated") is False
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_events_ingest_with_valid_body():
     """POST /api/events with a valid single event must return HTTP 200."""
     import httpx
@@ -164,7 +165,7 @@ async def test_events_ingest_with_valid_body():
     assert body.get("ingested") == 1
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_events_ingest_empty_list_returns_400():
     """POST /api/events with an empty events list must return HTTP 400."""
     import httpx
