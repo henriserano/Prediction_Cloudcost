@@ -62,9 +62,13 @@ export function Explain({
   const [open, setOpen] = React.useState(false)
   const [pos, setPos] = React.useState<FloatPosition | null>(null)
   const triggerRef = React.useRef<HTMLButtonElement>(null)
-  const [mounted, setMounted] = React.useState(false)
 
-  React.useEffect(() => setMounted(true), [])
+  // Client-only detection without triggering hydration mismatches.
+  const mounted = React.useSyncExternalStore(
+    () => () => {},
+    () => true,
+    () => false,
+  )
 
   const computePosition = React.useCallback((): FloatPosition | null => {
     const trigger = triggerRef.current

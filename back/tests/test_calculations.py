@@ -153,7 +153,10 @@ def test_outlier_methods_agree_on_planted_spike(monkeypatch):
 
     n = 120
     dates = pd.date_range("2026-01-01", periods=n, freq="D")
-    values = np.full(n, 100.0)
+    # Very small noise around 100 so the spike remains obvious, but the series
+    # has enough variability that LOF doesn't warn about duplicate values.
+    rng = np.random.default_rng(seed=1)
+    values = 100.0 + rng.normal(0, 0.5, n)
     values[60] = 1000.0  # extreme outlier
     rows = [
         {"ds": d.strftime("%Y-%m-%d"), "Sous-total (€)": float(v), "service": "X", "description": ""}

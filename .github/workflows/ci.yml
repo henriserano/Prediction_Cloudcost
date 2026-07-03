@@ -15,6 +15,41 @@ permissions:
 
 jobs:
   # ────────────────────────────────────────────────────────────────────────────
+  # A. Backend: install deps, run pytest (unit + calculation-correctness tests)
+  # ────────────────────────────────────────────────────────────────────────────
+  backend-test:
+    name: Backend — pytest
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: back
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: back/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          # Test-only deps: keep them out of requirements.txt so the runtime
+          # image stays lean, but install them here for the test job.
+          pip install pytest pytest-asyncio
+
+      # Correctness tests + smoke tests. Loaders are monkeypatched so we do not
+      # need the (gitignored) parquet files in CI.
+      - name: Run pytest
+        run: pytest -v --tb=short
+
+  # ────────────────────────────────────────────────────────────────────────────
   # B. Frontend: eslint, TypeScript type-check, Next.js production build
   # ────────────────────────────────────────────────────────────────────────────
   frontend-lint-build:
