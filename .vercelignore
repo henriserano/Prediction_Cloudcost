@@ -1,0 +1,24 @@
+# Backend FastAPI (déployé séparément sur AWS ECS)
+back/
+back/**
+
+# Terraform infra
+terraform/
+terraform/**
+
+# Notebooks Jupyter (poids inutile sur Vercel)
+*.ipynb
+lightning_logs/
+
+# Submodule externe (référencé mais non nécessaire au front)
+Time-Series-Library/
+Time-Series-Library/**
+
+# Scripts de déploiement AWS
+deploy.sh
+
+# Local dev
+.env
+.env.*
+*.parquet
+CLAUDE.md
