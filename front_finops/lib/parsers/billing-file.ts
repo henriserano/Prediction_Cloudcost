@@ -1,4 +1,4 @@
-import * as XLSX from "xlsx"
+import { api } from "@/lib/api"
 import type { BillingEvent } from "@/lib/types"
 
 // ---------------------------------------------------------------------------
@@ -203,103 +203,64 @@ function splitCSVLine(line: string, delimiter: string): string[] {
 }
 
 // ---------------------------------------------------------------------------
-// Excel
+// Excel — delegated to backend /api/events/preview
+//
+// Client-side .xlsx parsing used to rely on SheetJS (xlsx), which carries an
+// unpatched Prototype Pollution + ReDoS advisory. Rather than swap to another
+// large JS parser, we let the FastAPI backend handle the file via openpyxl
+// (well-audited, actively maintained) and return the same shape as the
+// client-side CSV parser so downstream UI code doesn't need to branch.
 // ---------------------------------------------------------------------------
 
+interface BackendPreviewResponse {
+  filesProcessed: number
+  parsedRows: number
+  perFile: Record<string, number>
+  warnings: string[]
+  sample: { date: string; service: string; cost: number }[]
+  dateRange?: { start: string; end: string }
+  previewKpi?: { totalSpend: number; dailyAvg: number }
+}
+
 async function parseExcel(file: File): Promise<ParsedResult> {
-  const buf = await file.arrayBuffer()
-  const wb = XLSX.read(buf, {
-    cellDates: true,
-    cellNF: false,
-    cellText: false,
-    dense: false,
-  })
+  const form = new FormData()
+  form.append("files", file)
 
-  // Try every sheet — pick the first one that yields a valid header + data
-  let bestResult: ParsedResult | null = null
-  let bestFallback: ParsedResult | null = null
-
-  for (const sheetName of wb.SheetNames) {
-    const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], {
-      header: 1,
-      blankrows: false,
-      raw: false,
-      dateNF: "yyyy-mm-dd",
-      defval: "",
-    }) as unknown[][]
-
-    if (rows.length < 2) continue
-
-    const parsedLines = rows.map((r, i) => ({
-      lineNum: i + 1,
-      cells: r.map((v) => stringifyCell(v)),
-    }))
-
-    // Skip leading empty columns globally (e.g. spreadsheets that start at column B)
-    const trimmed = trimEmptyLeadingColumns(parsedLines)
-
-    const headerHit = findHeaderRow(
-      trimmed.slice(0, Math.min(20, trimmed.length))
+  try {
+    const res = await api.post<BackendPreviewResponse>(
+      "/api/events/preview",
+      form,
+      { headers: { "Content-Type": "multipart/form-data" } },
     )
-    if (!headerHit) {
-      // remember first sheet as fallback for error reporting
-      if (!bestFallback) {
-        bestFallback = {
-          events: [],
-          errors: [
-            {
-              line: 1,
-              message: `Colonnes requises non trouvées dans la feuille "${sheetName}". Vérifiez que le fichier contient bien les colonnes date, service, cost (ou équivalents FR).`,
-            },
-          ],
-          totalRows: trimmed.length,
-          format: "excel",
-          sheetName,
-        }
-      }
-      continue
+    const data = res.data
+    const events: BillingEvent[] = data.sample.map((r) => ({
+      date: r.date,
+      service: r.service,
+      cost: r.cost,
+    }))
+    const errors: ParseError[] = data.warnings.map((w, i) => ({ line: i + 1, message: w }))
+    return {
+      events,
+      errors,
+      totalRows: data.parsedRows,
+      format: "excel",
+      sheetName: undefined,
     }
-
-    const { headerIndex, mapping, header } = headerHit
-    const dataRows = trimmed.slice(headerIndex + 1)
-    const result = normalizeRows(dataRows, header, mapping, "excel", sheetName)
-    // Prefer sheet that yielded actual events
-    if (result.events.length > 0) {
-      return result
-    }
-    if (!bestResult) bestResult = result
-  }
-
-  if (bestResult) return bestResult
-  if (bestFallback) return bestFallback
-  return {
-    events: [],
-    errors: [{ line: 0, message: "Aucune feuille exploitable trouvée dans le classeur." }],
-    totalRows: 0,
-    format: "excel",
-  }
-}
-
-function trimEmptyLeadingColumns(
-  rows: { lineNum: number; cells: string[] }[]
-): { lineNum: number; cells: string[] }[] {
-  let leading = 0
-  const max = Math.max(...rows.map((r) => r.cells.length))
-  outer: for (leading = 0; leading < max; leading++) {
-    for (const r of rows) {
-      if ((r.cells[leading] ?? "").trim() !== "") break outer
+  } catch (e) {
+    return {
+      events: [],
+      errors: [
+        {
+          line: 0,
+          message: `Le backend n'a pas pu parser le fichier Excel : ${
+            e instanceof Error ? e.message : "erreur inconnue"
+          }. Convertis-le en CSV pour un parsing client-side.`,
+        },
+      ],
+      totalRows: 0,
+      format: "excel",
     }
   }
-  if (leading === 0) return rows
-  return rows.map((r) => ({ ...r, cells: r.cells.slice(leading) }))
-}
-
-function stringifyCell(v: unknown): string {
-  if (v == null) return ""
-  if (v instanceof Date) return isoDate(v)
-  if (typeof v === "number") return String(v)
-  if (typeof v === "boolean") return v ? "true" : "false"
-  return String(v).trim()
 }
 
 function isoDate(d: Date): string {

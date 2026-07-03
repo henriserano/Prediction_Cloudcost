@@ -94,11 +94,11 @@ def _to_float_eu(value) -> Optional[float]:
         return None
 
 
-def _parse_billing_csv(filename: str, raw_bytes: bytes) -> tuple[list[dict], list[str]]:
-    """Parse one CSV file into normalised event rows.
+def _parse_billing_file(filename: str, raw_bytes: bytes) -> tuple[list[dict], list[str]]:
+    """Parse one billing file (CSV or Excel) into normalised event rows.
 
-    Returns ``(rows, warnings)``. Empty rows list means the file was
-    unparseable; the ``warnings`` list surfaces per-file issues to the client.
+    Excel detection is by extension only — a .xlsx with a mislabelled name will
+    fall back to CSV parsing and fail cleanly with a per-file warning.
     """
     warnings: list[str] = []
     if len(raw_bytes) > _MAX_FILE_BYTES:
@@ -107,16 +107,41 @@ def _parse_billing_csv(filename: str, raw_bytes: bytes) -> tuple[list[dict], lis
         )
         return [], warnings
 
-    try:
-        # Try UTF-8 with BOM first (Excel export default), fall back to latin-1.
+    lower = (filename or "").lower()
+    is_excel = lower.endswith((".xlsx", ".xlsm", ".xlsb", ".xls", ".ods"))
+
+    if is_excel:
         try:
-            text = raw_bytes.decode("utf-8-sig")
-        except UnicodeDecodeError:
-            text = raw_bytes.decode("latin-1")
-        df = pd.read_csv(io.StringIO(text), sep=None, engine="python")
-    except Exception as exc:
-        warnings.append(f"{filename}: could not parse as CSV ({exc.__class__.__name__})")
-        return [], warnings
+            # openpyxl handles .xlsx/.xlsm; pandas picks the right engine per suffix.
+            # Every sheet is scanned, first one with valid headers wins.
+            book = pd.read_excel(io.BytesIO(raw_bytes), sheet_name=None, engine=None)
+        except Exception as exc:
+            warnings.append(
+                f"{filename}: could not parse as Excel ({exc.__class__.__name__}: {exc})"
+            )
+            return [], warnings
+
+        df = None
+        for sheet_name, candidate in book.items():
+            if _first_matching_column(candidate, _DATE_COLUMN_ALIASES) and \
+               _first_matching_column(candidate, _COST_COLUMN_ALIASES):
+                df = candidate
+                filename = f"{filename}#{sheet_name}"
+                break
+        if df is None:
+            warnings.append(f"{filename}: no sheet contained recognisable billing columns")
+            return [], warnings
+    else:
+        try:
+            # Try UTF-8 with BOM first (Excel export default), fall back to latin-1.
+            try:
+                text = raw_bytes.decode("utf-8-sig")
+            except UnicodeDecodeError:
+                text = raw_bytes.decode("latin-1")
+            df = pd.read_csv(io.StringIO(text), sep=None, engine="python")
+        except Exception as exc:
+            warnings.append(f"{filename}: could not parse as CSV ({exc.__class__.__name__})")
+            return [], warnings
 
     date_col = _first_matching_column(df, _DATE_COLUMN_ALIASES)
     service_col = _first_matching_column(df, _SERVICE_COLUMN_ALIASES)
@@ -254,15 +279,16 @@ def ingest_events(body: EventsIngestRequest) -> EventsIngestResponse:
     summary="Ingest one or several billing CSV files in a single multipart request",
 )
 async def upload_billing_files(
-    files: Annotated[List[UploadFile], File(description="One or more billing CSV files")],
+    files: Annotated[List[UploadFile], File(description="One or more billing CSV or Excel files (.csv, .xlsx, .xls, .ods)")],
     replace: Annotated[bool, Form(description="If true, wipe the store before ingesting")] = False,
 ) -> MultiFileUploadResponse:
-    """Upload one or more billing CSVs (multipart/form-data).
+    """Upload one or more billing files (CSV or Excel; multipart/form-data).
 
-    Accepted headers per file are auto-detected among common variants
-    (Rapports Billing GCP export, AWS CUR summaries, etc.). Per-row parsing
-    failures are silently skipped and surfaced in the ``warnings`` field so
-    a bad row in one file doesn't fail the whole batch.
+    Headers are auto-detected among common variants (Rapports Billing GCP export,
+    AWS CUR summaries, etc.). For Excel, every sheet is scanned and the first
+    one with recognisable columns is used. Per-row parsing failures are silently
+    skipped and surfaced in the ``warnings`` field so a bad row in one file
+    doesn't fail the whole batch.
     """
     global _injected_events
 
@@ -275,7 +301,7 @@ async def upload_billing_files(
 
     for uf in files:
         raw = await uf.read()
-        rows, file_warnings = _parse_billing_csv(uf.filename or "unnamed.csv", raw)
+        rows, file_warnings = _parse_billing_file(uf.filename or "unnamed.csv", raw)
         all_rows.extend(rows)
         per_file[uf.filename or "unnamed.csv"] = len(rows)
         warnings.extend(file_warnings)
@@ -339,6 +365,79 @@ async def upload_billing_files(
         preview_kpi=PreviewKPI(total_spend=round(total_spend, 2), daily_avg=round(daily_avg, 2)),
         per_file=per_file,
         warnings=warnings,
+    )
+
+
+class PreviewResponse(BaseModel):
+    """Read-only parse result: same shape as an upload but the store is not touched."""
+
+    files_processed: int
+    parsed_rows: int
+    per_file: dict[str, int] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
+    sample: list[dict] = Field(
+        default_factory=list,
+        description="Up to 100 parsed rows for the frontend to preview.",
+    )
+    date_range: Optional[DateRange] = None
+    preview_kpi: Optional[PreviewKPI] = None
+
+
+@router.post(
+    "/events/preview",
+    response_model=PreviewResponse,
+    summary="Parse one or several billing files WITHOUT storing them",
+)
+async def preview_billing_files(
+    files: Annotated[List[UploadFile], File(description="One or more billing files (.csv, .xlsx, .xls, .ods)")],
+) -> PreviewResponse:
+    """Dry-run of ``/events/upload``. Returns parsed rows without mutating the
+    in-memory store — used by the frontend to render a preview before the user
+    confirms the ingestion. Excel files that the frontend cannot safely parse
+    client-side go through this endpoint.
+    """
+    if not files:
+        raise BadRequest("No files provided.")
+
+    all_rows: list[dict] = []
+    per_file: dict[str, int] = {}
+    warnings: list[str] = []
+
+    for uf in files:
+        raw = await uf.read()
+        rows, file_warnings = _parse_billing_file(uf.filename or "unnamed.csv", raw)
+        all_rows.extend(rows)
+        per_file[uf.filename or "unnamed.csv"] = len(rows)
+        warnings.extend(file_warnings)
+
+    if not all_rows:
+        return PreviewResponse(
+            files_processed=len(files),
+            parsed_rows=0,
+            per_file=per_file,
+            warnings=warnings,
+            sample=[],
+        )
+
+    df = _build_dataframe(all_rows)
+    dates = df["ds"].dt.strftime("%Y-%m-%d")
+    total_spend = float(df["Sous-total (€)"].sum())
+    unique_days = df["ds"].nunique()
+    daily_avg = total_spend / unique_days if unique_days > 0 else 0.0
+
+    sample = [
+        {"date": r["ds"], "service": r["service"], "cost": r["Sous-total (€)"]}
+        for r in all_rows[:100]
+    ]
+
+    return PreviewResponse(
+        files_processed=len(files),
+        parsed_rows=len(all_rows),
+        per_file=per_file,
+        warnings=warnings,
+        sample=sample,
+        date_range=DateRange(start=dates.min(), end=dates.max()),
+        preview_kpi=PreviewKPI(total_spend=round(total_spend, 2), daily_avg=round(daily_avg, 2)),
     )
 
 
