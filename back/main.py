@@ -18,6 +18,7 @@ from routes.routes_gcp import router as gcp_router
 from routes.routes_aws import router as aws_router
 from routes.routes_events import router as events_router
 from routes.routes_data import router as data_router
+from routes.routes_advanced import router as advanced_router
 
 logger = get_logger(__name__)
 
@@ -119,3 +120,4 @@ app.include_router(gcp_router)
 app.include_router(aws_router)
 app.include_router(events_router)
 app.include_router(data_router)
+app.include_router(advanced_router)

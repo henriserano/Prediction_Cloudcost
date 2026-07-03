@@ -7,6 +7,7 @@ const ROUTES = [
   { path: "/forecast", priority: 0.9, changeFrequency: "daily" as const },
   { path: "/services", priority: 0.8, changeFrequency: "daily" as const },
   { path: "/analytics", priority: 0.8, changeFrequency: "daily" as const },
+  { path: "/diagnostics", priority: 0.85, changeFrequency: "daily" as const },
   { path: "/data-sources", priority: 0.7, changeFrequency: "weekly" as const },
   { path: "/gcp-connect", priority: 0.6, changeFrequency: "weekly" as const },
 ]

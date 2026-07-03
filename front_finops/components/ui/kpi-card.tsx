@@ -10,6 +10,7 @@ interface KpiCardProps {
   icon?: React.ElementType
   tone?: "default" | "coral" | "destructive" | "success"
   delta?: { value: number; suffix?: string; direction?: "up" | "down" }
+  info?: React.ReactNode
   className?: string
 }
 
@@ -39,6 +40,7 @@ export function KpiCard({
   icon: Icon,
   tone = "default",
   delta,
+  info,
   className,
 }: KpiCardProps) {
   const t = TONE[tone]
@@ -62,8 +64,9 @@ export function KpiCard({
       <CardContent className="pt-4">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0 space-y-1">
-            <p className="text-[11px] font-medium uppercase tracking-widest text-muted-foreground">
-              {label}
+            <p className="text-[11px] font-medium uppercase tracking-widest text-muted-foreground flex items-center gap-1.5">
+              <span>{label}</span>
+              {info}
             </p>
             <p className="font-heading text-2xl font-semibold tabular-nums leading-tight text-foreground lg:text-[1.75rem]">
               {value}

@@ -110,6 +110,154 @@ export interface ACFPoint {
   pacf: number
 }
 
+// ─── Advanced analysis (/api/analysis/*) ─────────────────────────────────────
+
+export interface OutlierRow {
+  date: string
+  cost: number
+  zscore: number
+  modifiedZscore: number
+  iqrFlag: boolean
+  isolationScore: number
+  isolationFlag: boolean
+  lofScore: number
+  lofFlag: boolean
+}
+export interface OutlierMethodSummary {
+  method: string
+  flaggedCount: number
+  flaggedPct: number
+  threshold: number | null
+}
+export interface MahalanobisPoint {
+  date: string
+  distance: number
+  pValue: number
+  isOutlier: boolean
+}
+export interface OutliersResponse {
+  rows: OutlierRow[]
+  summary: OutlierMethodSummary[]
+  mahalanobis: MahalanobisPoint[]
+}
+
+export interface KSResult {
+  statistic: number
+  pValue: number
+  driftDetected: boolean
+  referencePeriod: string
+  currentPeriod: string
+  nRef: number
+  nCur: number
+}
+export interface PSIBin {
+  lower: number
+  upper: number
+  refPct: number
+  curPct: number
+  contribution: number
+}
+export interface PSIResult {
+  psi: number
+  verdict: "stable" | "moderate" | "significant"
+  bins: PSIBin[]
+}
+export interface PageHinkleyPoint {
+  date: string
+  phStat: number
+  changeDetected: boolean
+}
+export interface DriftResponse {
+  ks: KSResult
+  psi: PSIResult
+  pageHinkley: PageHinkleyPoint[]
+  nChangepointsDetected: number
+}
+
+export interface NormalityTest {
+  name: string
+  statistic: number
+  pValue: number
+  isNormal: boolean
+}
+export interface DistributionResponse {
+  skewness: number
+  kurtosis: number
+  boxcoxLambda: number | null
+  normalityTests: NormalityTest[]
+  qqPoints: [number, number][]
+}
+
+export interface ScalingPoint {
+  date: string
+  standard: number
+  minmax: number
+  robust: number
+}
+export interface ScalingResponse {
+  points: ScalingPoint[]
+  stats: {
+    standard: { mean: number; std: number }
+    minmax:   { min: number;  max: number }
+    robust:   { median: number; iqr: number }
+  }
+}
+
+export interface MissingGap {
+  start: string
+  end: string
+  days: number
+}
+export interface MissingResponse {
+  calendarDaysExpected: number
+  actualDays: number
+  missingDays: number
+  gaps: MissingGap[]
+  perServiceMissingPct: Record<string, number>
+  mechanismHint: string
+}
+
+export interface PCAComponent {
+  component: number
+  varianceRatio: number
+  cumulativeRatio: number
+  topLoadings: Record<string, number>
+}
+export interface TSNEPoint {
+  service: string
+  x: number
+  y: number
+}
+export interface DimReductionResponse {
+  nServices: number
+  nDays: number
+  totalVarianceExplained: number
+  pcaComponents: PCAComponent[]
+  tsne2d: TSNEPoint[]
+}
+
+export interface EnsemblePoint {
+  date: string
+  actual: number | null
+  meanEnsemble: number
+  weightedEnsemble: number
+  lo80: number
+  hi80: number
+}
+export interface BiasVarianceRow {
+  model: string
+  biasSquared: number
+  variance: number
+  totalError: number
+}
+export interface EnsembleForecastResponse {
+  horizon: number
+  baseModels: string[]
+  weights: Record<string, number>
+  points: EnsemblePoint[]
+  biasVariance: BiasVarianceRow[]
+}
+
 // GCP Connect types
 export interface GCPAuthStatus { authenticated: boolean; email: string | null; projectId: string | null }
 export interface GCPProject { projectId: string; name: string; projectNumber: string }

@@ -22,6 +22,13 @@ import type {
   GCPServiceInfo,
   EventsIngestRequest,
   EventsIngestResponse,
+  OutliersResponse,
+  DriftResponse,
+  DistributionResponse,
+  ScalingResponse,
+  MissingResponse,
+  DimReductionResponse,
+  EnsembleForecastResponse,
 } from "@/lib/types"
 
 // --------------------------------------------------------------------------
@@ -189,5 +196,81 @@ export function useIngestEvents() {
   return useMutation<EventsIngestResponse, Error, EventsIngestRequest>({
     mutationFn: (body: EventsIngestRequest) =>
       api.post("/api/events", body).then((r) => r.data),
+  })
+}
+
+// ─── Advanced diagnostics (/api/analysis/*) ─────────────────────────────────
+
+export function useOutliers(zThreshold = 2.0, iqrMultiplier = 1.5) {
+  return useQuery<OutliersResponse>({
+    queryKey: ["outliers", zThreshold, iqrMultiplier],
+    queryFn: () =>
+      api
+        .get("/api/analysis/outliers", {
+          params: { z_threshold: zThreshold, iqr_multiplier: iqrMultiplier },
+        })
+        .then((r) => r.data),
+    staleTime: STALE,
+  })
+}
+
+export function useDrift(referenceFrac = 0.5, psiBins = 10) {
+  return useQuery<DriftResponse>({
+    queryKey: ["drift", referenceFrac, psiBins],
+    queryFn: () =>
+      api
+        .get("/api/analysis/drift", {
+          params: { reference_frac: referenceFrac, psi_bins: psiBins },
+        })
+        .then((r) => r.data),
+    staleTime: STALE,
+  })
+}
+
+export function useDistribution() {
+  return useQuery<DistributionResponse>({
+    queryKey: ["distribution"],
+    queryFn: () => api.get("/api/analysis/distribution").then((r) => r.data),
+    staleTime: STALE,
+  })
+}
+
+export function useScaling() {
+  return useQuery<ScalingResponse>({
+    queryKey: ["scaling"],
+    queryFn: () => api.get("/api/analysis/scaling").then((r) => r.data),
+    staleTime: STALE,
+  })
+}
+
+export function useMissing() {
+  return useQuery<MissingResponse>({
+    queryKey: ["missing"],
+    queryFn: () => api.get("/api/analysis/missing").then((r) => r.data),
+    staleTime: STALE,
+  })
+}
+
+export function useDimReduction(nComponents = 5, runTsne = true) {
+  return useQuery<DimReductionResponse>({
+    queryKey: ["dim-reduction", nComponents, runTsne],
+    queryFn: () =>
+      api
+        .get("/api/analysis/dim-reduction", {
+          params: { n_components: nComponents, run_tsne: runTsne },
+        })
+        .then((r) => r.data),
+    staleTime: STALE,
+  })
+}
+
+export function useEnsembleForecast(horizon = 60) {
+  return useQuery<EnsembleForecastResponse>({
+    queryKey: ["ensemble-forecast", horizon],
+    queryFn: () =>
+      api
+        .get("/api/analysis/ensemble-forecast", { params: { horizon } })
+        .then((r) => r.data),
+    staleTime: STALE,
   })
 }

@@ -21,6 +21,7 @@ const ROUTE_LABELS: Record<string, string> = {
   forecast: "Prévision",
   services: "Services",
   analytics: "Analytique",
+  diagnostics: "Diagnostics",
   "data-sources": "Sources de données",
   "gcp-connect": "GCP Connect",
 }
