@@ -4,29 +4,32 @@ import {
   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, Cell, ReferenceLine,
 } from "recharts"
+import { Layers, Crown, PieChart } from "lucide-react"
 import PageShell from "@/components/layout/PageShell"
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
+import { SectionCard } from "@/components/ui/section-card"
+import { KpiCard } from "@/components/ui/kpi-card"
+import { Badge } from "@/components/ui/badge"
+import { Skeleton } from "@/components/ui/skeleton"
 import { useServices, useKPI } from "@/lib/hooks/useApi"
 
-const SERVICE_COLORS = [
-  "#1a6cf6", "#0891b2", "#7c3aed", "#059669", "#d97706", "#dc2626", "#64748b", "#0d9488",
+const CHART_COLORS = [
+  "oklch(0.22 0.055 258)",
+  "oklch(0.66 0.185 28)",
+  "oklch(0.60 0.11 195)",
+  "oklch(0.52 0.19 295)",
+  "oklch(0.75 0.15 78)",
+  "oklch(0.62 0.14 155)",
+  "oklch(0.48 0.02 250)",
+  "oklch(0.42 0.15 320)",
 ]
 
-function CVBadge({ cv }: { cv: number }) {
-  const label = cv < 20 ? "Stable" : cv < 60 ? "Modéré" : "Volatile"
-  const cls =
-    cv < 20 ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
-    : cv < 60 ? "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"
-    : "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"
-  return (
-    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold ${cls}`}>
-      {label}
-    </span>
-  )
-}
+const COLOR_CORAL = "oklch(0.66 0.185 28)"
+const COLOR_MUTED = "oklch(0.65 0.02 250)"
 
-function Skeleton({ className = "" }: { className?: string }) {
-  return <div className={`animate-pulse rounded-xl bg-muted ${className}`} />
+function CVBadge({ cv }: { cv: number }) {
+  if (cv < 20) return <Badge variant="success">Stable</Badge>
+  if (cv < 60) return <Badge variant="warning">Modéré</Badge>
+  return <Badge variant="destructive">Volatile</Badge>
 }
 
 export default function ServicesPage() {
@@ -34,154 +37,192 @@ export default function ServicesPage() {
   const { data: kpi, isLoading: kpiLoading } = useKPI()
 
   const top5Pct = services
-    ? services.slice(0, 5).reduce((s, svc) => s + svc.pct, 0).toFixed(0)
-    : "—"
+    ? services.slice(0, 5).reduce((s, svc) => s + svc.pct, 0)
+    : 0
 
   return (
     <PageShell
+      eyebrow="Cost breakdown"
       title="Services"
-      description="Analyse Pareto 80/20 — répartition et volatilité par service GCP"
+      description="Analyse Pareto 80/20 · répartition et volatilité par service cloud"
     >
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 lg:gap-4">
+      {/* KPI overview */}
+      <section aria-label="Indicateurs services" className="grid grid-cols-1 sm:grid-cols-3 gap-3 lg:gap-4">
         {(servicesLoading || kpiLoading || !services || !kpi) ? (
           Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-24" />)
         ) : (
           <>
-            <Card className="relative overflow-hidden">
-              <div className="absolute top-0 left-0 h-0.5 w-full bg-gradient-to-r from-[oklch(0.48_0.24_264)] to-transparent" />
-              <CardHeader><CardDescription className="text-xs font-medium uppercase tracking-wider">Services analysés</CardDescription></CardHeader>
-              <CardContent>
-                <p className="text-2xl font-bold">{services.length}</p>
-                <p className="text-xs text-muted-foreground mt-1">sur la période complète</p>
-              </CardContent>
-            </Card>
-            <Card className="relative overflow-hidden">
-              <div className="absolute top-0 left-0 h-0.5 w-full bg-gradient-to-r from-[oklch(0.48_0.24_264)] to-transparent" />
-              <CardHeader><CardDescription className="text-xs font-medium uppercase tracking-wider">Service dominant</CardDescription></CardHeader>
-              <CardContent>
-                <p className="text-lg font-bold leading-tight">{kpi.topService}</p>
-                <p className="text-xs text-muted-foreground mt-1">{kpi.topServicePct}% du total</p>
-              </CardContent>
-            </Card>
-            <Card className="relative overflow-hidden col-span-2 lg:col-span-1">
-              <div className="absolute top-0 left-0 h-0.5 w-full bg-gradient-to-r from-[oklch(0.48_0.24_264)] to-transparent" />
-              <CardHeader><CardDescription className="text-xs font-medium uppercase tracking-wider">Loi de Pareto</CardDescription></CardHeader>
-              <CardContent>
-                <p className="text-2xl font-bold">{top5Pct}%</p>
-                <p className="text-xs text-muted-foreground mt-1">concentrés sur 5 services</p>
-              </CardContent>
-            </Card>
+            <KpiCard
+              label="Services analysés"
+              value={services.length}
+              sub="Sur la période complète"
+              icon={Layers}
+              tone="default"
+            />
+            <KpiCard
+              label="Service dominant"
+              value={<span className="text-base">{kpi.topService}</span>}
+              sub={`${kpi.topServicePct.toFixed(1)}% du coût total`}
+              icon={Crown}
+              tone="coral"
+            />
+            <KpiCard
+              label="Loi de Pareto"
+              value={`${top5Pct.toFixed(0)}%`}
+              sub="Concentrés sur les 5 premiers services"
+              icon={PieChart}
+              tone="success"
+            />
           </>
         )}
-      </div>
+      </section>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Analyse Pareto 80/20</CardTitle>
-          <CardDescription>Coût total (barres) · % cumulé (ligne) · Seuil 80% (rouge)</CardDescription>
-        </CardHeader>
-        <CardContent>
-          {(servicesLoading || !services) ? (
-            <Skeleton className="h-[280px]" />
-          ) : (
-            <ResponsiveContainer width="100%" height={280}>
-              <ComposedChart data={services} margin={{ left: -20, right: 32 }}>
-                <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
-                <XAxis dataKey="service" tick={{ fontSize: 9 }} tickLine={false} />
-                <YAxis yAxisId="left" tick={{ fontSize: 10 }} tickLine={false} unit=" €" width={56} />
-                <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10 }} tickLine={false} unit="%" domain={[0, 100]} width={36} />
-                <Tooltip formatter={(v: unknown, name: string) => { const x = v as number; return name === "cumPct" ? [`${x.toFixed(1)}%`, "% cumulé"] : [`${x.toFixed(0)} €`, "Coût"] }} />
-                <ReferenceLine yAxisId="right" y={80} stroke="#dc2626" strokeDasharray="4 2"
-                  label={{ value: "80%", position: "right", fontSize: 10, fill: "#dc2626" }} />
-                <Bar yAxisId="left" dataKey="cost" radius={[4, 4, 0, 0]} name="Coût">
-                  {services.map((_, i) => (
-                    <Cell key={i} fill={SERVICE_COLORS[i % SERVICE_COLORS.length]} />
-                  ))}
-                </Bar>
-                <Line yAxisId="right" type="monotone" dataKey="cumPct" stroke="#64748b"
-                  strokeWidth={2} dot={{ r: 3, fill: "#64748b" }} name="% cumulé" />
-              </ComposedChart>
-            </ResponsiveContainer>
-          )}
-        </CardContent>
-      </Card>
+      {/* Pareto chart */}
+      <SectionCard
+        title="Analyse Pareto 80/20"
+        description="Coût par service (barres) · pourcentage cumulé (ligne) · seuil 80% (référence)"
+      >
+        {(servicesLoading || !services) ? (
+          <Skeleton className="h-[300px]" />
+        ) : (
+          <ResponsiveContainer width="100%" height={300}>
+            <ComposedChart data={services} margin={{ left: -18, right: 32, top: 8 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="oklch(0 0 0 / 0.06)" />
+              <XAxis
+                dataKey="service"
+                tick={{ fontSize: 9, fill: COLOR_MUTED }}
+                tickLine={false}
+                axisLine={false}
+                angle={-20}
+                textAnchor="end"
+                height={60}
+              />
+              <YAxis yAxisId="left" tick={{ fontSize: 10, fill: COLOR_MUTED }} tickLine={false} axisLine={false} unit=" €" width={56} />
+              <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10, fill: COLOR_MUTED }} tickLine={false} axisLine={false} unit="%" domain={[0, 100]} width={38} />
+              <Tooltip
+                cursor={{ fill: "oklch(0 0 0 / 0.03)" }}
+                contentStyle={{
+                  borderRadius: 10,
+                  border: "1px solid oklch(0.90 0.010 250)",
+                  fontSize: 12,
+                }}
+                formatter={(v: unknown, name: string) => {
+                  const x = v as number
+                  return name === "cumPct"
+                    ? [`${x.toFixed(1)}%`, "% cumulé"]
+                    : [`${x.toLocaleString("fr-FR", { maximumFractionDigits: 0 })} €`, "Coût"]
+                }}
+              />
+              <ReferenceLine
+                yAxisId="right"
+                y={80}
+                stroke={COLOR_CORAL}
+                strokeDasharray="4 2"
+                label={{ value: "80%", position: "right", fontSize: 10, fill: COLOR_CORAL }}
+              />
+              <Bar yAxisId="left" dataKey="cost" radius={[6, 6, 0, 0]} name="Coût">
+                {services.map((_, i) => (
+                  <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />
+                ))}
+              </Bar>
+              <Line
+                yAxisId="right"
+                type="monotone"
+                dataKey="cumPct"
+                stroke={COLOR_CORAL}
+                strokeWidth={2.5}
+                dot={{ r: 3.5, fill: COLOR_CORAL, stroke: "white", strokeWidth: 2 }}
+                name="% cumulé"
+              />
+            </ComposedChart>
+          </ResponsiveContainer>
+        )}
+      </SectionCard>
 
       {/* Desktop table */}
-      <Card className="hidden sm:block">
-        <CardHeader>
-          <CardTitle>Détail par service</CardTitle>
-          <CardDescription>Coût, part, volatilité (CV) et profil de risque</CardDescription>
-        </CardHeader>
-        <CardContent>
-          {(servicesLoading || !services) ? (
-            <Skeleton className="h-[180px]" />
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b text-muted-foreground text-xs">
-                    <th className="pb-2 text-left font-medium">Service</th>
-                    <th className="pb-2 text-right font-medium">Coût total</th>
-                    <th className="pb-2 text-right font-medium">Part</th>
-                    <th className="pb-2 text-right font-medium">% Cumulé</th>
-                    <th className="pb-2 text-right font-medium">CV</th>
-                    <th className="pb-2 text-center font-medium">Profil</th>
+      <SectionCard
+        title="Détail par service"
+        description="Coût, part, part cumulée, volatilité et profil de risque"
+        className="hidden sm:block"
+      >
+        {(servicesLoading || !services) ? (
+          <Skeleton className="h-[200px]" />
+        ) : (
+          <div className="overflow-x-auto -mx-1">
+            <table className="w-full text-sm min-w-[520px]">
+              <thead>
+                <tr className="border-b border-border text-muted-foreground text-xs">
+                  <th className="pb-2.5 text-left font-medium pl-1">Service</th>
+                  <th className="pb-2.5 text-right font-medium">Coût total</th>
+                  <th className="pb-2.5 text-right font-medium">Part</th>
+                  <th className="pb-2.5 text-right font-medium">Cumul</th>
+                  <th className="pb-2.5 text-right font-medium">CV</th>
+                  <th className="pb-2.5 text-center font-medium pr-1">Profil</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {services.map((s, i) => (
+                  <tr key={s.service} className="hover:bg-muted/40 transition-colors">
+                    <td className="py-2.5 pr-3 pl-1">
+                      <div className="flex items-center gap-2.5">
+                        <span
+                          aria-hidden
+                          className="inline-block h-2.5 w-2.5 rounded-full shrink-0"
+                          style={{ backgroundColor: CHART_COLORS[i % CHART_COLORS.length] }}
+                        />
+                        <span className="text-sm">{s.service}</span>
+                      </div>
+                    </td>
+                    <td className="py-2.5 text-right tabular-nums font-semibold">
+                      {s.cost.toLocaleString("fr-FR", { maximumFractionDigits: 0 })} €
+                    </td>
+                    <td className="py-2.5 text-right tabular-nums">{s.pct.toFixed(1)}%</td>
+                    <td className="py-2.5 text-right tabular-nums text-muted-foreground">{s.cumPct.toFixed(1)}%</td>
+                    <td className="py-2.5 text-right tabular-nums">{s.cv.toFixed(1)}%</td>
+                    <td className="py-2.5 text-center pr-1"><CVBadge cv={s.cv} /></td>
                   </tr>
-                </thead>
-                <tbody className="divide-y divide-border">
-                  {services.map((s, i) => (
-                    <tr key={s.service} className="hover:bg-muted/40 transition-colors">
-                      <td className="py-2.5 pr-3">
-                        <div className="flex items-center gap-2">
-                          <span className="inline-block h-2.5 w-2.5 rounded-full shrink-0" style={{ backgroundColor: SERVICE_COLORS[i] }} />
-                          <span className="text-sm">{s.service}</span>
-                        </div>
-                      </td>
-                      <td className="py-2.5 text-right tabular-nums font-semibold">{s.cost.toLocaleString("fr-FR", { minimumFractionDigits: 0 })} €</td>
-                      <td className="py-2.5 text-right tabular-nums">{s.pct.toFixed(1)}%</td>
-                      <td className="py-2.5 text-right tabular-nums text-muted-foreground">{s.cumPct.toFixed(1)}%</td>
-                      <td className="py-2.5 text-right tabular-nums">{s.cv.toFixed(1)}%</td>
-                      <td className="py-2.5 text-center"><CVBadge cv={s.cv} /></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </SectionCard>
 
       {/* Mobile cards */}
       <div className="sm:hidden space-y-3">
         {(servicesLoading || !services) ? (
-          Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-20" />)
+          Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-24" />)
         ) : (
           services.map((s, i) => (
-            <Card key={s.service}>
-              <CardContent className="pt-4">
-                <div className="flex items-start justify-between gap-2">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <span className="inline-block h-2.5 w-2.5 rounded-full shrink-0 mt-0.5" style={{ backgroundColor: SERVICE_COLORS[i] }} />
-                    <span className="text-sm font-medium truncate">{s.service}</span>
-                  </div>
-                  <CVBadge cv={s.cv} />
+            <SectionCard key={s.service} accent="none">
+              <div className="flex items-start justify-between gap-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span
+                    aria-hidden
+                    className="inline-block h-2.5 w-2.5 rounded-full shrink-0 mt-1"
+                    style={{ backgroundColor: CHART_COLORS[i % CHART_COLORS.length] }}
+                  />
+                  <span className="text-sm font-medium truncate">{s.service}</span>
                 </div>
-                <div className="mt-2 grid grid-cols-3 gap-2 text-xs">
-                  <div>
-                    <p className="text-muted-foreground">Coût</p>
-                    <p className="font-bold tabular-nums">{s.cost.toLocaleString("fr-FR", { minimumFractionDigits: 0 })} €</p>
-                  </div>
-                  <div>
-                    <p className="text-muted-foreground">Part</p>
-                    <p className="font-semibold tabular-nums">{s.pct.toFixed(1)}%</p>
-                  </div>
-                  <div>
-                    <p className="text-muted-foreground">CV</p>
-                    <p className="font-semibold tabular-nums">{s.cv.toFixed(1)}%</p>
-                  </div>
+                <CVBadge cv={s.cv} />
+              </div>
+              <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
+                <div>
+                  <p className="text-muted-foreground">Coût</p>
+                  <p className="font-bold tabular-nums">
+                    {s.cost.toLocaleString("fr-FR", { maximumFractionDigits: 0 })} €
+                  </p>
                 </div>
-              </CardContent>
-            </Card>
+                <div>
+                  <p className="text-muted-foreground">Part</p>
+                  <p className="font-semibold tabular-nums">{s.pct.toFixed(1)}%</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground">CV</p>
+                  <p className="font-semibold tabular-nums">{s.cv.toFixed(1)}%</p>
+                </div>
+              </div>
+            </SectionCard>
           ))
         )}
       </div>

@@ -14,7 +14,7 @@ API REST FastAPI exposant l'intégralité de la pipeline analytique et de prévi
 6. [Moteur de prévision](#moteur-de-prévision)
 7. [Schémas de réponse](#schémas-de-réponse)
 8. [Configuration](#configuration)
-9. [Logs & Observabilité](#logs--observabilité)
+9. [Logs &amp; Observabilité](#logs--observabilité)
 10. [Docker](#docker)
 11. [Gestion des erreurs](#gestion-des-erreurs)
 
@@ -67,15 +67,15 @@ pip install -r requirements.txt
 
 Dépendances principales :
 
-| Package | Rôle |
-|---|---|
-| `fastapi` | Framework web async |
-| `uvicorn[standard]` | Serveur ASGI |
-| `pydantic-settings` | Configuration via env vars |
+| Package                  | Rôle                                    |
+| ------------------------ | ---------------------------------------- |
+| `fastapi`              | Framework web async                      |
+| `uvicorn[standard]`    | Serveur ASGI                             |
+| `pydantic-settings`    | Configuration via env vars               |
 | `pandas` + `pyarrow` | Lecture Parquet, manipulation de séries |
-| `numpy` + `scipy` | Calculs statistiques |
-| `statsmodels` | STL, ADF, KPSS, ARIMA, Holt-Winters |
-| `scikit-learn` | MAE, MSE (métriques benchmark) |
+| `numpy` + `scipy`    | Calculs statistiques                     |
+| `statsmodels`          | STL, ADF, KPSS, ARIMA, Holt-Winters      |
+| `scikit-learn`         | MAE, MSE (métriques benchmark)          |
 
 ---
 
@@ -106,8 +106,8 @@ ENV=prod PORT=8080 CORS_ORIGINS=https://mon-front.com uvicorn main:app ...
 
 Base URL : `http://localhost:8080`
 
-Swagger interactif : `GET /docs`  
-ReDoc : `GET /redoc`  
+Swagger interactif : `GET /docs`
+ReDoc : `GET /redoc`
 OpenAPI JSON : `GET /openapi.json`
 
 ---
@@ -119,6 +119,7 @@ OpenAPI JSON : `GET /openapi.json`
 Vérification de disponibilité du service.
 
 **Réponse 200**
+
 ```json
 { "status": "ok" }
 ```
@@ -132,6 +133,7 @@ Vérification de disponibilité du service.
 Agrégats globaux pour les cartes KPI du dashboard.
 
 **Réponse 200** — `KPIData`
+
 ```json
 {
   "total_spend": 3327.5,
@@ -153,11 +155,12 @@ Agrégats globaux pour les cartes KPI du dashboard.
 
 Série journalière avec moyenne mobile 7 jours et bandes IC 95%.
 
-| Paramètre | Type | Défaut | Contraintes | Description |
-|---|---|---|---|---|
+| Paramètre | Type    | Défaut  | Contraintes   | Description                  |
+| ---------- | ------- | -------- | ------------- | ---------------------------- |
 | `last_n` | `int` | `null` | 7 ≤ n ≤ 365 | Limiter aux N derniers jours |
 
 **Réponse 200** — `List[DailyPoint]`
+
 ```json
 [
   {
@@ -177,6 +180,7 @@ Série journalière avec moyenne mobile 7 jours et bandes IC 95%.
 Répartition des coûts par service, triée par Pareto (coût décroissant).
 
 **Réponse 200** — `List[ServiceShare]`
+
 ```json
 [
   {
@@ -196,7 +200,7 @@ Répartition des coûts par service, triée par Pareto (coût décroissant).
 ]
 ```
 
-> `cv` = coefficient de variation (%) — mesure de la volatilité du service.  
+> `cv` = coefficient de variation (%) — mesure de la volatilité du service.
 > `cum_pct` = part cumulée Pareto.
 
 ---
@@ -205,11 +209,12 @@ Répartition des coûts par service, triée par Pareto (coût décroissant).
 
 Tous les points journaliers avec Z-score. `is_anomaly=true` si `|Z| > z_threshold`.
 
-| Paramètre | Type | Défaut | Contraintes |
-|---|---|---|---|
+| Paramètre      | Type      | Défaut | Contraintes             |
+| --------------- | --------- | ------- | ----------------------- |
 | `z_threshold` | `float` | `2.0` | 1.0 ≤ threshold ≤ 4.0 |
 
 **Réponse 200** — `List[AnomalyPoint]`
+
 ```json
 [
   {
@@ -228,6 +233,7 @@ Tous les points journaliers avec Z-score. `is_anomaly=true` si `|Z| > z_threshol
 Statistiques descriptives complètes de la distribution des coûts quotidiens.
 
 **Réponse 200** — `DescriptiveStats`
+
 ```json
 {
   "mean": 19.5735,
@@ -250,6 +256,7 @@ Statistiques descriptives complètes de la distribution des coûts quotidiens.
 Tests ADF et KPSS sur la série quotidienne.
 
 **Réponse 200** — `StationarityResult`
+
 ```json
 {
   "adf": {
@@ -267,8 +274,8 @@ Tests ADF et KPSS sur la série quotidienne.
 }
 ```
 
-> **Interprétation :** ADF — H₀ = racine unitaire ; p < 0.05 → stationnaire.  
-> KPSS — H₀ = stationnarité ; p < 0.05 → non-stationnaire.  
+> **Interprétation :** ADF — H₀ = racine unitaire ; p < 0.05 → stationnaire.
+> KPSS — H₀ = stationnarité ; p < 0.05 → non-stationnaire.
 > Résultats contradictoires → série **trend-stationnaire**.
 
 ---
@@ -278,6 +285,7 @@ Tests ADF et KPSS sur la série quotidienne.
 Décomposition STL (Seasonal-Trend decomposition using Loess) sur l'ensemble de la série. Période = 7 jours (cycle hebdomadaire), robuste aux outliers.
 
 **Réponse 200** — `List[STLPoint]`
+
 ```json
 [
   {
@@ -296,6 +304,7 @@ Décomposition STL (Seasonal-Trend decomposition using Loess) sur l'ensemble de 
 Force de la tendance (Ft) et de la saisonnalité (Fs) calculées selon Wang et al. (2006).
 
 **Réponse 200** — `STLStrengths`
+
 ```json
 {
   "ft": 0.4387,
@@ -304,7 +313,7 @@ Force de la tendance (Ft) et de la saisonnalité (Fs) calculées selon Wang et a
 }
 ```
 
-> `Ft = max(0, 1 - Var(R) / Var(T+R))` — tendance modérée si 0.3 < Ft < 0.6.  
+> `Ft = max(0, 1 - Var(R) / Var(T+R))` — tendance modérée si 0.3 < Ft < 0.6.
 > `Fs = max(0, 1 - Var(R) / Var(S+R))` — saisonnalité faible à modérée.
 
 ---
@@ -313,11 +322,12 @@ Force de la tendance (Ft) et de la saisonnalité (Fs) calculées selon Wang et a
 
 Valeurs ACF et PACF jusqu'au lag `nlags`.
 
-| Paramètre | Type | Défaut | Contraintes |
-|---|---|---|---|
-| `nlags` | `int` | `28` | 5 ≤ nlags ≤ 60 |
+| Paramètre | Type    | Défaut | Contraintes      |
+| ---------- | ------- | ------- | ---------------- |
+| `nlags`  | `int` | `28`  | 5 ≤ nlags ≤ 60 |
 
 **Réponse 200** — `List[ACFPoint]`
+
 ```json
 [
   { "lag": 1, "acf": 0.312456, "pacf": 0.312456 },
@@ -333,12 +343,13 @@ Valeurs ACF et PACF jusqu'au lag `nlags`.
 
 Série de prévision pour l'horizon demandé. Retourne les 30 derniers jours historiques + `horizon` points futurs, chacun avec IC 80% et 95%.
 
-| Paramètre | Type | Défaut | Contraintes |
-|---|---|---|---|
-| `horizon` | `int` | `60` | 7 ≤ horizon ≤ 180 |
-| `model` | `str` | `AutoETS` | Voir `/api/forecast/models/list` |
+| Paramètre  | Type    | Défaut     | Contraintes                       |
+| ----------- | ------- | ----------- | --------------------------------- |
+| `horizon` | `int` | `60`      | 7 ≤ horizon ≤ 180               |
+| `model`   | `str` | `AutoETS` | Voir`/api/forecast/models/list` |
 
 **Réponse 200** — `List[ForecastPoint]`
+
 ```json
 [
   {
@@ -362,7 +373,7 @@ Série de prévision pour l'horizon demandé. Retourne les 30 derniers jours his
 ]
 ```
 
-> Les points avec `actual != null` sont des données historiques (les 30 derniers jours).  
+> Les points avec `actual != null` sont des données historiques (les 30 derniers jours).
 > Les points avec `actual = null` sont les prévisions futures.
 
 ---
@@ -374,6 +385,7 @@ Cartes résumé : total prévu, modèle gagnant, métriques.
 Mêmes paramètres que `GET /api/forecast/`.
 
 **Réponse 200** — `ForecastSummary`
+
 ```json
 {
   "horizon_days": 60,
@@ -393,6 +405,7 @@ Mêmes paramètres que `GET /api/forecast/`.
 Benchmark complet des 6 modèles par walk-forward cross-validation (5 folds, horizon 14 jours). Résultats triés par MAE croissant.
 
 **Réponse 200** — `List[ModelBenchmark]`
+
 ```json
 [
   {
@@ -429,6 +442,7 @@ Benchmark complet des 6 modèles par walk-forward cross-validation (5 folds, hor
 Liste des noms de modèles disponibles.
 
 **Réponse 200**
+
 ```json
 {
   "models": [
@@ -458,21 +472,21 @@ Startup
 
 ### Analyse de la série (`analysis/timeseries.py`)
 
-| Fonction | Algorithme | Bibliothèque |
-|---|---|---|
-| `get_daily_series()` | Rolling mean 7j + expanding std pour CI 95% | pandas |
-| `get_descriptive_stats()` | Mean, median, std, CV, skew, kurtosis, IQR, MAD | numpy, scipy.stats |
-| `get_stationarity()` | ADF (autolag=AIC) + KPSS (regression=c, nlags=auto) | statsmodels |
-| `get_stl_decomposition()` | STL period=7, robust=True + forces Ft/Fs | statsmodels |
-| `get_anomalies()` | Z-score = (x - μ) / σ | numpy |
-| `get_acf_pacf()` | ACF (FFT) + PACF jusqu'à nlags | statsmodels |
+| Fonction                    | Algorithme                                          | Bibliothèque      |
+| --------------------------- | --------------------------------------------------- | ------------------ |
+| `get_daily_series()`      | Rolling mean 7j + expanding std pour CI 95%         | pandas             |
+| `get_descriptive_stats()` | Mean, median, std, CV, skew, kurtosis, IQR, MAD     | numpy, scipy.stats |
+| `get_stationarity()`      | ADF (autolag=AIC) + KPSS (regression=c, nlags=auto) | statsmodels        |
+| `get_stl_decomposition()` | STL period=7, robust=True + forces Ft/Fs            | statsmodels        |
+| `get_anomalies()`         | Z-score = (x - μ) / σ                             | numpy              |
+| `get_acf_pacf()`          | ACF (FFT) + PACF jusqu'à nlags                     | statsmodels        |
 
 ### Analyse par service (`analysis/services.py`)
 
-| Fonction | Calcul |
-|---|---|
-| `get_service_shares()` | Sum par service → sort Pareto → CV par service |
-| `get_kpi()` | Total, moyenne, pente OLS, forecast 14j MA, count anomalies |
+| Fonction                 | Calcul                                                      |
+| ------------------------ | ----------------------------------------------------------- |
+| `get_service_shares()` | Sum par service → sort Pareto → CV par service            |
+| `get_kpi()`            | Total, moyenne, pente OLS, forecast 14j MA, count anomalies |
 
 ---
 
@@ -480,14 +494,14 @@ Startup
 
 ### Modèles implémentés (`forecast/engine.py`)
 
-| Clé API | Famille | Algorithme |
-|---|---|---|
-| `AutoETS` | Exp. Smoothing | Holt additive (trend, no seasonal) — optimisation MLE |
-| `AutoTheta` | Theta | OLS trend + SES détrended, alpha=0.5, combiné à 50/50 |
-| `AutoARIMA` | ARIMA | ARIMA(1,1,1) — intervalles analytiques via `get_forecast()` |
-| `Prophet (SES)` | Exp. Smoothing | Simple Exponential Smoothing, alpha optimisé |
-| `N-HiTS (HW)` | Holt-Winters | ETS additif trend + saisonnier période 7 |
-| `TimesNet (SNaive)` | Seasonal Naive | Répétition de la dernière semaine observée |
+| Clé API              | Famille        | Algorithme                                                    |
+| --------------------- | -------------- | ------------------------------------------------------------- |
+| `AutoETS`           | Exp. Smoothing | Holt additive (trend, no seasonal) — optimisation MLE        |
+| `AutoTheta`         | Theta          | OLS trend + SES détrended, alpha=0.5, combiné à 50/50      |
+| `AutoARIMA`         | ARIMA          | ARIMA(1,1,1) — intervalles analytiques via`get_forecast()` |
+| `Prophet (SES)`     | Exp. Smoothing | Simple Exponential Smoothing, alpha optimisé                 |
+| `N-HiTS (HW)`       | Holt-Winters   | ETS additif trend + saisonnier période 7                     |
+| `TimesNet (SNaive)` | Seasonal Naive | Répétition de la dernière semaine observée                |
 
 ### Walk-forward cross-validation
 
@@ -502,6 +516,7 @@ Fold 5 : train=[0..156]   test=[157..170]
 ```
 
 Métriques calculées sur la concaténation des 5 folds :
+
 - **MAE** — Mean Absolute Error (€)
 - **RMSE** — Root Mean Squared Error (€)
 - **MAPE** — Mean Absolute Percentage Error (%)
@@ -523,6 +538,7 @@ où `h` est l'horizon (nombre de pas dans le futur).
 ## Schémas de réponse
 
 ### `DailyPoint`
+
 ```
 date      string   "YYYY-MM-DD"
 cost      float    Coût brut journalier (€)
@@ -532,6 +548,7 @@ ci_high   float    Borne haute IC 95%
 ```
 
 ### `ServiceShare`
+
 ```
 service   string   Nom du service GCP
 cost      float    Coût total sur la période (€)
@@ -541,6 +558,7 @@ cum_pct   float    % cumulé Pareto
 ```
 
 ### `AnomalyPoint`
+
 ```
 date        string   "YYYY-MM-DD"
 cost        float    Coût (€)
@@ -549,6 +567,7 @@ is_anomaly  bool     |zscore| > z_threshold
 ```
 
 ### `STLPoint`
+
 ```
 date      string   "YYYY-MM-DD"
 trend     float    Composante tendance (€)
@@ -557,6 +576,7 @@ residual  float    Résidu (€)
 ```
 
 ### `ForecastPoint`
+
 ```
 date      string          "YYYY-MM-DD"
 forecast  float           Point central (€)
@@ -568,6 +588,7 @@ actual    float | null    Valeur réelle (null = futur)
 ```
 
 ### `ModelBenchmark`
+
 ```
 rank    int     Classement (1 = meilleur)
 model   string  Nom du modèle
@@ -581,6 +602,7 @@ winner  bool    true si rank == 1
 ```
 
 ### `KPIData`
+
 ```
 total_spend       float    Total € sur la période
 daily_avg         float    Moyenne €/jour
@@ -600,17 +622,18 @@ period_end        string   "YYYY-MM-DD"
 
 Toutes les valeurs sont surchargeable par variable d'environnement (préfixe vide, case-insensitive) ou dans un fichier `.env` à la racine du dossier `back/`.
 
-| Variable | Défaut | Description |
-|---|---|---|
-| `APP_NAME` | `FinOps Analyser` | Titre affiché dans le Swagger |
-| `APP_VERSION` | `0.2.0` | Version de l'API |
-| `ENV` | `dev` | `dev` · `staging` · `prod` |
-| `DEBUG` | `false` | Logs verbeux |
-| `HOST` | `0.0.0.0` | Adresse d'écoute |
-| `PORT` | `8080` | Port d'écoute |
-| `CORS_ORIGINS` | `*` | Origines autorisées (virgule-séparées en prod) |
+| Variable         | Défaut             | Description                                       |
+| ---------------- | ------------------- | ------------------------------------------------- |
+| `APP_NAME`     | `FinOps Analyser` | Titre affiché dans le Swagger                    |
+| `APP_VERSION`  | `0.2.0`           | Version de l'API                                  |
+| `ENV`          | `dev`             | `dev` · `staging` · `prod`                |
+| `DEBUG`        | `false`           | Logs verbeux                                      |
+| `HOST`         | `0.0.0.0`         | Adresse d'écoute                                 |
+| `PORT`         | `8080`            | Port d'écoute                                    |
+| `CORS_ORIGINS` | `*`               | Origines autorisées (virgule-séparées en prod) |
 
 Exemple `.env` pour la production :
+
 ```env
 ENV=prod
 CORS_ORIGINS=https://finops.demo.com,https://www.finops.demo.com
@@ -624,6 +647,7 @@ PORT=8080
 Chaque requête reçoit un identifiant de corrélation `X-Request-Id` (header entrant ou généré). Cet identifiant est propagé dans tous les logs JSON et retourné dans le header de réponse.
 
 Format de log :
+
 ```json
 {
   "ts": "2026-06-26T10:23:41",
@@ -678,10 +702,10 @@ Toutes les erreurs retournent un JSON structuré identique :
 }
 ```
 
-| Exception | Code HTTP | Code JSON |
-|---|---|---|
-| `BadRequest` | 400 | `BAD_REQUEST` |
-| `Unauthorized` | 401 | `UNAUTHORIZED` |
-| `Forbidden` | 403 | `FORBIDDEN` |
-| `NotFound` | 404 | `NOT_FOUND` |
-| `DependencyError` | 500 | `DEPENDENCY_ERROR` |
+| Exception           | Code HTTP | Code JSON            |
+| ------------------- | --------- | -------------------- |
+| `BadRequest`      | 400       | `BAD_REQUEST`      |
+| `Unauthorized`    | 401       | `UNAUTHORIZED`     |
+| `Forbidden`       | 403       | `FORBIDDEN`        |
+| `NotFound`        | 404       | `NOT_FOUND`        |
+| `DependencyError` | 500       | `DEPENDENCY_ERROR` |

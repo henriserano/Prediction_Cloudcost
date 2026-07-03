@@ -2,17 +2,36 @@
 
 import Link from "next/link"
 import { usePathname } from "next/navigation"
-import { BarChart2, LineChart, Layers, FlaskConical, X, CloudCog, Cloud } from "lucide-react"
+import {
+  BarChart3,
+  LineChart,
+  Layers,
+  FlaskConical,
+  DatabaseZap,
+  X,
+  Sparkles,
+} from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useSidebar } from "@/lib/context/sidebar-context"
 import { useModelBenchmarks } from "@/lib/hooks/useApi"
+import { SiaLogo } from "@/components/ui/logo"
 
-const NAV = [
-  { href: "/dashboard", label: "Vue d'ensemble", icon: BarChart2 },
-  { href: "/forecast", label: "Prévision", icon: LineChart },
-  { href: "/services", label: "Services", icon: Layers },
-  { href: "/analytics", label: "Analytique", icon: FlaskConical },
-  { href: "/gcp-connect", label: "GCP Connect", icon: Cloud },
+interface NavItem {
+  href: string
+  label: string
+  icon: React.ElementType
+  hint?: string
+}
+
+const PRIMARY: NavItem[] = [
+  { href: "/dashboard", label: "Vue d'ensemble", icon: BarChart3, hint: "KPIs & tendances" },
+  { href: "/forecast", label: "Prévision", icon: LineChart, hint: "6 modèles" },
+  { href: "/services", label: "Services", icon: Layers, hint: "Pareto 80/20" },
+  { href: "/analytics", label: "Analytique", icon: FlaskConical, hint: "STL · Anomalies" },
+]
+
+const SECONDARY: NavItem[] = [
+  { href: "/data-sources", label: "Sources de données", icon: DatabaseZap, hint: "Import · Cloud" },
 ]
 
 export default function Sidebar() {
@@ -21,12 +40,14 @@ export default function Sidebar() {
   const { data: benchmarks } = useModelBenchmarks()
   const bestModel = benchmarks?.find((m) => m.winner)?.model ?? "AutoETS"
 
+  const isActive = (href: string) => path === href || path.startsWith(href + "/")
+
   return (
     <>
       {/* Mobile backdrop */}
       <div
         className={cn(
-          "fixed inset-0 z-40 bg-black/50 backdrop-blur-sm transition-opacity duration-300 lg:hidden",
+          "fixed inset-0 z-40 bg-black/40 backdrop-blur-sm transition-opacity duration-300 lg:hidden",
           open ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"
         )}
         onClick={close}
@@ -36,84 +57,123 @@ export default function Sidebar() {
       {/* Sidebar panel */}
       <aside
         className={cn(
-          "fixed left-0 top-0 z-50 h-screen w-64 flex flex-col",
-          "bg-[oklch(0.10_0.10_264)] text-white",
+          "fixed left-0 top-0 z-50 flex h-dvh w-72 flex-col",
+          "bg-sidebar text-sidebar-foreground",
           "transition-transform duration-300 ease-in-out",
-          "lg:static lg:translate-x-0 lg:shrink-0",
-          open ? "translate-x-0" : "-translate-x-full"
+          "lg:static lg:h-screen lg:w-64 lg:translate-x-0 lg:shrink-0",
+          open ? "translate-x-0" : "-translate-x-full lg:translate-x-0"
         )}
+        aria-label="Navigation principale"
       >
+        {/* Ambient corail gradient */}
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-[color:var(--accent-coral)]/12 to-transparent"
+        />
+
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-5 border-b border-white/10">
-          <div className="flex items-center gap-3">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[oklch(0.48_0.24_264)] shadow-sm shadow-blue-900/30">
-              <CloudCog className="h-4 w-4 text-white" />
-            </div>
-            <div className="leading-tight">
-              <p className="text-sm font-bold tracking-tight">FinOps</p>
-              <p className="text-[11px] text-white/45 font-normal">demo GCP</p>
-            </div>
-          </div>
+        <div className="relative flex items-center justify-between px-5 py-5">
+          <SiaLogo />
           <button
             onClick={close}
-            className="lg:hidden rounded-lg p-1.5 hover:bg-white/10 transition-colors"
-            aria-label="Fermer le menu"
+            className="lg:hidden rounded-lg p-1.5 text-sidebar-foreground/70 hover:bg-white/8 hover:text-white transition-colors"
+            aria-label="Fermer la navigation"
           >
-            <X className="h-4 w-4 text-white/70" />
+            <X className="h-4 w-4" />
           </button>
         </div>
 
-        {/* Sia brand accent stripe */}
-        <div className="h-px bg-gradient-to-r from-[oklch(0.48_0.24_264)] via-[oklch(0.60_0.18_195)] to-transparent" />
+        {/* Section title */}
+        <p className="px-5 pt-2 pb-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-sidebar-foreground/40">
+          Analyse
+        </p>
 
-        {/* Navigation */}
-        <nav className="flex-1 px-3 py-4 space-y-0.5 overflow-y-auto">
-          {NAV.map(({ href, label, icon: Icon }) => {
-            const active = path === href || path.startsWith(href + "/")
-            return (
-              <Link
-                key={href}
-                href={href}
-                onClick={close}
-                className={cn(
-                  "group flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all duration-150",
-                  active
-                    ? "bg-[oklch(0.48_0.24_264)] text-white shadow-sm"
-                    : "text-white/60 hover:bg-white/8 hover:text-white"
-                )}
-              >
-                <Icon className={cn(
-                  "h-4 w-4 shrink-0 transition-transform duration-150 group-hover:scale-110",
-                  active ? "text-white" : "text-white/45 group-hover:text-white"
-                )} />
-                <span>{label}</span>
-                {active && (
-                  <span className="ml-auto h-1.5 w-1.5 rounded-full bg-white/60" />
-                )}
-              </Link>
-            )
-          })}
+        {/* Primary nav */}
+        <nav className="flex-1 overflow-y-auto px-3 pb-4" aria-label="Sections principales">
+          <ul className="space-y-0.5">
+            {PRIMARY.map((item) => (
+              <NavLink key={item.href} item={item} active={isActive(item.href)} onNavigate={close} />
+            ))}
+          </ul>
+
+          <p className="mt-6 px-2 pt-2 pb-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-sidebar-foreground/40">
+            Configuration
+          </p>
+          <ul className="space-y-0.5">
+            {SECONDARY.map((item) => (
+              <NavLink key={item.href} item={item} active={isActive(item.href)} onNavigate={close} />
+            ))}
+          </ul>
         </nav>
 
-        {/* Info footer */}
-        <div className="px-4 pb-2 space-y-2">
-          <div className="rounded-lg bg-white/5 px-3 py-2.5">
-            <p className="text-[10px] text-white/35 uppercase tracking-widest font-semibold mb-0.5">Période</p>
-            <p className="text-xs text-white/70">Jan – Juin 2026</p>
+        {/* Footer info */}
+        <div className="border-t border-sidebar-border px-4 py-3 space-y-2">
+          <div className="rounded-lg bg-white/5 px-3 py-2.5 backdrop-blur-sm ring-1 ring-white/5">
+            <div className="flex items-center justify-between gap-2 mb-1">
+              <p className="text-[10px] text-sidebar-foreground/50 uppercase tracking-widest font-semibold">
+                Modèle actif
+              </p>
+              <Sparkles className="h-3 w-3 text-[color:var(--accent-coral)]" aria-hidden />
+            </div>
+            <p className="text-xs text-white font-semibold truncate">{bestModel}</p>
+            <p className="text-[10px] text-sidebar-foreground/40 mt-0.5">
+              Jan – Juin 2026
+            </p>
           </div>
-          <div className="rounded-lg bg-[oklch(0.48_0.24_264)]/20 border border-[oklch(0.48_0.24_264)]/20 px-3 py-2.5">
-            <p className="text-[10px] text-[oklch(0.70_0.16_264)] uppercase tracking-widest font-semibold mb-0.5">Meilleur modèle</p>
-            <p className="text-xs text-white font-semibold">{bestModel}</p>
-          </div>
-        </div>
 
-        {/* Powered by */}
-        <div className="px-5 py-3 border-t border-white/8">
-          <p className="text-[10px] text-white/25">
-            Powered by <span className="text-white/45 font-semibold">Sia Partners</span>
+          <p className="text-[10px] text-sidebar-foreground/35 px-1">
+            Powered by <span className="text-sidebar-foreground/60 font-semibold">Sia</span>
           </p>
         </div>
       </aside>
     </>
+  )
+}
+
+function NavLink({
+  item,
+  active,
+  onNavigate,
+}: {
+  item: NavItem
+  active: boolean
+  onNavigate: () => void
+}) {
+  const Icon = item.icon
+  return (
+    <li>
+      <Link
+        href={item.href}
+        onClick={onNavigate}
+        aria-current={active ? "page" : undefined}
+        className={cn(
+          "group relative flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-all",
+          active
+            ? "bg-white/8 text-white"
+            : "text-sidebar-foreground/65 hover:bg-white/5 hover:text-white"
+        )}
+      >
+        {active && (
+          <span
+            aria-hidden
+            className="absolute left-0 top-1/2 -translate-y-1/2 h-5 w-0.5 rounded-r-full bg-[color:var(--accent-coral)]"
+          />
+        )}
+        <Icon
+          className={cn(
+            "h-4 w-4 shrink-0 transition-colors",
+            active
+              ? "text-[color:var(--accent-coral)]"
+              : "text-sidebar-foreground/45 group-hover:text-white"
+          )}
+        />
+        <span className="flex-1 truncate">{item.label}</span>
+        {item.hint && (
+          <span className="hidden xl:inline text-[10px] text-sidebar-foreground/30 group-hover:text-sidebar-foreground/60">
+            {item.hint}
+          </span>
+        )}
+      </Link>
+    </li>
   )
 }

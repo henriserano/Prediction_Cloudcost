@@ -102,6 +102,26 @@ class GCPBillingResponse(BaseModel):
     by_service: list[GCPBillingByService]
     by_month: list[GCPBillingByMonth]
     currency: str = Field(default="EUR")
+    source: str = Field(
+        default="unknown",
+        description="Origin of the cost data: 'bigquery_export' (real GCP billing "
+        "export), 'injected_events' (client-uploaded CSV), or 'parquet_fallback' "
+        "(local demo data). Clients should surface this to the user.",
+    )
+    billing_account_id: Optional[str] = Field(
+        default=None,
+        description="GCP billing account ID linked to the project, when resolvable.",
+    )
+
+
+class GCPBillingAccount(BaseModel):
+    """Represents a Cloud Billing account visible to the authenticated user."""
+
+    name: str = Field(description="Resource name, e.g. billingAccounts/XXXXXX-XXXXXX-XXXXXX")
+    account_id: str = Field(description="Bare account ID (last segment of name)")
+    display_name: str = Field(default="")
+    open: bool = Field(default=False, description="Whether the account is open (not closed)")
+    master_billing_account: Optional[str] = Field(default=None)
 
 
 # ---------------------------------------------------------------------------

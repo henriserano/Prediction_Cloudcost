@@ -179,3 +179,73 @@ async def test_events_ingest_empty_list_returns_400():
 
     # The route raises BadRequest when events list is empty
     assert response.status_code == 400
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 4. GCP billing-accounts route (no token → 401)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_gcp_billing_accounts_unauthenticated():
+    """Without an OAuth token, /api/gcp/billing-accounts must return 401."""
+    import httpx
+    from httpx import ASGITransport
+    from main import app
+
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/gcp/billing-accounts")
+
+    assert response.status_code == 401
+    body = response.json()
+    assert body["error"]["code"] == "UNAUTHORIZED"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 5. AWS status route — must never crash, even without credentials
+# ─────────────────────────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_aws_status_returns_200_even_without_credentials(monkeypatch):
+    """GET /api/aws/status must return 200 with authenticated=False when creds are absent."""
+    import httpx
+    from httpx import ASGITransport
+    from main import app
+
+    # Force STS to look unauthenticated regardless of the developer's local
+    # ~/.aws/credentials — otherwise the test asserts against real AWS.
+    from core.errors import AppError
+    import routes.routes_aws as routes_aws
+
+    def _fake_sts(*_args, **_kwargs):
+        raise AppError("no creds", code="UNAUTHORIZED", status_code=401)
+
+    monkeypatch.setattr(routes_aws, "_sts_get_caller_identity", _fake_sts)
+
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/aws/status")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["authenticated"] is False
+    assert body.get("detail")
+
+
+@pytest.mark.asyncio
+async def test_aws_billing_without_credentials_returns_401(monkeypatch):
+    """GET /api/aws/billing must surface 401 when STS rejects the request."""
+    import httpx
+    from httpx import ASGITransport
+    from main import app
+
+    from core.errors import AppError
+    import routes.routes_aws as routes_aws
+
+    def _fake_sts(*_args, **_kwargs):
+        raise AppError("no creds", code="UNAUTHORIZED", status_code=401)
+
+    monkeypatch.setattr(routes_aws, "_sts_get_caller_identity", _fake_sts)
+
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/aws/billing")
+
+    assert response.status_code == 401

@@ -4,42 +4,31 @@ import {
   AreaChart, Area, Line, BarChart, Bar, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from "recharts"
-import { TrendingUp, AlertTriangle, DollarSign, Activity } from "lucide-react"
+import {
+  TrendingUp, AlertTriangle, Wallet, Activity, ShieldCheck,
+} from "lucide-react"
 import PageShell from "@/components/layout/PageShell"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
+import { Skeleton } from "@/components/ui/skeleton"
+import { KpiCard } from "@/components/ui/kpi-card"
+import { SectionCard } from "@/components/ui/section-card"
+import { EmptyState } from "@/components/ui/empty-state"
 import { useKPI, useDaily, useServices, useAnomalies } from "@/lib/hooks/useApi"
 
-const SERVICE_COLORS = [
-  "#1a6cf6", "#0891b2", "#7c3aed", "#059669", "#d97706", "#dc2626", "#64748b", "#0d9488",
+// Sia chart palette — navy, coral, teal, violet, gold, secondary tones
+const CHART_COLORS = [
+  "oklch(0.22 0.055 258)",   // navy
+  "oklch(0.66 0.185 28)",    // coral
+  "oklch(0.60 0.11 195)",    // teal
+  "oklch(0.52 0.19 295)",    // violet
+  "oklch(0.75 0.15 78)",     // gold
+  "oklch(0.62 0.14 155)",    // success green
+  "oklch(0.48 0.02 250)",    // slate
+  "oklch(0.42 0.15 320)",    // magenta
 ]
 
-function KPICard({
-  label, value, sub, icon: Icon, highlight,
-}: {
-  label: string; value: string; sub?: string; icon: React.ElementType; highlight?: boolean
-}) {
-  return (
-    <Card className="relative overflow-hidden">
-      <div className="absolute top-0 left-0 h-0.5 w-full bg-gradient-to-r from-[oklch(0.48_0.24_264)] via-[oklch(0.60_0.18_195)] to-transparent" />
-      <CardHeader>
-        <div className="flex items-center justify-between">
-          <CardDescription className="text-xs font-medium uppercase tracking-wider">{label}</CardDescription>
-          <div className={`flex h-7 w-7 items-center justify-center rounded-lg ${highlight ? "bg-destructive/10" : "bg-primary/8"}`}>
-            <Icon className={`h-3.5 w-3.5 ${highlight ? "text-destructive" : "text-primary"}`} />
-          </div>
-        </div>
-      </CardHeader>
-      <CardContent>
-        <p className="text-2xl font-bold tabular-nums text-foreground">{value}</p>
-        {sub && <p className="text-xs text-muted-foreground mt-1">{sub}</p>}
-      </CardContent>
-    </Card>
-  )
-}
-
-function Skeleton({ className = "" }: { className?: string }) {
-  return <div className={`animate-pulse rounded-xl bg-muted ${className}`} />
-}
+const COLOR_CORAL = "oklch(0.66 0.185 28)"
+const COLOR_MUTED = "oklch(0.65 0.02 250)"
 
 export default function DashboardPage() {
   const { data: kpi, isLoading: kpiLoading } = useKPI()
@@ -48,163 +37,235 @@ export default function DashboardPage() {
   const { data: anomalies, isLoading: anomaliesLoading } = useAnomalies()
 
   const detectedAnomalies = anomalies?.filter((a) => a.isAnomaly) ?? []
+  const trendPct = kpi ? ((kpi.trendSlope / Math.max(kpi.dailyAvg, 1)) * 100) : 0
 
   return (
     <PageShell
+      eyebrow="Executive dashboard"
       title="Vue d'ensemble"
-      description={kpi ? `Coûts GCP · ${kpi.periodStart} – ${kpi.periodEnd} · ${kpi.dataPoints} jours` : "Coûts GCP · chargement…"}
+      description={
+        kpi
+          ? `Consommation cloud du ${kpi.periodStart} au ${kpi.periodEnd} · ${kpi.dataPoints} points de mesure`
+          : "Chargement des indicateurs FinOps…"
+      }
     >
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-4">
-        {(kpiLoading || !kpi) ? (
-          Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-28" />)
-        ) : (
-          <>
-            <KPICard
-              label="Dépense totale"
-              value={`${kpi.totalSpend.toLocaleString("fr-FR", { minimumFractionDigits: 0 })} €`}
-              sub="Période complète"
-              icon={DollarSign}
-            />
-            <KPICard
-              label="Moyenne quotidienne"
-              value={`${kpi.dailyAvg.toFixed(2)} €/j`}
-              sub={`Tendance ${kpi.trendSlope >= 0 ? "+" : ""}${kpi.trendSlope.toFixed(4)} €/j`}
-              icon={TrendingUp}
-            />
-            <KPICard
-              label="Prévision 30 j"
-              value={`${kpi.forecastNext30.toFixed(0)} €`}
-              sub="Moyenne 14 derniers jours × 30"
-              icon={Activity}
-            />
-            <KPICard
-              label="Anomalies"
-              value={`${kpi.anomalyCount} jours`}
-              sub="Z-score > 2"
-              icon={AlertTriangle}
-              highlight
-            />
-          </>
-        )}
-      </div>
+      {/* KPI grid */}
+      <section aria-labelledby="kpi-heading" className="space-y-3">
+        <h2 id="kpi-heading" className="sr-only">Indicateurs clés</h2>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-4">
+          {(kpiLoading || !kpi) ? (
+            Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-28" />)
+          ) : (
+            <>
+              <KpiCard
+                label="Dépense totale"
+                value={`${kpi.totalSpend.toLocaleString("fr-FR", { maximumFractionDigits: 0 })} €`}
+                sub="Sur la période analysée"
+                icon={Wallet}
+                tone="default"
+              />
+              <KpiCard
+                label="Moyenne quotidienne"
+                value={`${kpi.dailyAvg.toFixed(0)} €`}
+                sub="par jour"
+                icon={TrendingUp}
+                tone="coral"
+                delta={{ value: Number(trendPct.toFixed(1)), suffix: "%" }}
+              />
+              <KpiCard
+                label="Prévision 30 j"
+                value={`${(kpi.forecastNext30 / 1000).toFixed(1)}k €`}
+                sub="Modèle champion · 14 j lissés"
+                icon={Activity}
+                tone="success"
+              />
+              <KpiCard
+                label="Anomalies détectées"
+                value={kpi.anomalyCount}
+                sub={kpi.anomalyCount === 0 ? "Aucune alerte" : "Z-score > 2"}
+                icon={kpi.anomalyCount === 0 ? ShieldCheck : AlertTriangle}
+                tone={kpi.anomalyCount === 0 ? "success" : "destructive"}
+              />
+            </>
+          )}
+        </div>
+      </section>
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        <Card className="lg:col-span-2">
-          <CardHeader>
-            <CardTitle>Tendance quotidienne</CardTitle>
-            <CardDescription>Coût brut + MA 7 jours + IC 95%</CardDescription>
-          </CardHeader>
-          <CardContent>
-            {(dailyLoading || !daily) ? (
-              <Skeleton className="h-[240px] lg:h-[280px]" />
-            ) : (
-              <ResponsiveContainer width="100%" height={260}>
-                <AreaChart data={daily} margin={{ left: -20, right: 8 }}>
-                  <defs>
-                    <linearGradient id="ciGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#1a6cf6" stopOpacity={0.12} />
-                      <stop offset="95%" stopColor="#1a6cf6" stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
-                  <XAxis dataKey="date" tickFormatter={(v) => v.slice(5)} tick={{ fontSize: 10 }} tickLine={false} interval={9} />
-                  <YAxis tick={{ fontSize: 10 }} tickLine={false} unit=" €" width={56} />
-                  <Tooltip formatter={(v: unknown, n: string) => { const x = v as number; return [`${x.toFixed(2)} €`, n] }} labelFormatter={(l) => `Date : ${l}`} />
-                  <Area type="monotone" dataKey="ciHigh" stroke="none" fill="url(#ciGrad)" isAnimationActive={false} />
-                  <Area type="monotone" dataKey="ciLow" stroke="none" fill="white" isAnimationActive={false} />
-                  <Line type="monotone" dataKey="cost" stroke="#94a3b8" strokeWidth={1.5} dot={false} name="Coût" />
-                  <Line type="monotone" dataKey="ma7" stroke="#1a6cf6" strokeWidth={2} dot={false} name="MA7" />
-                </AreaChart>
-              </ResponsiveContainer>
-            )}
-          </CardContent>
-        </Card>
+      {/* Main chart + service split */}
+      <section aria-labelledby="trend-heading" className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+        <h2 id="trend-heading" className="sr-only">Tendance et répartition</h2>
 
-        <Card>
-          <CardHeader>
-            <CardTitle>Répartition services</CardTitle>
-            <CardDescription>Part de dépense totale</CardDescription>
-          </CardHeader>
-          <CardContent>
-            {(servicesLoading || !services) ? (
-              <Skeleton className="h-[180px]" />
-            ) : (
-              <div className="space-y-2 mt-1">
-                {services.slice(0, 6).map((s, i) => (
-                  <div key={s.service} className="space-y-1">
-                    <div className="flex justify-between text-xs">
-                      <span className="truncate max-w-[130px] text-muted-foreground">{s.service}</span>
-                      <span className="tabular-nums font-semibold text-foreground">{s.pct.toFixed(1)}%</span>
-                    </div>
-                    <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
-                      <div className="h-full rounded-full transition-all duration-500" style={{ width: `${s.pct}%`, backgroundColor: SERVICE_COLORS[i] }} />
-                    </div>
+        <SectionCard
+          title="Tendance quotidienne"
+          description="Coût brut, MA 7 jours, intervalle de confiance 95%"
+          className="lg:col-span-2"
+        >
+          {(dailyLoading || !daily) ? (
+            <Skeleton className="h-[260px] lg:h-[300px]" />
+          ) : (
+            <ResponsiveContainer width="100%" height={280}>
+              <AreaChart data={daily} margin={{ left: -18, right: 8, top: 8 }}>
+                <defs>
+                  <linearGradient id="ciGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor={COLOR_CORAL} stopOpacity={0.20} />
+                    <stop offset="95%" stopColor={COLOR_CORAL} stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="oklch(0 0 0 / 0.06)" />
+                <XAxis dataKey="date" tickFormatter={(v) => v.slice(5)} tick={{ fontSize: 10, fill: COLOR_MUTED }} tickLine={false} axisLine={false} interval={9} />
+                <YAxis tick={{ fontSize: 10, fill: COLOR_MUTED }} tickLine={false} axisLine={false} unit=" €" width={56} />
+                <Tooltip
+                  cursor={{ stroke: COLOR_CORAL, strokeWidth: 1, strokeDasharray: "3 3" }}
+                  contentStyle={{
+                    borderRadius: 10,
+                    border: "1px solid oklch(0.90 0.010 250)",
+                    fontSize: 12,
+                    boxShadow: "0 4px 12px oklch(0 0 0 / 0.06)",
+                  }}
+                  formatter={(v: unknown, n: string) => {
+                    const x = v as number
+                    return [`${x.toFixed(2)} €`, n]
+                  }}
+                  labelFormatter={(l) => `Date · ${l}`}
+                />
+                <Area type="monotone" dataKey="ciHigh" stroke="none" fill="url(#ciGrad)" isAnimationActive={false} />
+                <Area type="monotone" dataKey="ciLow" stroke="none" fill="white" isAnimationActive={false} />
+                <Line type="monotone" dataKey="cost" stroke={COLOR_MUTED} strokeWidth={1.5} dot={false} name="Coût" />
+                <Line type="monotone" dataKey="ma7" stroke={COLOR_CORAL} strokeWidth={2.5} dot={false} name="MA 7 j" />
+              </AreaChart>
+            </ResponsiveContainer>
+          )}
+        </SectionCard>
+
+        <SectionCard
+          title="Répartition services"
+          description="Part de la dépense totale"
+          accent="coral"
+        >
+          {(servicesLoading || !services) ? (
+            <Skeleton className="h-[220px]" />
+          ) : (
+            <ul className="space-y-3 mt-1">
+              {services.slice(0, 6).map((s, i) => (
+                <li key={s.service} className="space-y-1.5">
+                  <div className="flex justify-between items-baseline text-xs">
+                    <span className="truncate max-w-[150px] text-foreground/80 font-medium">{s.service}</span>
+                    <span className="tabular-nums font-semibold text-foreground">
+                      {s.pct.toFixed(1)}%
+                    </span>
                   </div>
-                ))}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      </div>
+                  <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
+                    <div
+                      className="h-full rounded-full transition-all duration-700 ease-out"
+                      style={{ width: `${s.pct}%`, backgroundColor: CHART_COLORS[i] }}
+                    />
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </SectionCard>
+      </section>
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <Card>
+      {/* Anomalies + volatility */}
+      <section aria-labelledby="risk-heading" className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <h2 id="risk-heading" className="sr-only">Risque et volatilité</h2>
+
+        <Card className="relative overflow-hidden">
+          <span
+            aria-hidden
+            className="absolute inset-x-0 top-0 h-0.5 bg-gradient-to-r from-destructive/60 to-transparent"
+          />
           <CardHeader>
-            <CardTitle>Anomalies détectées</CardTitle>
-            <CardDescription>Jours avec Z-score &gt; 2 ({detectedAnomalies.length} sur la période)</CardDescription>
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <CardTitle className="text-sm">Anomalies détectées</CardTitle>
+                <CardDescription className="text-xs mt-0.5">
+                  Jours avec écart {">"} 2σ par rapport à la moyenne
+                </CardDescription>
+              </div>
+              {!anomaliesLoading && (
+                <span className="rounded-full bg-destructive/10 px-2.5 py-1 text-[11px] font-semibold text-destructive tabular-nums">
+                  {detectedAnomalies.length}
+                </span>
+              )}
+            </div>
           </CardHeader>
           <CardContent>
             {(anomaliesLoading || !anomalies) ? (
-              <Skeleton className="h-[100px]" />
+              <Skeleton className="h-[140px]" />
             ) : detectedAnomalies.length === 0 ? (
-              <div className="flex items-center gap-2 rounded-lg bg-green-50 px-4 py-3 text-sm text-green-700">
-                <span className="font-medium">Aucune anomalie détectée</span>
-              </div>
+              <EmptyState
+                icon={ShieldCheck}
+                title="Aucune anomalie détectée"
+                description="Les coûts restent dans la bande de confiance ±2σ."
+              />
             ) : (
-              <div className="space-y-2 max-h-[200px] overflow-y-auto pr-1">
+              <ul className="space-y-2 max-h-[240px] overflow-y-auto pr-1">
                 {detectedAnomalies.map((a) => (
-                  <div key={a.date} className="flex items-center justify-between rounded-lg bg-destructive/8 border border-destructive/15 px-3 py-2 text-sm">
-                    <div className="flex items-center gap-2">
-                      <AlertTriangle className="h-3.5 w-3.5 text-destructive shrink-0" />
-                      <span className="font-medium text-xs">{a.date}</span>
+                  <li
+                    key={a.date}
+                    className="flex items-center justify-between rounded-lg border border-destructive/15 bg-destructive/6 px-3 py-2 text-sm transition-colors hover:bg-destructive/10"
+                  >
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <span
+                        aria-hidden
+                        className="flex h-6 w-6 items-center justify-center rounded-md bg-destructive/12"
+                      >
+                        <AlertTriangle className="h-3 w-3 text-destructive" />
+                      </span>
+                      <span className="font-medium text-xs tabular-nums">{a.date}</span>
                     </div>
-                    <div className="text-right tabular-nums text-xs">
-                      <span className="font-bold">{a.cost.toFixed(0)} €</span>
-                      <span className="ml-2 text-muted-foreground">Z={a.zscore.toFixed(1)}</span>
+                    <div className="flex items-baseline gap-2.5 tabular-nums text-xs shrink-0">
+                      <span className="font-bold text-foreground">
+                        {a.cost.toFixed(0)} €
+                      </span>
+                      <span className="text-destructive/80 text-[11px]">
+                        Z = {a.zscore.toFixed(1)}
+                      </span>
                     </div>
-                  </div>
+                  </li>
                 ))}
-              </div>
+              </ul>
             )}
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader>
-            <CardTitle>Volatilité par service</CardTitle>
-            <CardDescription>Coefficient de variation (%)</CardDescription>
-          </CardHeader>
-          <CardContent>
-            {(servicesLoading || !services) ? (
-              <Skeleton className="h-[180px]" />
-            ) : (
-              <ResponsiveContainer width="100%" height={180}>
-                <BarChart data={services.slice(0, 6)} layout="vertical" margin={{ left: 4, right: 16 }}>
-                  <CartesianGrid strokeDasharray="3 3" horizontal={false} className="stroke-border" />
-                  <XAxis type="number" tick={{ fontSize: 10 }} tickLine={false} unit="%" />
-                  <YAxis type="category" dataKey="service" tick={{ fontSize: 9 }} tickLine={false} width={75} />
-                  <Tooltip formatter={(v: unknown) => { const x = v as number; return [`${x.toFixed(1)}%`, "CV"] }} />
-                  <Bar dataKey="cv" radius={[0, 4, 4, 0]}>
-                    {services.slice(0, 6).map((_, i) => (
-                      <Cell key={i} fill={SERVICE_COLORS[i]} />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            )}
-          </CardContent>
-        </Card>
-      </div>
+        <SectionCard
+          title="Volatilité par service"
+          description="Coefficient de variation (%) — plus élevé = plus imprévisible"
+          accent="coral"
+        >
+          {(servicesLoading || !services) ? (
+            <Skeleton className="h-[200px]" />
+          ) : (
+            <ResponsiveContainer width="100%" height={200}>
+              <BarChart data={services.slice(0, 6)} layout="vertical" margin={{ left: 4, right: 20 }}>
+                <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="oklch(0 0 0 / 0.06)" />
+                <XAxis type="number" tick={{ fontSize: 10, fill: COLOR_MUTED }} tickLine={false} axisLine={false} unit="%" />
+                <YAxis type="category" dataKey="service" tick={{ fontSize: 10, fill: COLOR_MUTED }} tickLine={false} axisLine={false} width={90} />
+                <Tooltip
+                  cursor={{ fill: "oklch(0 0 0 / 0.03)" }}
+                  contentStyle={{
+                    borderRadius: 10,
+                    border: "1px solid oklch(0.90 0.010 250)",
+                    fontSize: 12,
+                  }}
+                  formatter={(v: unknown) => {
+                    const x = v as number
+                    return [`${x.toFixed(1)}%`, "Coef. variation"]
+                  }}
+                />
+                <Bar dataKey="cv" radius={[0, 5, 5, 0]}>
+                  {services.slice(0, 6).map((_, i) => (
+                    <Cell key={i} fill={CHART_COLORS[i]} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          )}
+        </SectionCard>
+      </section>
     </PageShell>
   )
 }

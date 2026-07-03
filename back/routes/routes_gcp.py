@@ -15,6 +15,7 @@ from core.errors import AppError, BadRequest
 from core.logging import get_logger
 from schemas.gcp import (
     GCPAuthStatus,
+    GCPBillingAccount,
     GCPBillingByMonth,
     GCPBillingByService,
     GCPBillingResponse,
@@ -23,6 +24,7 @@ from schemas.gcp import (
     GCPService,
     DateRange,
 )
+from core.config import get_settings
 
 logger = get_logger(__name__)
 
@@ -94,6 +96,9 @@ _SCOPES = [
     "https://www.googleapis.com/auth/cloud-billing.readonly",
     "https://www.googleapis.com/auth/logging.read",
     "https://www.googleapis.com/auth/cloudplatformprojects.readonly",
+    # Required by the Service Usage API (services.list). Without this scope
+    # the OAuth token is rejected with 403 even if the user is Owner.
+    "https://www.googleapis.com/auth/cloud-platform.read-only",
     "https://www.googleapis.com/auth/userinfo.email",
     "openid",
 ]
@@ -121,6 +126,52 @@ def _build_auth_headers(token: dict) -> dict[str, str]:
     return {"Authorization": f"Bearer {access_token}"}
 
 
+def _raise_gcp_upstream_error(exc: httpx.HTTPStatusError, api_name: str, project_id: Optional[str] = None) -> None:
+    """Map a GCP HTTPStatusError onto the closest matching AppError.
+
+    Preserves 401/403 so the client can act on them (re-auth vs. enable
+    API / grant IAM role). Other upstream codes are surfaced as 502.
+    """
+    status = exc.response.status_code
+    if status == 401:
+        raise AppError("GCP token expired or invalid.", code="UNAUTHORIZED", status_code=401)
+
+    # Extract the upstream error message when Google returned JSON — it usually
+    # tells us exactly which permission is missing or which API is disabled.
+    upstream_detail: Optional[str] = None
+    try:
+        body = exc.response.json()
+        upstream_detail = body.get("error", {}).get("message")
+    except Exception:
+        upstream_detail = None
+
+    if status == 403:
+        hint = (
+            f"{api_name} returned 403. Common causes: (1) the API is not "
+            f"enabled on the project — enable it at "
+            f"https://console.cloud.google.com/apis/library ; "
+            f"(2) the signed-in user lacks the required IAM role."
+        )
+        raise AppError(
+            hint,
+            code="FORBIDDEN",
+            status_code=403,
+            details={
+                "upstream_status": 403,
+                "upstream_message": upstream_detail,
+                "project_id": project_id,
+                "api": api_name,
+            },
+        )
+
+    raise AppError(
+        f"{api_name} error: {status}",
+        code="GCP_API_ERROR",
+        status_code=502,
+        details={"upstream_status": status, "upstream_message": upstream_detail},
+    )
+
+
 # ---------------------------------------------------------------------------
 # OAuth2 routes
 # ---------------------------------------------------------------------------
@@ -129,12 +180,16 @@ def _build_auth_headers(token: dict) -> dict[str, str]:
 def gcp_auth() -> RedirectResponse:
     _cleanup_expired_states()
 
-    client_id = _get_env("GOOGLE_CLIENT_ID")
-    redirect_uri = _get_env("GOOGLE_REDIRECT_URI", "http://localhost:8080/api/gcp/callback")
+    settings = get_settings()
+    client_id = settings.google_client_id or _get_env("GOOGLE_CLIENT_ID")
+    redirect_uri = settings.google_redirect_uri or _get_env(
+        "GOOGLE_REDIRECT_URI", "http://localhost:8080/api/gcp/callback"
+    )
 
     if not client_id:
         raise AppError(
-            "GOOGLE_CLIENT_ID not configured.",
+            "GOOGLE_CLIENT_ID not configured. Set it in back/.env or export it "
+            "before starting uvicorn.",
             code="CONFIGURATION_ERROR",
             status_code=500,
         )
@@ -162,7 +217,8 @@ def gcp_callback(
     state: Annotated[Optional[str], Query()] = None,
     error: Annotated[Optional[str], Query()] = None,
 ) -> RedirectResponse:
-    frontend_url = _get_env("FRONTEND_URL", "http://localhost:3000")
+    settings = get_settings()
+    frontend_url = settings.frontend_url or _get_env("FRONTEND_URL", "http://localhost:3000")
 
     if error:
         # Allowlist permitted OAuth error codes to prevent log injection and
@@ -188,9 +244,11 @@ def gcp_callback(
 
     _oauth_states.pop(state, None)
 
-    client_id = _get_env("GOOGLE_CLIENT_ID")
-    client_secret = _get_env("GOOGLE_CLIENT_SECRET")
-    redirect_uri = _get_env("GOOGLE_REDIRECT_URI", "http://localhost:8080/api/gcp/callback")
+    client_id = settings.google_client_id or _get_env("GOOGLE_CLIENT_ID")
+    client_secret = settings.google_client_secret or _get_env("GOOGLE_CLIENT_SECRET")
+    redirect_uri = settings.google_redirect_uri or _get_env(
+        "GOOGLE_REDIRECT_URI", "http://localhost:8080/api/gcp/callback"
+    )
 
     try:
         resp = httpx.post(
@@ -271,14 +329,7 @@ def gcp_projects() -> List[GCPProject]:
         resp.raise_for_status()
         data = resp.json()
     except httpx.HTTPStatusError as exc:
-        if exc.response.status_code == 401:
-            raise AppError("GCP token expired or invalid.", code="UNAUTHORIZED", status_code=401)
-        raise AppError(
-            f"Resource Manager API error: {exc.response.status_code}",
-            code="GCP_API_ERROR",
-            status_code=502,
-            details={"upstream_status": exc.response.status_code},
-        )
+        _raise_gcp_upstream_error(exc, api_name="Resource Manager API")
     except Exception as exc:
         logger.error("gcp_projects_error", extra={"error": repr(exc)})
         raise AppError("Upstream connectivity error.", code="GCP_API_ERROR", status_code=502)
@@ -299,136 +350,170 @@ def gcp_projects() -> List[GCPProject]:
 # GCP Cloud Billing — billing info + cost breakdown
 # ---------------------------------------------------------------------------
 
-@router.get("/billing", response_model=GCPBillingResponse, summary="Get billing data for a project")
-def gcp_billing(
-    project_id: Annotated[str, Query(description="GCP project ID")],
-    months: Annotated[int, Query(ge=1, le=24, description="Number of months to look back")] = 6,
-) -> GCPBillingResponse:
-    _validate_project_id(project_id)
-    token = _get_credentials()
-    headers = _build_auth_headers(token)
+def _fetch_billing_account_id(project_id: str, headers: dict[str, str]) -> Optional[str]:
+    """Return the billing account ID linked to a project, or None on failure.
 
-    # Fetch billing info for the project to get the linked billing account
-    billing_account_id: Optional[str] = None
+    Raises AppError(401) if the OAuth token is rejected — auth errors must not
+    be silently swallowed as "no billing account".
+    """
     try:
-        billing_info_resp = httpx.get(
+        resp = httpx.get(
             f"https://cloudbilling.googleapis.com/v1/projects/{project_id}/billingInfo",
             headers=headers,
             timeout=15,
         )
-        billing_info_resp.raise_for_status()
-        billing_info = billing_info_resp.json()
-        billing_account_name = billing_info.get("billingAccountName", "")
-        # format: billingAccounts/XXXXXX-XXXXXX-XXXXXX
+        resp.raise_for_status()
+        billing_account_name = resp.json().get("billingAccountName", "")
         if billing_account_name:
-            billing_account_id = billing_account_name.split("/")[-1]
+            return billing_account_name.split("/")[-1]
+        return None
     except httpx.HTTPStatusError as exc:
         if exc.response.status_code == 401:
             raise AppError("GCP token expired or invalid.", code="UNAUTHORIZED", status_code=401)
-        # If billing info is unavailable, fall back to injected events data
-        billing_account_id = None
-    except Exception:
-        billing_account_id = None
+        logger.warning(
+            "gcp_billing_info_upstream_error",
+            extra={"upstream_status": exc.response.status_code, "project_id": project_id},
+        )
+        return None
+    except Exception as exc:
+        logger.warning("gcp_billing_info_error", extra={"error": repr(exc), "project_id": project_id})
+        return None
 
-    # Try to get cost data from injected events first (available without BigQuery)
+
+def _query_bigquery_billing_export(
+    project_id: str, months: int
+) -> Optional[GCPBillingResponse]:
+    """Query the GCP Billing BigQuery Export for real cost data.
+
+    Returns None when the export is not configured or the BigQuery client
+    library is unavailable — the caller is expected to fall back.
+    Only returns a GCPBillingResponse when real GCP data was retrieved.
+    """
+    settings = get_settings()
+    bq_project = settings.gcp_billing_export_project
+    bq_dataset = settings.gcp_billing_export_dataset
+    bq_table = settings.gcp_billing_export_table
+    if not (bq_project and bq_dataset and bq_table):
+        return None
+
+    try:
+        from google.cloud import bigquery  # type: ignore
+    except Exception:
+        logger.info("bigquery_library_unavailable — install google-cloud-bigquery to enable real billing export queries")
+        return None
+
+    try:
+        client = bigquery.Client(project=bq_project)
+        table_fqn = f"`{bq_project}.{bq_dataset}.{bq_table}`"
+
+        query = f"""
+            SELECT
+              DATE(usage_start_time) AS day,
+              service.description AS service,
+              SUM(cost) AS cost,
+              currency
+            FROM {table_fqn}
+            WHERE project.id = @project_id
+              AND usage_start_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @months MONTH)
+            GROUP BY day, service, currency
+            ORDER BY day
+        """
+        job = client.query(
+            query,
+            job_config=bigquery.QueryJobConfig(
+                query_parameters=[
+                    bigquery.ScalarQueryParameter("project_id", "STRING", project_id),
+                    bigquery.ScalarQueryParameter("months", "INT64", months),
+                ]
+            ),
+        )
+        import pandas as pd
+
+        rows = [dict(r) for r in job.result()]
+        if not rows:
+            return None
+
+        df = pd.DataFrame(rows)
+        df["day"] = pd.to_datetime(df["day"])
+        df["cost"] = df["cost"].astype(float)
+        currency = df["currency"].dropna().iloc[0] if "currency" in df.columns and not df["currency"].dropna().empty else "EUR"
+
+        total = float(df["cost"].sum())
+        period_start = df["day"].min().strftime("%Y-%m-%d")
+        period_end = df["day"].max().strftime("%Y-%m-%d")
+
+        svc_agg = df.groupby("service")["cost"].sum().sort_values(ascending=False)
+        by_service = [
+            GCPBillingByService(
+                service=str(svc),
+                cost=round(float(cost), 2),
+                pct=round(float(cost) / total * 100, 2) if total > 0 else 0.0,
+            )
+            for svc, cost in svc_agg.items()
+        ]
+
+        df["month"] = df["day"].dt.to_period("M").astype(str)
+        month_agg = df.groupby("month")["cost"].sum().sort_index()
+        by_month = [
+            GCPBillingByMonth(month=m, cost=round(float(c), 2))
+            for m, c in month_agg.items()
+        ]
+
+        return GCPBillingResponse(
+            project_id=project_id,
+            period=DateRange(start=period_start, end=period_end),
+            total=round(total, 2),
+            by_service=by_service,
+            by_month=by_month,
+            currency=currency,
+            source="bigquery_export",
+        )
+    except Exception as exc:
+        logger.error("bigquery_billing_export_query_failed", extra={"error": repr(exc)})
+        return None
+
+
+def _billing_from_injected_events(project_id: str, months: int) -> Optional[GCPBillingResponse]:
+    """Build a billing response from client-injected events, or None if empty."""
     try:
         from routes.routes_events import get_injected_events_df
         import pandas as pd
-        from datetime import datetime, timedelta
 
         events_df = get_injected_events_df()
-        use_injected = len(events_df) > 0
-
-        if use_injected:
-            cutoff = pd.Timestamp.now() - pd.DateOffset(months=months)
-            filtered = events_df[events_df["ds"] >= cutoff].copy()
-
-            if len(filtered) == 0:
-                filtered = events_df.copy()
-
-            total = float(filtered["Sous-total (€)"].sum())
-            period_start = filtered["ds"].min().strftime("%Y-%m-%d")
-            period_end = filtered["ds"].max().strftime("%Y-%m-%d")
-
-            # by_service
-            if "service" in filtered.columns:
-                svc_agg = (
-                    filtered.groupby("service")["Sous-total (€)"]
-                    .sum()
-                    .sort_values(ascending=False)
-                )
-                by_service = [
-                    GCPBillingByService(
-                        service=svc,
-                        cost=round(float(cost), 2),
-                        pct=round(float(cost) / total * 100, 2) if total > 0 else 0.0,
-                    )
-                    for svc, cost in svc_agg.items()
-                ]
-            else:
-                by_service = []
-
-            # by_month
-            filtered["month"] = filtered["ds"].dt.to_period("M").astype(str)
-            month_agg = (
-                filtered.groupby("month")["Sous-total (€)"]
-                .sum()
-                .sort_index()
-            )
-            by_month = [
-                GCPBillingByMonth(month=m, cost=round(float(c), 2))
-                for m, c in month_agg.items()
-            ]
-
-            return GCPBillingResponse(
-                project_id=project_id,
-                period=DateRange(start=period_start, end=period_end),
-                total=round(total, 2),
-                by_service=by_service,
-                by_month=by_month,
-                currency="EUR",
-            )
-    except Exception:
-        pass
-
-    # Fall back to parquet data loaded by the app
-    try:
-        from data.loader import load_daily_costs, load_daily_per_service
-        import pandas as pd
-
-        daily_df = load_daily_costs()
-        per_svc_df = load_daily_per_service()
+        if len(events_df) == 0:
+            return None
 
         cutoff = pd.Timestamp.now() - pd.DateOffset(months=months)
-        d_filtered = daily_df[daily_df["ds"] >= cutoff].copy()
+        filtered = events_df[events_df["ds"] >= cutoff].copy()
+        if len(filtered) == 0:
+            filtered = events_df.copy()
 
-        if len(d_filtered) == 0:
-            d_filtered = daily_df.copy()
+        total = float(filtered["Sous-total (€)"].sum())
+        period_start = filtered["ds"].min().strftime("%Y-%m-%d")
+        period_end = filtered["ds"].max().strftime("%Y-%m-%d")
 
-        total = float(d_filtered["y"].sum()) if "y" in d_filtered.columns else 0.0
-        period_start = d_filtered["ds"].min().strftime("%Y-%m-%d")
-        period_end = d_filtered["ds"].max().strftime("%Y-%m-%d")
+        if "service" in filtered.columns:
+            svc_agg = (
+                filtered.groupby("service")["Sous-total (€)"]
+                .sum()
+                .sort_values(ascending=False)
+            )
+            by_service = [
+                GCPBillingByService(
+                    service=svc,
+                    cost=round(float(cost), 2),
+                    pct=round(float(cost) / total * 100, 2) if total > 0 else 0.0,
+                )
+                for svc, cost in svc_agg.items()
+            ]
+        else:
+            by_service = []
 
-        # by_month from daily_costs
-        d_filtered["month"] = d_filtered["ds"].dt.to_period("M").astype(str)
-        month_agg = d_filtered.groupby("month")["y"].sum().sort_index() if "y" in d_filtered.columns else {}
+        filtered["month"] = filtered["ds"].dt.to_period("M").astype(str)
+        month_agg = filtered.groupby("month")["Sous-total (€)"].sum().sort_index()
         by_month = [
             GCPBillingByMonth(month=m, cost=round(float(c), 2))
-            for m, c in (month_agg.items() if hasattr(month_agg, "items") else [])
-        ]
-
-        # by_service from per_service (columns are service names)
-        svc_cols = [c for c in per_svc_df.columns if c != "ds"]
-        ps_filtered = per_svc_df[per_svc_df["ds"] >= cutoff].copy() if len(per_svc_df) > 0 else per_svc_df.copy()
-        svc_totals = {svc: float(ps_filtered[svc].sum()) for svc in svc_cols if svc in ps_filtered.columns}
-        sorted_svc = sorted(svc_totals.items(), key=lambda x: x[1], reverse=True)
-        by_service = [
-            GCPBillingByService(
-                service=svc,
-                cost=round(cost, 2),
-                pct=round(cost / total * 100, 2) if total > 0 else 0.0,
-            )
-            for svc, cost in sorted_svc
+            for m, c in month_agg.items()
         ]
 
         return GCPBillingResponse(
@@ -438,7 +523,156 @@ def gcp_billing(
             by_service=by_service,
             by_month=by_month,
             currency="EUR",
+            source="injected_events",
         )
+    except Exception as exc:
+        logger.warning("injected_events_read_failed", extra={"error": repr(exc)})
+        return None
+
+
+def _billing_from_parquet(project_id: str, months: int) -> GCPBillingResponse:
+    """Last-resort fallback using bundled parquet demo data."""
+    from data.loader import load_daily_costs, load_daily_per_service
+    import pandas as pd
+
+    daily_df = load_daily_costs()
+    per_svc_df = load_daily_per_service()
+
+    cutoff = pd.Timestamp.now() - pd.DateOffset(months=months)
+    d_filtered = daily_df[daily_df["ds"] >= cutoff].copy() if len(daily_df) > 0 else daily_df.copy()
+
+    if len(d_filtered) == 0:
+        d_filtered = daily_df.copy()
+
+    total = float(d_filtered["y"].sum()) if "y" in d_filtered.columns and len(d_filtered) > 0 else 0.0
+    if len(d_filtered) > 0:
+        period_start = d_filtered["ds"].min().strftime("%Y-%m-%d")
+        period_end = d_filtered["ds"].max().strftime("%Y-%m-%d")
+    else:
+        period_start = period_end = ""
+
+    if len(d_filtered) > 0 and "y" in d_filtered.columns:
+        d_filtered["month"] = d_filtered["ds"].dt.to_period("M").astype(str)
+        month_agg = d_filtered.groupby("month")["y"].sum().sort_index()
+        by_month = [
+            GCPBillingByMonth(month=m, cost=round(float(c), 2))
+            for m, c in month_agg.items()
+        ]
+    else:
+        by_month = []
+
+    svc_cols = [c for c in per_svc_df.columns if c != "ds"]
+    ps_filtered = per_svc_df[per_svc_df["ds"] >= cutoff].copy() if len(per_svc_df) > 0 else per_svc_df.copy()
+    svc_totals = {svc: float(ps_filtered[svc].sum()) for svc in svc_cols if svc in ps_filtered.columns}
+    sorted_svc = sorted(svc_totals.items(), key=lambda x: x[1], reverse=True)
+    by_service = [
+        GCPBillingByService(
+            service=svc,
+            cost=round(cost, 2),
+            pct=round(cost / total * 100, 2) if total > 0 else 0.0,
+        )
+        for svc, cost in sorted_svc
+    ]
+
+    return GCPBillingResponse(
+        project_id=project_id,
+        period=DateRange(start=period_start, end=period_end),
+        total=round(total, 2),
+        by_service=by_service,
+        by_month=by_month,
+        currency="EUR",
+        source="parquet_fallback",
+    )
+
+
+@router.get(
+    "/billing-accounts",
+    response_model=List[GCPBillingAccount],
+    summary="List Cloud Billing accounts accessible with the current OAuth token",
+)
+def gcp_billing_accounts() -> List[GCPBillingAccount]:
+    """Verify the OAuth token can read Cloud Billing by listing accounts.
+
+    This is the fastest way to confirm the ``cloud-billing.readonly`` scope was
+    granted and that the token still resolves against the Cloud Billing API.
+    """
+    token = _get_credentials()
+    headers = _build_auth_headers(token)
+
+    accounts: List[GCPBillingAccount] = []
+    page_token: Optional[str] = None
+    for _ in range(10):
+        params: dict = {"pageSize": 200}
+        if page_token:
+            params["pageToken"] = page_token
+        try:
+            resp = httpx.get(
+                "https://cloudbilling.googleapis.com/v1/billingAccounts",
+                headers=headers,
+                params=params,
+                timeout=15,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        except httpx.HTTPStatusError as exc:
+            _raise_gcp_upstream_error(exc, api_name="Cloud Billing API")
+        except Exception as exc:
+            logger.error("gcp_billing_accounts_error", extra={"error": repr(exc)})
+            raise AppError("Upstream connectivity error.", code="GCP_API_ERROR", status_code=502)
+
+        for acc in data.get("billingAccounts", []):
+            name = acc.get("name", "")
+            accounts.append(
+                GCPBillingAccount(
+                    name=name,
+                    account_id=name.split("/")[-1] if name else "",
+                    display_name=acc.get("displayName", ""),
+                    open=bool(acc.get("open", False)),
+                    master_billing_account=acc.get("masterBillingAccount") or None,
+                )
+            )
+        page_token = data.get("nextPageToken")
+        if not page_token:
+            break
+
+    return accounts
+
+
+@router.get("/billing", response_model=GCPBillingResponse, summary="Get billing data for a project")
+def gcp_billing(
+    project_id: Annotated[str, Query(description="GCP project ID")],
+    months: Annotated[int, Query(ge=1, le=24, description="Number of months to look back")] = 6,
+) -> GCPBillingResponse:
+    """Return cost data for a project.
+
+    Data source resolution order:
+      1. BigQuery Billing Export (real GCP data) when configured.
+      2. Client-injected events (via POST /api/events).
+      3. Bundled parquet demo data.
+
+    The response ``source`` field always reports which branch produced the
+    numbers so the frontend can label the origin.
+    """
+    _validate_project_id(project_id)
+    token = _get_credentials()
+    headers = _build_auth_headers(token)
+
+    billing_account_id = _fetch_billing_account_id(project_id, headers)
+
+    bq_response = _query_bigquery_billing_export(project_id, months)
+    if bq_response is not None:
+        bq_response.billing_account_id = billing_account_id
+        return bq_response
+
+    injected_response = _billing_from_injected_events(project_id, months)
+    if injected_response is not None:
+        injected_response.billing_account_id = billing_account_id
+        return injected_response
+
+    try:
+        fallback = _billing_from_parquet(project_id, months)
+        fallback.billing_account_id = billing_account_id
+        return fallback
     except Exception as exc:
         logger.error("gcp_billing_error", extra={"error": repr(exc)})
         raise AppError(
@@ -496,14 +730,7 @@ def gcp_logs(
         resp.raise_for_status()
         data = resp.json()
     except httpx.HTTPStatusError as exc:
-        if exc.response.status_code == 401:
-            raise AppError("GCP token expired or invalid.", code="UNAUTHORIZED", status_code=401)
-        raise AppError(
-            f"Cloud Logging API error: {exc.response.status_code}",
-            code="GCP_API_ERROR",
-            status_code=502,
-            details={"upstream_status": exc.response.status_code},
-        )
+        _raise_gcp_upstream_error(exc, api_name="Cloud Logging API", project_id=project_id)
     except Exception as exc:
         logger.error("gcp_logs_error", extra={"error": repr(exc)})
         raise AppError("Upstream connectivity error.", code="GCP_API_ERROR", status_code=502)
@@ -611,14 +838,7 @@ def gcp_services(
             resp.raise_for_status()
             data = resp.json()
         except httpx.HTTPStatusError as exc:
-            if exc.response.status_code == 401:
-                raise AppError("GCP token expired or invalid.", code="UNAUTHORIZED", status_code=401)
-            raise AppError(
-                f"Service Usage API error: {exc.response.status_code}",
-                code="GCP_API_ERROR",
-                status_code=502,
-                details={"upstream_status": exc.response.status_code},
-            )
+            _raise_gcp_upstream_error(exc, api_name="Service Usage API", project_id=project_id)
         except Exception as exc:
             logger.error("gcp_services_error", extra={"error": repr(exc)})
             raise AppError("Upstream connectivity error.", code="GCP_API_ERROR", status_code=502)

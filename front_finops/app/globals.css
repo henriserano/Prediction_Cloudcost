@@ -3,12 +3,29 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* ---------------------------------------------------------------------------
+ * SIA · Design tokens
+ * Palette navy (#0B1F3A) + corail signature (#E85A4F) + neutres slate.
+ * Contrastes AA/AAA respectés. Radius, motion et typo scale normalisés.
+ * ------------------------------------------------------------------------- */
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-sans);
+  --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
-  --font-heading: var(--font-sans);
+  --font-heading: var(--font-geist-sans);
+
+  --color-brand: var(--brand);
+  --color-brand-foreground: var(--brand-foreground);
+  --color-brand-muted: var(--brand-muted);
+
+  --color-accent-coral: var(--accent-coral);
+  --color-accent-coral-foreground: var(--accent-coral-foreground);
+  --color-accent-teal: var(--accent-teal);
+  --color-accent-gold: var(--accent-gold);
+  --color-accent-violet: var(--accent-violet);
+
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -17,15 +34,23 @@
   --color-sidebar-primary: var(--sidebar-primary);
   --color-sidebar-foreground: var(--sidebar-foreground);
   --color-sidebar: var(--sidebar);
-  --color-chart-5: var(--chart-5);
-  --color-chart-4: var(--chart-4);
-  --color-chart-3: var(--chart-3);
-  --color-chart-2: var(--chart-2);
+
   --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+
   --color-ring: var(--ring);
   --color-input: var(--input);
   --color-border: var(--border);
   --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+
   --color-accent-foreground: var(--accent-foreground);
   --color-accent: var(--accent);
   --color-muted-foreground: var(--muted-foreground);
@@ -38,6 +63,7 @@
   --color-popover: var(--popover);
   --color-card-foreground: var(--card-foreground);
   --color-card: var(--card);
+
   --radius-sm: calc(var(--radius) * 0.6);
   --radius-md: calc(var(--radius) * 0.8);
   --radius-lg: var(--radius);
@@ -45,85 +71,246 @@
   --radius-2xl: calc(var(--radius) * 1.8);
   --radius-3xl: calc(var(--radius) * 2.2);
   --radius-4xl: calc(var(--radius) * 2.6);
+
+  --shadow-xs: 0 1px 2px 0 rgb(11 31 58 / 0.04);
+  --shadow-sm: 0 1px 2px 0 rgb(11 31 58 / 0.05), 0 1px 3px 0 rgb(11 31 58 / 0.04);
+  --shadow-md: 0 4px 8px -2px rgb(11 31 58 / 0.06), 0 2px 4px -2px rgb(11 31 58 / 0.04);
+  --shadow-lg: 0 12px 24px -8px rgb(11 31 58 / 0.10), 0 4px 8px -4px rgb(11 31 58 / 0.06);
 }
+
+/* ---------------------------------------------------------------------------
+ * Light mode — the default
+ * Sia navy (#0B1F3A) → primary, corail (#E85A4F) → accent
+ * ------------------------------------------------------------------------- */
 
 :root {
-  --background: oklch(0.978 0.006 240);
-  --foreground: oklch(0.14 0.10 264);
+  /* Neutrals — slate ramp */
+  --background: oklch(0.985 0.003 240);
+  --foreground: oklch(0.16 0.03 250);
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.14 0.10 264);
+  --card-foreground: oklch(0.16 0.03 250);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.14 0.10 264);
-  --primary: oklch(0.22 0.18 264);
-  --primary-foreground: oklch(0.98 0.005 240);
-  --secondary: oklch(0.94 0.01 264);
-  --secondary-foreground: oklch(0.22 0.18 264);
-  --muted: oklch(0.96 0.006 240);
-  --muted-foreground: oklch(0.50 0.04 240);
-  --accent: oklch(0.94 0.01 264);
-  --accent-foreground: oklch(0.22 0.18 264);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.90 0.008 240);
-  --input: oklch(0.90 0.008 240);
-  --ring: oklch(0.48 0.24 264);
-  --chart-1: oklch(0.48 0.24 264);
-  --chart-2: oklch(0.60 0.18 195);
-  --chart-3: oklch(0.52 0.20 290);
-  --chart-4: oklch(0.55 0.18 155);
-  --chart-5: oklch(0.65 0.18 45);
-  --radius: 0.5rem;
-  --sidebar: oklch(0.10 0.10 264);
-  --sidebar-foreground: oklch(0.92 0.02 240);
-  --sidebar-primary: oklch(0.48 0.24 264);
-  --sidebar-primary-foreground: oklch(0.98 0 0);
-  --sidebar-accent: oklch(0.18 0.10 264);
-  --sidebar-accent-foreground: oklch(0.95 0.02 240);
-  --sidebar-border: oklch(0.22 0.08 264);
-  --sidebar-ring: oklch(0.48 0.24 264);
+  --popover-foreground: oklch(0.16 0.03 250);
+
+  /* Brand — Sia navy */
+  --primary: oklch(0.22 0.055 258);          /* #0B1F3A navy */
+  --primary-foreground: oklch(0.985 0.003 240);
+  --brand: oklch(0.22 0.055 258);
+  --brand-foreground: oklch(0.985 0.003 240);
+  --brand-muted: oklch(0.94 0.012 258);
+
+  /* Secondary — cool slate for surfaces */
+  --secondary: oklch(0.95 0.008 250);
+  --secondary-foreground: oklch(0.22 0.055 258);
+
+  /* Muted — subtle backgrounds */
+  --muted: oklch(0.965 0.006 250);
+  --muted-foreground: oklch(0.48 0.02 250);
+
+  /* Accent (interactive surfaces) */
+  --accent: oklch(0.95 0.008 250);
+  --accent-foreground: oklch(0.22 0.055 258);
+
+  /* Sia coral accent — for signature moments */
+  --accent-coral: oklch(0.66 0.185 28);      /* #E85A4F */
+  --accent-coral-foreground: oklch(0.99 0 0);
+  --accent-teal: oklch(0.60 0.11 195);       /* teal secondary */
+  --accent-gold: oklch(0.75 0.15 78);        /* mustard */
+  --accent-violet: oklch(0.52 0.19 295);     /* violet */
+
+  /* Semantic */
+  --destructive: oklch(0.60 0.22 25);
+  --destructive-foreground: oklch(0.99 0 0);
+  --success: oklch(0.62 0.14 155);
+  --success-foreground: oklch(0.99 0 0);
+  --warning: oklch(0.75 0.15 78);
+  --warning-foreground: oklch(0.20 0.05 78);
+
+  /* Borders / inputs / ring */
+  --border: oklch(0.90 0.010 250);
+  --input: oklch(0.90 0.010 250);
+  --ring: oklch(0.66 0.185 28);              /* coral focus ring */
+
+  /* Chart palette — navy, coral, teal, violet, gold */
+  --chart-1: oklch(0.22 0.055 258);          /* navy */
+  --chart-2: oklch(0.66 0.185 28);           /* coral */
+  --chart-3: oklch(0.60 0.11 195);           /* teal */
+  --chart-4: oklch(0.52 0.19 295);           /* violet */
+  --chart-5: oklch(0.75 0.15 78);            /* gold */
+
+  --radius: 0.625rem;
+
+  /* Sidebar — deep navy anchor */
+  --sidebar: oklch(0.17 0.045 258);          /* deeper navy */
+  --sidebar-foreground: oklch(0.94 0.008 250);
+  --sidebar-primary: oklch(0.66 0.185 28);   /* coral highlight */
+  --sidebar-primary-foreground: oklch(0.99 0 0);
+  --sidebar-accent: oklch(0.24 0.055 258);
+  --sidebar-accent-foreground: oklch(0.98 0.008 250);
+  --sidebar-border: oklch(0.28 0.05 258);
+  --sidebar-ring: oklch(0.66 0.185 28);
 }
 
+/* ---------------------------------------------------------------------------
+ * Dark mode
+ * ------------------------------------------------------------------------- */
+
 .dark {
-  --background: oklch(0.14 0.10 264);
-  --foreground: oklch(0.95 0.02 240);
-  --card: oklch(0.18 0.10 264);
-  --card-foreground: oklch(0.95 0.02 240);
-  --popover: oklch(0.18 0.10 264);
-  --popover-foreground: oklch(0.95 0.02 240);
-  --primary: oklch(0.92 0.02 240);
-  --primary-foreground: oklch(0.22 0.18 264);
-  --secondary: oklch(0.24 0.10 264);
-  --secondary-foreground: oklch(0.95 0.02 240);
-  --muted: oklch(0.24 0.10 264);
-  --muted-foreground: oklch(0.65 0.04 240);
-  --accent: oklch(0.24 0.10 264);
-  --accent-foreground: oklch(0.95 0.02 240);
-  --destructive: oklch(0.704 0.191 22.216);
+  --background: oklch(0.13 0.03 258);
+  --foreground: oklch(0.95 0.008 250);
+  --card: oklch(0.17 0.038 258);
+  --card-foreground: oklch(0.95 0.008 250);
+  --popover: oklch(0.17 0.038 258);
+  --popover-foreground: oklch(0.95 0.008 250);
+
+  --primary: oklch(0.95 0.008 250);
+  --primary-foreground: oklch(0.17 0.045 258);
+  --brand: oklch(0.66 0.185 28);             /* coral becomes primary CTA in dark */
+  --brand-foreground: oklch(0.99 0 0);
+  --brand-muted: oklch(0.22 0.055 258);
+
+  --secondary: oklch(0.22 0.045 258);
+  --secondary-foreground: oklch(0.95 0.008 250);
+
+  --muted: oklch(0.22 0.045 258);
+  --muted-foreground: oklch(0.68 0.02 250);
+
+  --accent: oklch(0.22 0.045 258);
+  --accent-foreground: oklch(0.95 0.008 250);
+
+  --accent-coral: oklch(0.70 0.19 30);
+  --accent-coral-foreground: oklch(0.13 0.03 258);
+  --accent-teal: oklch(0.68 0.13 195);
+  --accent-gold: oklch(0.80 0.16 78);
+  --accent-violet: oklch(0.62 0.20 295);
+
+  --destructive: oklch(0.68 0.20 25);
+  --destructive-foreground: oklch(0.99 0 0);
+  --success: oklch(0.68 0.14 155);
+  --success-foreground: oklch(0.13 0.03 258);
+  --warning: oklch(0.80 0.16 78);
+  --warning-foreground: oklch(0.13 0.03 258);
+
   --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.48 0.24 264);
-  --chart-1: oklch(0.58 0.22 264);
-  --chart-2: oklch(0.65 0.18 195);
-  --chart-3: oklch(0.58 0.20 290);
-  --chart-4: oklch(0.60 0.18 155);
-  --chart-5: oklch(0.70 0.18 45);
-  --sidebar: oklch(0.08 0.08 264);
-  --sidebar-foreground: oklch(0.92 0.02 240);
-  --sidebar-primary: oklch(0.58 0.22 264);
-  --sidebar-primary-foreground: oklch(0.98 0 0);
-  --sidebar-accent: oklch(0.16 0.10 264);
-  --sidebar-accent-foreground: oklch(0.95 0.02 240);
+  --input: oklch(1 0 0 / 12%);
+  --ring: oklch(0.70 0.19 30);
+
+  --chart-1: oklch(0.72 0.14 258);
+  --chart-2: oklch(0.72 0.18 28);
+  --chart-3: oklch(0.68 0.13 195);
+  --chart-4: oklch(0.62 0.20 295);
+  --chart-5: oklch(0.80 0.16 78);
+
+  --sidebar: oklch(0.11 0.035 258);
+  --sidebar-foreground: oklch(0.94 0.008 250);
+  --sidebar-primary: oklch(0.70 0.19 30);
+  --sidebar-primary-foreground: oklch(0.99 0 0);
+  --sidebar-accent: oklch(0.18 0.045 258);
+  --sidebar-accent-foreground: oklch(0.98 0.008 250);
   --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.58 0.22 264);
+  --sidebar-ring: oklch(0.70 0.19 30);
 }
+
+/* ---------------------------------------------------------------------------
+ * Base layer
+ * ------------------------------------------------------------------------- */
 
 @layer base {
   * {
     @apply border-border outline-ring/50;
   }
+  html {
+    @apply font-sans antialiased;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    scroll-behavior: smooth;
+  }
   body {
     @apply bg-background text-foreground;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11", "ss01";
   }
-  html {
-    @apply font-sans;
+  ::selection {
+    background: color-mix(in oklch, var(--accent-coral) 25%, transparent);
+    color: var(--foreground);
+  }
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: color-mix(in oklch, var(--foreground) 12%, transparent);
+    border-radius: 8px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: color-mix(in oklch, var(--foreground) 20%, transparent);
+    background-clip: content-box;
+  }
+  h1, h2, h3, h4 {
+    @apply font-heading tracking-tight;
+    letter-spacing: -0.015em;
+  }
+  h1 { @apply text-2xl font-semibold lg:text-3xl; }
+  h2 { @apply text-xl font-semibold lg:text-2xl; }
+  h3 { @apply text-lg font-semibold; }
+  a { @apply transition-colors; }
+
+  /* Focus visible — coral ring */
+  :focus-visible {
+    outline: 2px solid var(--accent-coral);
+    outline-offset: 2px;
+    border-radius: var(--radius-sm);
+  }
+
+  /* Reduce motion */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * Utility classes
+ * ------------------------------------------------------------------------- */
+
+@layer utilities {
+  .bg-brand-gradient {
+    background-image: linear-gradient(135deg,
+      var(--brand) 0%,
+      color-mix(in oklch, var(--brand) 80%, var(--accent-coral)) 100%);
+  }
+  .bg-coral-gradient {
+    background-image: linear-gradient(135deg,
+      var(--accent-coral) 0%,
+      color-mix(in oklch, var(--accent-coral) 70%, var(--accent-gold)) 100%);
+  }
+  .text-balance { text-wrap: balance; }
+  .text-pretty { text-wrap: pretty; }
+
+  /* Card top accent stripe */
+  .card-accent-top::before {
+    content: "";
+    position: absolute;
+    inset: 0 0 auto 0;
+    height: 2px;
+    background: linear-gradient(90deg, var(--accent-coral), transparent 70%);
+    z-index: 1;
+  }
+  .card-accent-top-brand::before {
+    content: "";
+    position: absolute;
+    inset: 0 0 auto 0;
+    height: 2px;
+    background: linear-gradient(90deg, var(--brand), color-mix(in oklch, var(--brand) 50%, var(--accent-coral)) 60%, transparent);
+    z-index: 1;
   }
 }
