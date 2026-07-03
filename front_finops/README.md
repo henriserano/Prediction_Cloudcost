@@ -1,6 +1,8 @@
-# Frontend — FinOps GCP Dashboard
+# Frontend · FinOps GCP Dashboard
 
-Dashboard interactif Next.js 16 pour la visualisation et l'analyse des coûts GCP demo. Construit avec App Router, Tailwind CSS 4, Recharts et shadcn/ui. Actuellement alimenté par des données mock déterministes — prêt à être branché sur l'API FastAPI via TanStack Query.
+Dashboard interactif Next.js 16 pour la visualisation et l'analyse des coûts multi-cloud (GCP + AWS) demo. **100% branché sur l'API FastAPI** — plus de mockData. Sept pages, 31 hooks TanStack Query, un parseur CSV/Excel bilingue, un flux OAuth GCP complet.
+
+> ⚠️ **Next.js 16 : breaking changes vs 15.x.** APIs, conventions et layout de fichiers peuvent différer des ressources d'entraînement. Consulter `AGENTS.md` puis `node_modules/next/dist/docs/` avant modification. Respecter les avis de dépréciation.
 
 ---
 
@@ -8,13 +10,15 @@ Dashboard interactif Next.js 16 pour la visualisation et l'analyse des coûts GC
 
 1. [Stack technique](#stack-technique)
 2. [Structure du projet](#structure-du-projet)
-3. [Pages et fonctionnalités](#pages-et-fonctionnalités)
+3. [Pages](#pages)
 4. [Composants](#composants)
-5. [Types TypeScript & contrat API](#types-typescript--contrat-api)
-6. [Données mock](#données-mock)
-7. [Intégration API (guide)](#intégration-api-guide)
-8. [Démarrage](#démarrage)
-9. [Build & déploiement](#build--déploiement)
+5. [Hooks API (TanStack Query)](#hooks-api-tanstack-query)
+6. [Lib · parsers, context, utils](#lib--parsers-context-utils)
+7. [Types TypeScript & contrat API](#types-typescript--contrat-api)
+8. [Configuration (`next.config.js`)](#configuration-nextconfigjs)
+9. [Démarrage](#démarrage)
+10. [Build & déploiement](#build--déploiement)
+11. [Design system Sia](#design-system-sia)
 
 ---
 
@@ -22,16 +26,18 @@ Dashboard interactif Next.js 16 pour la visualisation et l'analyse des coûts GC
 
 | Élément | Version | Rôle |
 |---|---|---|
-| Next.js | 16.2.9 | Framework React — App Router |
-| React | 19.2.7 | UI rendering |
-| TypeScript | 5 | Typage statique |
-| Tailwind CSS | 4 | Styles utilitaires |
+| Next.js | 16.2.9 | Framework React · App Router · rewrites API |
+| React | 19.2.7 | UI (Server + Client components) |
+| TypeScript | 5 | Typage strict |
+| Tailwind CSS | 4 | Utility-first styles |
 | Recharts | 2.15 | Graphiques SVG déclaratifs |
-| shadcn/ui + Base UI | — | Composants UI accessibles |
-| TanStack React Query | 5.101 | Data fetching / cache (prêt, non encore branché) |
-| axios | 1.18 | Client HTTP |
-| Lucide React | 1.21 | Icônes |
-| Zod | 4.4 | Validation de schémas |
+| TanStack Query | 5.101 | Data fetching + cache + retries |
+| axios | 1.18 | Client HTTP + intercepteur snake_case→camelCase |
+| shadcn/ui + Base UI | — | Primitives accessibles |
+| Lucide React | 0.511 | Icônes |
+| Zod | 4.4 | Validation schémas |
+| clsx + tailwind-merge | — | Merge classes Tailwind (`cn` helper) |
+| tw-animate-css | 1.4 | Animations Tailwind |
 
 ---
 
@@ -40,422 +46,481 @@ Dashboard interactif Next.js 16 pour la visualisation et l'analyse des coûts GC
 ```
 front_finops/
 │
-├── app/                          # Next.js App Router
-│   ├── layout.tsx                # Layout racine : Sidebar + corps
-│   ├── page.tsx                  # Redirect /dashboard
-│   ├── globals.css               # Variables CSS Tailwind + thème
-│   ├── dashboard/
-│   │   └── page.tsx              # Vue d'ensemble
-│   ├── forecast/
-│   │   └── page.tsx              # Prévision + benchmark modèles
-│   ├── services/
-│   │   └── page.tsx              # Pareto 80/20 par service
-│   └── analytics/
-│       └── page.tsx              # STL · stats · stationnarité
+├── app/                                    # Next.js App Router
+│   ├── layout.tsx                          # Root : Metadata, Viewport, Sidebar, providers
+│   ├── page.tsx                            # Redirect → /dashboard
+│   ├── providers.tsx                       # QueryClientProvider + SidebarProvider
+│   ├── globals.css                         # Tailwind + variables Sia (oklch)
+│   ├── robots.ts sitemap.ts                # SEO
+│   │
+│   ├── dashboard/                          # KPIs, tendance, services, anomalies
+│   ├── forecast/                           # Prévision + benchmark 6 modèles
+│   ├── services/                           # Pareto 80/20 · dual-source local/GCP
+│   ├── analytics/                          # STL, stats, stationnarité, ACF
+│   │
+│   ├── diagnostics/                        # 7 onglets ML/stats
+│   │   ├── page.tsx                        # Tab nav
+│   │   └── _components/
+│   │       ├── OutliersTab.tsx
+│   │       ├── DriftTab.tsx
+│   │       ├── DistributionTab.tsx
+│   │       ├── ScalingTab.tsx
+│   │       ├── MissingTab.tsx
+│   │       ├── DimReductionTab.tsx
+│   │       ├── EnsembleTab.tsx
+│   │       └── shared.ts                   # Palette + formatters
+│   │
+│   ├── data-sources/                       # Upload CSV/Excel + connect GCP + AWS
+│   │   └── page.tsx                        # FileTab · GCPTab · AWSTab
+│   │
+│   └── gcp-connect/                        # OAuth flow + projets/billing/logs/services
+│       └── page.tsx
 │
 ├── components/
 │   ├── layout/
-│   │   ├── Sidebar.tsx           # Navigation latérale 4 pages
-│   │   └── PageShell.tsx         # Wrapper titre + description + main
+│   │   ├── Sidebar.tsx                     # Navigation fixe · responsive · Sia logo
+│   │   └── PageShell.tsx                   # Wrapper eyebrow/title/description
 │   └── ui/
-│       ├── card.tsx              # Card, CardHeader, CardTitle, CardContent…
-│       ├── button.tsx            # Button (variants, tailles)
-│       ├── input.tsx             # Input texte
-│       └── dialog.tsx            # Modal accessible
+│       ├── card.tsx                        # Card + Header/Title/Description/Content/Footer/Action
+│       ├── kpi-card.tsx                    # Carte KPI avec tone/delta/info
+│       ├── section-card.tsx                # Container Section avec accent bar
+│       ├── badge.tsx                       # Variants (default, coral, success, warning, destructive, muted)
+│       ├── button.tsx input.tsx dialog.tsx # shadcn primitives
+│       ├── empty-state.tsx                 # Placeholder centré
+│       ├── skeleton.tsx                    # Pulse loading
+│       ├── explain.tsx                     # Popover pédagogique + <Verdict>
+│       └── logo.tsx                        # Logo Sia
 │
 └── lib/
-    ├── types.ts                  # Interfaces TypeScript (= contrat API)
-    ├── mockData.ts               # Données déterministes pour dev sans API
-    └── utils.ts                  # Helpers Tailwind (cn)
+    ├── types.ts                            # ~30 interfaces = contrat API (camelCase)
+    ├── api.ts                              # axios instance + intercepteur snake→camel
+    ├── utils.ts                            # cn() helper
+    ├── mockData.ts                         # (LEGACY — plus utilisé, conservé pour historique)
+    ├── hooks/
+    │   ├── useApi.ts                       # 31 hooks TanStack Query
+    │   └── useSelectedGCPProject.ts        # localStorage-backed via useSyncExternalStore
+    ├── context/
+    │   └── sidebar-context.tsx             # useSidebar() pour mobile drawer
+    └── parsers/
+        └── billing-file.ts                 # Parse CSV/Excel, alias fuzzy, format detection
 ```
 
 ---
 
-## Pages et fonctionnalités
+## Pages
 
 ### `/dashboard` — Vue d'ensemble
 
-**Endpoint API utilisé :** `GET /api/kpi`, `GET /api/daily`, `GET /api/services`, `GET /api/anomalies`
+**Hooks** : `useKPI`, `useDaily(60)`, `useServices`, `useAnomalies(2.0)`
 
-**Contenu :**
+Layout :
 
 ```
 ┌────────┬────────┬────────┬────────┐
-│ Total  │ Moy.   │ Prévi- │ Anoma- │
+│ Total  │ Moy.   │ Prévi- │ Anoma- │  KPICard × 4 (tone brand/coral/success/muted)
 │ dépense│ /jour  │ sion30j│ lies   │
 └────────┴────────┴────────┴────────┘
 ┌──────────────────────┬────────────┐
-│ Tendance quotidienne │ Répartition│
-│ Coût brut + MA7 +   │ par service│
-│ bandes IC 95%        │ (barres %) │
-│ (60 derniers jours)  │            │
+│ Tendance quotidienne │ Répartition│  AreaChart (60 derniers jours)
+│ Coût + MA7 + IC95%   │ par service│  · Barres CSS · Top 6 services
 └──────────────────────┴────────────┘
 ┌──────────────────┬────────────────┐
-│ Anomalies        │ Volatilité     │
-│ Liste des jours  │ Bar chart CV%  │
-│ Z-score > 2      │ par service    │
+│ Anomalies récentes│ Volatilité par │  Liste des jours Z>2 · BarChart CV%
+│ (Z-score > 2)     │ service (CV%)  │
 └──────────────────┴────────────────┘
 ```
 
-**Graphiques :**
-- `AreaChart` (Recharts) — courbe coût brut + MA7 + bandes IC 95% en gradient bleu
-- Barres horizontales custom CSS — répartition % par service (top 6, colorées)
-- `BarChart` horizontal — coefficient de variation par service
-
----
-
 ### `/forecast` — Prévision
 
-**Endpoint API utilisé :** `GET /api/forecast/`, `GET /api/forecast/summary`, `GET /api/forecast/models`
+**Hooks** : `useForecast(horizon, model)`, `useForecastSummary(horizon, model)`, `useModelBenchmarks`  
+**State** : `horizon` (7–180), `model` (dropdown 6 modèles)
 
-**Contenu :**
+- 3 KPICards en haut : Total prévu, Meilleur modèle, Nb modèles évalués
+- `ComposedChart` : actuals (gris) + forecast (bleu, pointillés) + bandes IC80%/95% en gradient + `ReferenceLine "Aujourd'hui"`
+- Tableau benchmark 6 modèles : rang, famille, MAE, RMSE, MAPE, R², score, médailles 🥇🥈🥉 · ligne gagnant surlignée
 
-```
-┌──────────────┬──────────────┬──────────────┐
-│ Prévision 30j│ Meilleur     │ Modèles      │
-│ (€ total)    │ modèle       │ évalués (6)  │
-└──────────────┴──────────────┴──────────────┘
-┌────────────────────────────────────────────┐
-│  ComposedChart                             │
-│  - Ligne grise   : valeurs réelles         │
-│  - Ligne bleue   : prévision (pointillés)  │
-│  - Zone IC 95%   : gradient bleu léger     │
-│  - Zone IC 80%   : gradient bleu moyen     │
-│  - ReferenceLine : ligne "Aujourd'hui"     │
-└────────────────────────────────────────────┘
-┌────────────────────────────────────────────┐
-│  Tableau benchmark 6 modèles               │
-│  Rang · Modèle · Famille · MAE · RMSE      │
-│  MAPE · R² · Score                         │
-│  Médailles 🥇🥈🥉 · Ligne gagnant surlignée │
-└────────────────────────────────────────────┘
-```
+### `/services` — Services GCP (dual-source)
 
----
+**Hooks** : `useServices` (local), `useGCPStatus`, `useGCPBilling`, `useSelectedGCPProject`  
+**State** : `source` (`"local"` | `"gcp"`) via `useSourceState`
 
-### `/services` — Services GCP
+**Feature-clé** : sélecteur de source. En mode `gcp`, requiert OAuth + projet sélectionné. Adapter `UnifiedRow` normalise les deux formats vers une structure commune pour le tableau.
 
-**Endpoint API utilisé :** `GET /api/services`, `GET /api/kpi`
-
-**Contenu :**
-
-```
-┌──────────────┬──────────────┬──────────────┐
-│ Nb services  │ Service      │ Top 5 =      │
-│ analysés (9) │ dominant     │ 87% total    │
-└──────────────┴──────────────┴──────────────┘
-┌────────────────────────────────────────────┐
-│  ComposedChart Pareto 80/20                │
-│  - Bar (axe gauche €)  : coût par service  │
-│  - Line (axe droit %)  : % cumulé Pareto   │
-│  - ReferenceLine rouge : seuil 80%         │
-└────────────────────────────────────────────┘
-┌────────────────────────────────────────────┐
-│  Tableau détail par service                │
-│  Service · Coût · Part % · % Cumulé        │
-│  CV% · Badge profil (Stable/Modéré/Volatile│
-└────────────────────────────────────────────┘
-```
-
-**Badge profil de volatilité :**
-- `CV < 20%` → vert — **Stable**
-- `20% ≤ CV < 60%` → orange — **Modéré**
-- `CV ≥ 60%` → rouge — **Volatile**
-
----
+- ComposedChart Pareto : `Bar` (€) + `Line` (% cumulé) + `ReferenceLine` rouge à 80%
+- Tableau desktop + cartes mobile (responsive)
+- Badges volatilité : `CV<20%` → success (Stable), `20–60%` → warning (Modéré), `≥60%` → destructive (Volatile)
 
 ### `/analytics` — Analytique avancée
 
-**Endpoint API utilisé :** `GET /api/stl`, `GET /api/stl/strengths`, `GET /api/stats`, `GET /api/anomalies`, `GET /api/stationarity`
+**Hooks** : `useSTL`, `useSTLStrengths`, `useStats`, `useAnomalies`, `useStationarity`
 
-**Contenu :**
+- Tableau 10 stats descriptives (mean, median, std, CV, skew, kurt, IQR, MAD, min, max)
+- 3 sub-charts empilés : Tendance · Saisonnalité · Résidus (STL)
+- AreaChart anomalies avec `ReferenceLine` μ, +2σ, −2σ
+- Résumé stationnarité (ADF/KPSS) et STL strengths (Ft/Fs sous forme de barres)
 
-```
-┌────────────────────┬───────────────────────┐
-│ Stats descriptives │ Décomposition STL      │
-│ 10 indicateurs     │ 3 sub-charts empilés   │
-│ (tableau)          │ Tendance · Saisonnalité│
-│                    │ Résidus                │
-└────────────────────┴───────────────────────┘
-┌────────────────────────────────────────────┐
-│  Anomalies ±2σ                             │
-│  AreaChart + points rouges sur anomalies   │
-│  ReferenceLine μ, +2σ, -2σ                 │
-└────────────────────────────────────────────┘
-┌──────────────────┬─────────────────────────┐
-│ Tests stationn.  │ Résumé STL              │
-│ ADF p=0.016 ✓    │ Ft=0.44 (barres)        │
-│ KPSS p=0.01 ⚠    │ Fs=0.36 (barres)        │
-│ Verdict : trend- │ ACF/PACF lags 1, 7, 14  │
-│ stationnaire     │                         │
-└──────────────────┴─────────────────────────┘
-```
+### `/diagnostics` — 7 onglets ML/stats
+
+**State** : `tab` (`"outliers"` | `"drift"` | `"distribution"` | `"scaling"` | `"missing"` | `"dim"` | `"ensemble"`)
+
+Chaque onglet est un sous-composant `_components/*Tab.tsx` avec son propre hook :
+
+| Onglet | Hook | Contenu principal |
+|---|---|---|
+| Outliers | `useOutliers(z, iqr)` | Consensus 5 méthodes (Z, MAD, IQR, IForest, LOF) + Mahalanobis 2D |
+| Drift | `useDrift(refFrac, bins)` | KS statistic + PSI par bin + Page-Hinkley changepoints |
+| Distribution | `useDistribution` | Skew, kurtosis, Box-Cox λ, 3 tests de normalité, QQ-plot |
+| Scaling | `useScaling` | Série originale + StandardScaler + MinMax + Robust en surimpression |
+| Missing | `useMissing` | Gaps calendaires · % NaN par service · hint MCAR/MAR/MNAR |
+| DimReduction | `useDimReduction(n, tsne)` | PCA (variance ratios + top loadings) + t-SNE 2D optionnel |
+| Ensemble | `useEnsembleForecast(horizon)` | Poids inverse-MAE + décomposition bias²/variance |
+
+Chaque onglet utilise le composant `<Explain>` pour expliquer la méthode et `<Verdict>` pour donner une interprétation lisible du résultat.
+
+### `/data-sources` — Sources de données
+
+Trois onglets internes : **File** · **GCP** · **AWS**.
+
+**File** (`FileTab`) :
+- Drag & drop multi-fichiers (`entries: FileEntry[]`)
+- Parsing client-side via `parseBillingFile()` — détection format + colonnes + preview immédiate
+- Toggle `replace` (remplacer vs concaténer les événements existants)
+- Envoi via `useIngestEvents` (POST `/api/events`)
+- ErrorBanner / SuccessBanner / WarnBanner selon résultat
+
+**GCP** (`GCPTab`) :
+- Statut OAuth via `useGCPStatus`
+- Bouton "Connect Google" → redirect `/api/gcp/auth`
+- Après consentement, sélection de projet, affichage du dernier sync
+
+**AWS** (`AWSTab`) :
+- Placeholder pour saisie de credentials AWS (non implémenté côté backend pour l'instant — utilise la chaîne AWS standard)
+- Utilise `useQuery` sur `/api/aws/status`
+
+### `/gcp-connect` — Console GCP
+
+**Hooks** : `useGCPStatus`, `useGCPProjects`, `useGCPBilling`, `useGCPLogs`, `useGCPServices`  
+**State** : `selectedProject` via `useSelectedGCPProject` (persisté en localStorage)
+
+- ConnectCard (si non authentifié) → OAuth
+- AuthStatusCard (email, project actif)
+- ProjectDropdown avec la liste des projets accessibles
+- BillingChart (`GET /api/gcp/billing`) par service + par mois
+- LogViewer (`GET /api/gcp/logs`) avec filtre par severity
+- ServicesList (`GET /api/gcp/services`) catégorisée
 
 ---
 
 ## Composants
 
-### `Sidebar` (`components/layout/Sidebar.tsx`)
+### Layout
 
-Navigation latérale fixe. Utilise `usePathname()` pour le surlignage de la route active.
+| Composant | Rôle | Props |
+|---|---|---|
+| `Sidebar` | Navigation fixe, responsive mobile (hamburger + drawer), Sia logo, active route via `usePathname()` | — |
+| `PageShell` | Wrapper de page standardisé | `title`, `description?`, `eyebrow?`, `actions?`, `children` |
+
+Menu de navigation :
 
 ```tsx
 const NAV = [
-  { href: "/dashboard", label: "Vue d'ensemble", icon: BarChart2 },
-  { href: "/forecast",  label: "Prévision",       icon: LineChart  },
-  { href: "/services",  label: "Services",         icon: Layers     },
-  { href: "/analytics", label: "Analytique",       icon: FlaskConical },
+  { href: "/dashboard",     label: "Vue d'ensemble", icon: BarChart2 },
+  { href: "/forecast",      label: "Prévision",      icon: LineChart },
+  { href: "/services",      label: "Services",       icon: Layers },
+  { href: "/analytics",     label: "Analytique",     icon: FlaskConical },
+  { href: "/diagnostics",   label: "Diagnostics",    icon: Activity },
+  { href: "/data-sources",  label: "Sources",        icon: Database },
+  { href: "/gcp-connect",   label: "GCP",            icon: Cloud },
 ]
 ```
 
-Footer : période des données + modèle actif (`AutoETS`).
+### UI
 
-### `PageShell` (`components/layout/PageShell.tsx`)
+| Composant | Description |
+|---|---|
+| `Card` + variantes | Conteneur shadcn (Header, Title, Description, Content, Footer, Action) |
+| `KPICard` | Carte KPI avec `label`, `value`, `sub?`, `icon?`, `tone` (`default`\|`coral`\|`destructive`\|`success`), `delta?`, `info?`. Hover-lift + accent bar en gradient. |
+| `SectionCard` | Container de section avec `accent` (`brand`\|`coral`\|`none`) et slots `title/description/action/info` |
+| `Badge` | 7 variants (`default`, `outline`, `coral`, `success`, `warning`, `destructive`, `muted`), 2 tailles |
+| `Button` `Input` `Dialog` | Primitives shadcn/Base UI |
+| `EmptyState` | Placeholder `icon` + `title` + `description` + `action?` |
+| `Skeleton` | Pulse loading placeholder |
+| `Explain` (227 lignes) | Popover pédagogique. Portal-rendered, viewport clamping, client-only. Sub-composant `<Verdict tone="positive\|neutral\|negative">` pour verdict lisible |
+| `Logo` | Logo Sia SVG |
 
-Wrapper standardisé pour chaque page. Accepte `title`, `description?` et `children`.
+---
 
-```tsx
-<PageShell
-  title="Vue d'ensemble"
-  description="Coûts GCP · janvier – juin 2026"
->
-  {/* contenu */}
-</PageShell>
+## Hooks API (TanStack Query)
+
+Tous les hooks sont dans `lib/hooks/useApi.ts` (277 lignes). Base URL relative (`/api/*`) — le rewrite Next.js proxifie vers `NEXT_PUBLIC_API_URL`. `staleTime` par défaut : 5 min.
+
+### Analytics (basiques)
+
+| Hook | Signature | Endpoint |
+|---|---|---|
+| `useKPI()` | — | `/api/kpi` |
+| `useDaily(lastN?)` | `(n?: number)` | `/api/daily?last_n=…` |
+| `useServices()` | — | `/api/services` |
+| `useAnomalies(zThreshold?)` | `(z?: number)` | `/api/anomalies?z_threshold=…` |
+| `useStats()` | — | `/api/stats` |
+| `useStationarity()` | — | `/api/stationarity` |
+| `useSTL()` | — | `/api/stl` |
+| `useSTLStrengths()` | — | `/api/stl/strengths` |
+| `useACF(nlags?)` | `(n?: number)` | `/api/acf?nlags=…` |
+
+### Forecast
+
+| Hook | Signature | Endpoint |
+|---|---|---|
+| `useForecast(horizon?, model?)` | `(h?: number, m?: string)` | `/api/forecast?horizon=…&model=…` |
+| `useForecastSummary(horizon?, model?)` | idem | `/api/forecast/summary` |
+| `useModelBenchmarks()` | — | `/api/forecast/models` |
+
+### Advanced
+
+| Hook | Endpoint |
+|---|---|
+| `useOutliers(z, iqr)` | `/api/analysis/outliers` |
+| `useDrift(refFrac, bins)` | `/api/analysis/drift` |
+| `useDistribution()` | `/api/analysis/distribution` |
+| `useScaling()` | `/api/analysis/scaling` |
+| `useMissing()` | `/api/analysis/missing` |
+| `useDimReduction(n, tsne)` | `/api/analysis/dim-reduction` |
+| `useEnsembleForecast(horizon)` | `/api/analysis/ensemble-forecast` |
+
+### GCP
+
+| Hook | Endpoint | Notes |
+|---|---|---|
+| `useGCPStatus()` | `/api/gcp/status` | `staleTime: 30s` (rafraîchit vite après OAuth) |
+| `useGCPProjects()` | `/api/gcp/projects` | Enabled si `authenticated` |
+| `useGCPBillingAccounts()` | `/api/gcp/billing-accounts` | idem |
+| `useGCPBilling(projectId, months)` | `/api/gcp/billing` | Enabled si projectId défini |
+| `useGCPLogs(projectId, limit, severity)` | `/api/gcp/logs` | idem |
+| `useGCPServices(projectId)` | `/api/gcp/services` | idem |
+
+### AWS
+
+| Hook | Endpoint |
+|---|---|
+| `useAWSStatus()` | `/api/aws/status` |
+| `useAWSBilling(start, end, months, granularity)` | `/api/aws/billing` |
+| `useAWSServices(months)` | `/api/aws/services` |
+
+### Data status
+
+| Hook | Endpoint |
+|---|---|
+| `useDataStatus()` | `/api/data/status` |
+
+### Mutations
+
+| Hook | Endpoint |
+|---|---|
+| `useIngestEvents()` | `POST /api/events` — invalide toutes les analytics queries en success |
+| `useUploadEvents()` | `POST /api/events/upload` (FormData) |
+| `usePreviewEvents()` | `POST /api/events/preview` |
+| `useGCPSync()` | `POST /api/gcp/sync` |
+| `useClearCache()` | `POST /admin/cache/clear` |
+
+Toutes les mutations invalident les query keys pertinentes en `onSuccess` pour rafraîchir automatiquement les vues.
+
+---
+
+## Lib · parsers, context, utils
+
+### `lib/api.ts`
+
+```ts
+export const api = axios.create({
+  baseURL: "",              // relatif — rewrite Next.js s'occupe du proxy
+  timeout: 30_000,
+  headers: { "Content-Type": "application/json" },
+})
 ```
 
-### `Card` et variantes (`components/ui/card.tsx`)
+Intercepteur de réponse : transformation récursive `snake_case` → `camelCase` sur tous les objets/arrays. Résultat : les hooks TanStack Query typés `<KPIData>` reçoivent directement des objets conformes au contrat TypeScript, sans code manuel de mapping.
 
-Système complet shadcn :
-- `Card` — conteneur avec variants de taille
-- `CardHeader` / `CardTitle` / `CardDescription` / `CardContent` / `CardFooter`
-- `CardAction` — slot d'action droite dans le header
+### `lib/hooks/useSelectedGCPProject.ts` (56 lignes)
+
+Hook basé sur `useSyncExternalStore` (React 18+) pour un state partagé cross-composant persisté en `localStorage` avec la clé `sia-finops.gcpSelectedProject`. Écoute l'événement `storage` → sync cross-tab.
+
+### `lib/context/sidebar-context.tsx`
+
+`SidebarContext` + `useSidebar()` — ouverture/fermeture du drawer mobile depuis n'importe où (utilisé par le hamburger dans `Sidebar` et par le layout root pour fermer sur navigation).
+
+### `lib/parsers/billing-file.ts`
+
+Fonction pure `parseBillingFile(file: File): Promise<ParsedResult>` — parsing client-side. Utilisé dans `/data-sources` pour prévisualiser un fichier avant upload backend.
+
+```ts
+type ParsedResult = {
+  events: BillingEvent[]         // lignes normalisées
+  errors: string[]               // erreurs par ligne
+  totalRows: number
+  detectedColumns: {             // colonnes matched par alias
+    date: string
+    service: string
+    cost: string
+    description?: string
+  }
+  format: "csv" | "xlsx" | "xlsb" | "xls" | "ods"
+  sheetName?: string             // pour Excel multi-sheet
+}
+```
+
+Aliases fuzzy (case-insensitive, whitespace-tolerant) :
+
+- **date** : `Mois`, `Date`, `Usage Start Date`, `usage_start_time`, `day`, `ds`
+- **service** : `Description du service`, `Service`, `service`, `service.description`
+- **cost** : `Sous-total (€)`, `Sous-total non arrondi (€)`, `Coût catalogue (€)`, `Cost`, `cost`, `Coût`
+
+Parse EU-locale : `1 234,56` → `1234.56` · `224,59 €` → `224.59`. Dates : `YYYY-MM-DD` ou `YYYY-MM` (→ 1er du mois).
+
+### `lib/utils.ts`
+
+```ts
+export function cn(...inputs: ClassValue[]): string
+```
+
+Merge Tailwind via `clsx` + `tailwind-merge` (résout les conflits de classes utilitaires).
+
+### `lib/mockData.ts` — LEGACY
+
+Fichier historique conservé pour référence. **Aucun composant ne l'importe actuellement** — l'app est 100 % branchée sur l'API. Peut être supprimé après confirmation qu'aucun stakeholder ne s'y réfère.
 
 ---
 
 ## Types TypeScript & contrat API
 
-Le fichier `lib/types.ts` définit l'ensemble du contrat entre le front et le backend. Ces types correspondent exactement aux schémas Pydantic de l'API.
+`lib/types.ts` (272 lignes) définit ~30 interfaces qui reflètent l'API en `camelCase`. L'intercepteur axios convertit automatiquement le `snake_case` du backend.
 
-```typescript
-// Série journalière
-interface DailyPoint {
-  date: string     // "YYYY-MM-DD"
-  cost: number     // coût brut €
-  ma7: number      // moyenne mobile 7j
-  ciLow: number    // borne basse IC 95%
-  ciHigh: number   // borne haute IC 95%
-}
+**Bloc analytics :**
 
-// Répartition service
-interface ServiceShare {
-  service: string  // nom GCP
-  cost: number     // total €
-  pct: number      // part %
-  cv: number       // coeff. variation %
-  cumPct: number   // % cumulé Pareto
-}
-
-// Anomalie
-interface AnomalyPoint {
-  date: string
-  cost: number
-  zscore: number
-  isAnomaly: boolean
-}
-
-// STL
-interface STLPoint {
-  date: string
-  trend: number
-  seasonal: number
-  residual: number
-}
-
-// Prévision
-interface ForecastPoint {
-  date: string
-  forecast: number
-  low80: number
-  high80: number
-  low95: number
-  high95: number
-  actual?: number   // null = futur
-}
-
-// Benchmark modèle
-interface ModelBenchmark {
-  rank: number
-  model: string
-  family: string
-  mae: number
-  rmse: number
-  mape: number
-  r2: number
-  score: number
-  winner: boolean
-}
-
-// KPIs globaux
-interface KPIData {
-  totalSpend: number
-  dailyAvg: number
-  trend: number
-  forecastNext30: number
-  anomalyCount: number
-  topService: string
-  topServicePct: number
-  dataPoints: number
-}
-
-// Stats descriptives
-interface DescriptiveStats {
-  mean: number
-  median: number
-  std: number
-  cv: number
-  skewness: number
-  kurtosis: number
-  iqr: number
-  mad: number
-  min: number
-  max: number
-}
+```ts
+interface DailyPoint     { date: string; cost: number; ma7: number; ciLow: number; ciHigh: number }
+interface ServiceShare   { service: string; cost: number; pct: number; cv: number; cumPct: number }
+interface AnomalyPoint   { date: string; cost: number; zscore: number; isAnomaly: boolean }
+interface STLPoint       { date: string; trend: number; seasonal: number; residual: number }
+interface STLStrengths   { ft: number; fs: number; period: number }
+interface KPIData        { totalSpend, dailyAvg, trendSlope, forecastNext30, anomalyCount, topService, topServicePct, dataPoints, periodStart, periodEnd }
+interface DescriptiveStats { mean, median, std, cv, skewness, kurtosis, iqr, mad, min, max }
+interface StationarityResult { adf: {statistic, pValue, isStationary, lagsUsed}; kpss: {...} }
 ```
 
-> **Note de nommage :** L'API Python utilise `snake_case` (`ci_low`, `is_anomaly`, `cum_pct`). Le front utilise `camelCase`. Lors de l'intégration API, appliquer une transformation ou configurer axios avec un intercepteur.
+**Bloc forecast :**
+
+```ts
+interface ForecastPoint  { date; forecast; low80; high80; low95; high95; actual?: number }
+interface ModelBenchmark { rank; model; family; mae; rmse; mape; r2; score; winner }
+interface ForecastSummary { horizonDays; totalForecast; bestModel; bestModelMae; bestModelMape; modelsEvaluated }
+```
+
+**Bloc advanced :**
+
+```ts
+interface OutliersResponse       { rows; summary; mahalanobis }
+interface DriftResponse          { ks; psi; pageHinkley; nChangepointsDetected }
+interface DistributionResponse   { skewness; kurtosis; boxcoxLambda; normalityTests; qqPoints }
+interface ScalingResponse        { points; stats }
+interface MissingResponse        { calendarDaysExpected; actualDays; missingDays; gaps; perServiceMissingPct; mechanismHint }
+interface DimReductionResponse   { pcaComponents; tsne2d; nServices; nDays; totalVarianceExplained }
+interface EnsembleForecastResponse { baseModels; weights; points; biasVariance }
+```
+
+**Bloc GCP :**
+
+```ts
+interface GCPAuthStatus, GCPProject, GCPBillingAccount, GCPBillingResponse, GCPLogEntry, GCPServiceInfo
+interface EventsIngestRequest, EventsIngestResponse, BillingEvent
+```
+
+**Bloc AWS :**
+
+```ts
+interface AWSAuthStatus, AWSBillingResponse, AWSService
+```
+
+> **Convention** : `snake_case` backend ↔ `camelCase` frontend. Ne **jamais** exposer de `snake_case` dans les composants React — la transformation se fait dans l'intercepteur axios.
 
 ---
 
-## Données mock
+## Configuration (`next.config.js`)
 
-`lib/mockData.ts` exporte des constantes déterministes qui reproduisent fidèlement les résultats des notebooks Jupyter :
+```js
+const nextConfig = {
+  reactStrictMode: true,
 
-| Export | Correspond à | Lignes |
+  async headers() {
+    // Sécurité : X-Frame-Options DENY, X-Content-Type-Options nosniff,
+    // Referrer-Policy strict-origin, X-XSS-Protection, Permissions-Policy
+    // + HSTS 2 ans en production (matches back/main.py)
+  },
+
+  async rewrites() {
+    const backendUrl = process.env.NEXT_PUBLIC_API_URL
+    if (!backendUrl && process.env.NODE_ENV === "production") {
+      throw new Error("NEXT_PUBLIC_API_URL must be set in production")
+    }
+    const resolvedBackendUrl = backendUrl || "http://localhost:8080"
+    return [
+      { source: "/api/:path*", destination: `${resolvedBackendUrl}/api/:path*` },
+    ]
+  },
+}
+```
+
+**Points d'attention** :
+
+- ⚠️ **Pas compatible avec `output: "export"`** — les rewrites nécessitent un serveur Next.js. Pour un export statique, il faudrait remplacer par un `NEXT_PUBLIC_API_URL` inline dans `api.ts` et gérer le CORS côté backend.
+- HSTS 2 ans (`63072000`) — aligné avec l'entête HSTS du backend (`back/main.py`). Nécessaire pour l'éligibilité HSTS preload.
+- L'app est 100 % client-side render (CSR) — pas de SSG ni ISR utilisés. Toutes les données sont récupérées via TanStack Query côté client.
+
+Variables d'environnement :
+
+| Variable | Défaut | Description |
 |---|---|---|
-| `DAILY_DATA` | `GET /api/daily` | 170 points |
-| `SERVICE_SHARES` | `GET /api/services` | 9 services |
-| `ANOMALY_DATA` | `GET /api/anomalies` | 170 points, 4 anomalies |
-| `STL_DATA` | `GET /api/stl` | 170 points |
-| `FORECAST_DATA` | `GET /api/forecast/` | 30 hist + 60 prév. |
-| `MODEL_BENCHMARKS` | `GET /api/forecast/models` | 6 modèles |
-| `KPI_DATA` | `GET /api/kpi` | 1 objet |
-| `DESCRIPTIVE_STATS` | `GET /api/stats` | 1 objet |
-
-Les valeurs sont calculées avec des fonctions sinus/cosinus (pas de `Math.random()`) pour garantir la reproductibilité entre les rendus SSR et CSR.
-
----
-
-## Intégration API (guide)
-
-### 1. Configurer la variable d'environnement
-
-```env
-# front_finops/.env.local
-NEXT_PUBLIC_API_URL=http://localhost:8080
-```
-
-### 2. Créer un client axios typé
-
-```typescript
-// lib/api.ts
-import axios from "axios"
-
-export const api = axios.create({
-  baseURL: process.env.NEXT_PUBLIC_API_URL,
-  // Convertir snake_case → camelCase si besoin
-})
-```
-
-### 3. Exemple de hook TanStack Query
-
-```typescript
-// lib/hooks/useKPI.ts
-import { useQuery } from "@tanstack/react-query"
-import { api } from "@/lib/api"
-import type { KPIData } from "@/lib/types"
-
-export function useKPI() {
-  return useQuery<KPIData>({
-    queryKey: ["kpi"],
-    queryFn: () => api.get("/api/kpi").then(r => r.data),
-    staleTime: 5 * 60 * 1000,  // 5 minutes
-  })
-}
-```
-
-### 4. Remplacer l'import mockData dans une page
-
-```typescript
-// Avant
-import { KPI_DATA } from "@/lib/mockData"
-
-// Après
-import { useKPI } from "@/lib/hooks/useKPI"
-
-export default function DashboardPage() {
-  const { data: kpi, isLoading } = useKPI()
-  if (isLoading) return <Skeleton />
-  // ...utiliser kpi.totalSpend, kpi.dailyAvg, etc.
-}
-```
-
-### 5. Wrapper QueryClient dans le layout
-
-```tsx
-// app/layout.tsx
-import { QueryClientProvider, QueryClient } from "@tanstack/react-query"
-
-const queryClient = new QueryClient()
-
-export default function RootLayout({ children }) {
-  return (
-    <QueryClientProvider client={queryClient}>
-      {children}
-    </QueryClientProvider>
-  )
-}
-```
+| `NEXT_PUBLIC_API_URL` | `http://localhost:8080` (dev), **required** en prod | Base URL du backend FastAPI |
+| `NODE_ENV` | (auto) | `development` / `production` — pilote l'ajout de HSTS |
 
 ---
 
 ## Démarrage
 
 ```bash
-# Depuis la racine du dépôt
 cd front_finops
 npm install
-npm run dev
-# → http://localhost:3000
+NEXT_PUBLIC_API_URL=http://localhost:8080 npm run dev
+# → http://localhost:3000 (redirection automatique vers /dashboard)
 ```
+
+Scripts :
 
 | Commande | Description |
 |---|---|
-| `npm run dev` | Serveur de développement (hot reload) |
+| `npm run dev` | Serveur de dev avec hot reload (Next.js dev) |
 | `npm run build` | Build de production optimisé |
-| `npm start` | Démarre le serveur de production (après build) |
-| `npm run lint` | ESLint sur tout le projet |
+| `npm start` | Serve la build de prod |
+| `npm run lint` | ESLint 9 flat config |
+| `npx tsc --noEmit` | Type-check strict sans emission |
 
 ---
 
 ## Build & déploiement
 
-### Build statique (CDN / S3)
+### Vercel (recommandé)
 
-Ajouter dans `next.config.js` :
-```js
-const nextConfig = {
-  output: "export",
-  reactStrictMode: true,
-}
-```
+L'app est déjà déployée à `https://finopsgcp.vercel.app/` (URL référencée par le backend via `FRONTEND_URL`).
 
-Puis :
 ```bash
-npm run build
-# → dossier out/ prêt pour S3 / CloudFront
+vercel --prod
 ```
 
-### Container Docker
+Variables à définir dans Vercel :
+
+- `NEXT_PUBLIC_API_URL` = URL publique du backend (ex : `https://finops-dev-alb-…elb.amazonaws.com`)
+
+### Docker (self-hosted)
 
 ```dockerfile
 FROM node:20-alpine AS builder
@@ -463,6 +528,8 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm ci
 COPY . .
+ARG NEXT_PUBLIC_API_URL
+ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
 RUN npm run build
 
 FROM node:20-alpine
@@ -474,8 +541,15 @@ EXPOSE 3000
 CMD ["node", "server.js"]
 ```
 
-### Variables d'environnement en production
+⚠️ `NEXT_PUBLIC_API_URL` doit être injectée **au build**, pas au runtime (Next.js inline les variables `NEXT_PUBLIC_*` dans le bundle client).
 
-| Variable | Exemple | Description |
-|---|---|---|
-| `NEXT_PUBLIC_API_URL` | `https://api.finops.demo.com` | URL de base de l'API FastAPI |
+---
+
+## Design system Sia
+
+- Palette **oklch** définie dans `app/globals.css` (variables CSS pour compatibilité light/dark)
+- Accent primaire : brand (bleu Sia), accent secondaire : coral
+- Motion : `tw-animate-css` pour transitions douces (fade, slide, scale)
+- Iconographie : Lucide React (`lucide-react`) — cohérente, monoline, stroke 2
+- Responsive : mobile-first, breakpoints Tailwind par défaut (sm 640, md 768, lg 1024, xl 1280)
+- A11y : Base UI + shadcn = primitives ARIA-conformes ; `Explain` popover clamped au viewport
