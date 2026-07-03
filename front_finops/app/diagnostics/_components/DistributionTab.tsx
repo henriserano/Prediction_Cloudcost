@@ -12,6 +12,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { EmptyState } from "@/components/ui/empty-state"
 import { useDistribution } from "@/lib/hooks/useApi"
 import { COLOR_CORAL, COLOR_MUTED, chartTooltipStyle, num, fmtP } from "./shared"
+import { Explain, Verdict } from "@/components/ui/explain"
 
 const TEST_LABEL: Record<string, string> = {
   jarque_bera: "Jarque-Bera",
@@ -60,6 +61,26 @@ export default function DistributionTab() {
           sub={Math.abs(data.skewness) < 0.5 ? "Distribution ~symétrique" : data.skewness > 0 ? "Queue à droite" : "Queue à gauche"}
           icon={ArrowLeftRight}
           tone={Math.abs(data.skewness) < 0.5 ? "success" : "coral"}
+          info={
+            <Explain
+              title="Skewness (asymétrie)"
+              tone={Math.abs(data.skewness) < 0.5 ? "success" : "warning"}
+            >
+              <p>
+                Mesure l&apos;asymétrie d&apos;une distribution. <strong>= 0</strong> parfaitement symétrique · <strong>&gt; 0</strong> queue à droite (rares grosses valeurs) · <strong>&lt; 0</strong> queue à gauche.
+              </p>
+              <p className="text-muted-foreground">
+                Repères : |skew| &lt; 0.5 = symétrie acceptable · 0.5–1 = modérée · &gt; 1 = très asymétrique.
+              </p>
+              <Verdict tone={Math.abs(data.skewness) < 0.5 ? "success" : "warning"}>
+                {Math.abs(data.skewness) < 0.5
+                  ? "Distribution quasi-symétrique — les modèles gaussiens sont adaptés."
+                  : data.skewness > 0
+                    ? "Queue à droite : quelques journées de très gros coûts tirent la distribution. Une transformation log peut aider."
+                    : "Queue à gauche : rare en facturation, vérifiez si vous ne cappez pas les valeurs par le haut."}
+              </Verdict>
+            </Explain>
+          }
         />
         <KpiCard
           label="Excess kurtosis"
@@ -67,6 +88,26 @@ export default function DistributionTab() {
           sub={Math.abs(data.kurtosis) < 1 ? "≈ normale" : data.kurtosis > 0 ? "Leptokurtique (queues épaisses)" : "Platykurtique (queues fines)"}
           icon={Gauge}
           tone={Math.abs(data.kurtosis) < 1 ? "success" : "coral"}
+          info={
+            <Explain
+              title="Excess kurtosis"
+              tone={Math.abs(data.kurtosis) < 1 ? "success" : "warning"}
+            >
+              <p>
+                Mesure la <strong>lourdeur des queues</strong> d&apos;une distribution. Version &laquo; excess &raquo; = kurtosis − 3, donc <strong>0 = normale</strong>.
+              </p>
+              <p className="text-muted-foreground">
+                <strong>&gt; 0</strong> leptokurtique (queues épaisses, valeurs extrêmes plus fréquentes) · <strong>&lt; 0</strong> platykurtique (queues fines, distribution &laquo; aplatie &raquo;).
+              </p>
+              <Verdict tone={Math.abs(data.kurtosis) < 1 ? "success" : "warning"}>
+                {Math.abs(data.kurtosis) < 1
+                  ? "Queues proches d'une loi normale — les intervalles de confiance gaussiens sont fiables."
+                  : data.kurtosis > 0
+                    ? "Queues épaisses : les événements extrêmes sont plus fréquents qu'une gaussienne ne le prédit. Prenez des IC plus larges."
+                    : "Queues fines : les extrêmes sont rares, distribution très concentrée autour de la moyenne."}
+              </Verdict>
+            </Explain>
+          }
         />
         <KpiCard
           label="Box-Cox λ"
@@ -82,6 +123,25 @@ export default function DistributionTab() {
           }
           icon={Wand2}
           tone="default"
+          info={
+            <Explain title="Box-Cox lambda" tone="info">
+              <p>
+                Box-Cox trouve la meilleure transformation puissance de la forme <code className="rounded bg-muted px-1">(xᵏ − 1) / λ</code> pour rendre les données les plus gaussiennes possibles.
+              </p>
+              <p className="text-muted-foreground">
+                Valeurs classiques : <strong>λ = 1</strong> pas de transformation · <strong>λ = 0.5</strong> racine carrée · <strong>λ = 0</strong> log · <strong>λ = -1</strong> inverse.
+              </p>
+              <Verdict tone="info">
+                {data.boxcoxLambda == null
+                  ? "Non calculable : Box-Cox exige des valeurs strictement positives."
+                  : Math.abs(data.boxcoxLambda) < 0.1
+                    ? `λ ≈ 0 : une transformation log rendrait votre série quasi-normale.`
+                    : Math.abs(data.boxcoxLambda - 1) < 0.1
+                      ? `λ ≈ 1 : votre série est déjà proche d'une normale, aucune transformation nécessaire.`
+                      : `λ = ${num(data.boxcoxLambda, 2)} : une transformation puissance ${data.boxcoxLambda < 1 ? "compresserait" : "étendrait"} l'échelle pour la normaliser.`}
+              </Verdict>
+            </Explain>
+          }
         />
       </section>
 
@@ -89,6 +149,19 @@ export default function DistributionTab() {
       <SectionCard
         title="Tests de normalité"
         description="Trois tests indépendants · verdict combiné en pied de tableau"
+        info={
+          <Explain title="Tests de normalité" tone="info">
+            <p>
+              Trois tests statistiques évaluent si votre série suit une loi normale N(μ, σ²). H₀ = &laquo; la série est normale &raquo;.
+            </p>
+            <p>
+              <strong>Jarque-Bera</strong> : rapide, basé sur skewness + kurtosis. <strong>Shapiro-Wilk</strong> : puissant pour petits échantillons (n &lt; 5000). <strong>D&apos;Agostino K²</strong> : combine skewness et kurtosis avec correction.
+            </p>
+            <p className="text-muted-foreground">
+              Règle : <strong>p &lt; 0.05</strong> → on rejette H₀ → série non-normale.
+            </p>
+          </Explain>
+        }
       >
         <div className="overflow-x-auto -mx-1">
           <table className="w-full text-sm min-w-[420px]">
@@ -134,6 +207,16 @@ export default function DistributionTab() {
       <SectionCard
         title="QQ-plot (quantiles théoriques vs empiriques)"
         description="Une ligne parfaitement droite indique une distribution normale · déviations = queues"
+        info={
+          <Explain title="Comment lire un QQ-plot" tone="info">
+            <p>
+              Chaque point compare un quantile théorique d&apos;une N(0,1) au quantile observé dans vos données. Sur une distribution parfaitement normale, tous les points seraient <strong>alignés sur la droite pointillée</strong>.
+            </p>
+            <p className="text-muted-foreground">
+              <strong>Courbe qui remonte à droite</strong> → queue droite épaisse. <strong>Qui descend à gauche</strong> → queue gauche épaisse. <strong>Forme en S</strong> → excès de kurtosis. <strong>Points dispersés autour</strong> → normalité correcte.
+            </p>
+          </Explain>
+        }
       >
         <ResponsiveContainer width="100%" height={320}>
           <ScatterChart margin={{ left: -18, right: 8, top: 8, bottom: 8 }}>

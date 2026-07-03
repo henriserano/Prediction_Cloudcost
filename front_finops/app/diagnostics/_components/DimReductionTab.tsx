@@ -14,6 +14,7 @@ import { useDimReduction } from "@/lib/hooks/useApi"
 import {
   CHART_COLORS, COLOR_BRAND, COLOR_CORAL, COLOR_MUTED, chartTooltipStyle, num,
 } from "./shared"
+import { Explain, Verdict } from "@/components/ui/explain"
 
 export default function DimReductionTab() {
   const { data, isLoading, error } = useDimReduction()
@@ -65,6 +66,24 @@ export default function DimReductionTab() {
           sub={`Cumulé sur ${data.pcaComponents.length} composantes`}
           icon={Sparkles}
           tone={data.totalVarianceExplained > 0.8 ? "success" : "coral"}
+          info={
+            <Explain
+              title="Variance expliquée cumulée"
+              tone={data.totalVarianceExplained > 0.8 ? "success" : "warning"}
+            >
+              <p>
+                La PCA projette les <strong>n services</strong> sur des axes orthogonaux qui capturent le plus de variance. La variance cumulée mesure combien d&apos;information est <em>préservée</em> par les k premières composantes.
+              </p>
+              <p className="text-muted-foreground">
+                Règle du pouce : viser <strong>&gt; 80%</strong> pour une bonne fidélité, <strong>&gt; 95%</strong> pour du reporting sans perte.
+              </p>
+              <Verdict tone={data.totalVarianceExplained > 0.8 ? "success" : "warning"}>
+                {data.totalVarianceExplained > 0.8
+                  ? `${(data.totalVarianceExplained * 100).toFixed(1)}% : compression efficace, on peut travailler dans un espace réduit sans perte majeure.`
+                  : `${(data.totalVarianceExplained * 100).toFixed(1)}% : vos ${data.nServices} services ont des dynamiques largement indépendantes — augmenter n_components révélera plus de structure.`}
+              </Verdict>
+            </Explain>
+          }
         />
       </section>
 
@@ -110,6 +129,19 @@ export default function DimReductionTab() {
       <SectionCard
         title="Contributions par composante (loadings)"
         description="Poids des services dans chaque composante principale · signe indique la direction"
+        info={
+          <Explain title="Comment lire les loadings" tone="info">
+            <p>
+              Chaque composante principale est une <strong>combinaison linéaire</strong> des services. Le loading = coefficient du service dans cette combinaison.
+            </p>
+            <p className="text-muted-foreground">
+              <strong>Loading positif</strong> (barre navy à droite) → le service augmente quand cette PC augmente. <strong>Loading négatif</strong> (barre corail à gauche) → le service diminue quand cette PC augmente. |loading| élevé = service <em>déterminant</em> pour cette PC.
+            </p>
+            <p className="text-muted-foreground">
+              Utilité : nommer les composantes (&laquo; axe compute vs stockage &raquo;, &laquo; axe LLM vs infrastructure &raquo;, etc.).
+            </p>
+          </Explain>
+        }
       >
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {data.pcaComponents.map((c, cIdx) => {
@@ -173,6 +205,19 @@ export default function DimReductionTab() {
           data.tsne2d.length > 0
             ? "Chaque point représente un service dans un espace 2D préservant les proximités locales"
             : "Non disponible pour ce dataset (moins de 3 services distincts, ou service qui n'a pas produit d'embeddings)"
+        }
+        info={
+          <Explain title="t-SNE vs PCA" tone="info">
+            <p>
+              <strong>t-SNE</strong> est une projection <em>non linéaire</em> qui préserve les <strong>voisinages locaux</strong>. Deux services proches sur le plan t-SNE ont des profils temporels similaires.
+            </p>
+            <p className="text-muted-foreground">
+              À l&apos;inverse, <strong>les distances globales n&apos;ont pas de sens</strong> en t-SNE. Ne vous fiez pas aux clusters éloignés — un service isolé n&apos;est pas &laquo; l&apos;opposé &raquo; d&apos;un cluster central.
+            </p>
+            <p className="text-muted-foreground">
+              Usage : identifier des <em>groupes de services co-évoluant</em> qu&apos;on pourrait modéliser ensemble.
+            </p>
+          </Explain>
         }
       >
         {data.tsne2d.length === 0 ? (

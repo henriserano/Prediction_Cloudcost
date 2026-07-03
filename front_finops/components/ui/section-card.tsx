@@ -12,6 +12,7 @@ interface SectionCardProps {
   title?: React.ReactNode
   description?: React.ReactNode
   action?: React.ReactNode
+  info?: React.ReactNode
   children: React.ReactNode
   accent?: "brand" | "coral" | "none"
   className?: string
@@ -22,6 +23,7 @@ export function SectionCard({
   title,
   description,
   action,
+  info,
   children,
   accent = "brand",
   className,
@@ -40,11 +42,16 @@ export function SectionCard({
           )}
         />
       )}
-      {(title || description || action) && (
+      {(title || description || action || info) && (
         <CardHeader>
           <div className="flex items-start justify-between gap-3 flex-wrap">
             <div className="min-w-0">
-              {title && <CardTitle className="text-sm">{title}</CardTitle>}
+              {title && (
+                <CardTitle className="text-sm flex items-center gap-2">
+                  <span>{title}</span>
+                  {info}
+                </CardTitle>
+              )}
               {description && (
                 <CardDescription className="text-xs mt-0.5">
                   {description}

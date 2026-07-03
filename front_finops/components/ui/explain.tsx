@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import { createPortal } from "react-dom"
 import { Info } from "lucide-react"
 import { cn } from "@/lib/utils"
 
@@ -10,10 +11,8 @@ interface ExplainProps {
   title: string
   children: React.ReactNode
   tone?: Tone
-  side?: "top" | "bottom"
-  align?: "start" | "center" | "end"
-  triggerClassName?: string
   size?: "sm" | "md" | "lg"
+  triggerClassName?: string
 }
 
 const TRIGGER_TONE: Record<Tone, string> = {
@@ -30,69 +29,129 @@ const HEADER_TONE: Record<Tone, string> = {
   destructive: "text-destructive",
 }
 
-const SIZE: Record<"sm" | "md" | "lg", string> = {
-  sm: "w-56",
-  md: "w-72",
-  lg: "w-96",
+// Requested widths (px). Actual width is min(requested, viewport - margins).
+const SIZE_PX: Record<"sm" | "md" | "lg", number> = {
+  sm: 224,
+  md: 288,
+  lg: 384,
+}
+
+const VIEWPORT_MARGIN = 12 // px of breathing room on each side
+
+interface FloatPosition {
+  top: number
+  left: number
+  width: number
+  arrowLeft: number
+  side: "top" | "bottom"
 }
 
 /**
  * Educational popover: renders a small info icon that reveals a contextual
- * explanation on hover, focus, or tap. Use for metric definitions and verdict
- * interpretation.
- *
- * Content convention: pass children with a short definition first, then a
- * `<Verdict>` block for the contextual reading of the current value.
+ * explanation on hover, focus, or tap. The popover is rendered through a
+ * React Portal to escape parent overflow, and its position is clamped to
+ * the viewport so it never gets clipped.
  */
 export function Explain({
   title,
   children,
   tone = "info",
-  side = "bottom",
-  align = "center",
-  triggerClassName,
   size = "md",
+  triggerClassName,
 }: ExplainProps) {
   const [open, setOpen] = React.useState(false)
-  const containerRef = React.useRef<HTMLSpanElement>(null)
+  const [pos, setPos] = React.useState<FloatPosition | null>(null)
+  const triggerRef = React.useRef<HTMLButtonElement>(null)
+  const [mounted, setMounted] = React.useState(false)
 
-  // Close on outside click (mobile tap-outside)
+  React.useEffect(() => setMounted(true), [])
+
+  const computePosition = React.useCallback((): FloatPosition | null => {
+    const trigger = triggerRef.current
+    if (!trigger) return null
+    const rect = trigger.getBoundingClientRect()
+    const vw = window.innerWidth
+    const vh = window.innerHeight
+
+    // Desired width, capped by viewport width minus margins
+    const desiredW = SIZE_PX[size]
+    const width = Math.min(desiredW, vw - VIEWPORT_MARGIN * 2)
+
+    // Prefer below unless there isn't room; assume popover height ~200px estimate
+    // (we can't measure until rendered, so we use a conservative estimate; the
+    // popover has max-height with scroll if needed).
+    const estimatedH = 240
+    const spaceBelow = vh - rect.bottom
+    const side: "top" | "bottom" = spaceBelow >= estimatedH ? "bottom" : "top"
+    const gap = 6
+
+    const top = side === "bottom" ? rect.bottom + gap : rect.top - gap - estimatedH
+    // Ideally center horizontally on the trigger, but clamp to viewport bounds
+    const triggerCenter = rect.left + rect.width / 2
+    let left = triggerCenter - width / 2
+    left = Math.max(VIEWPORT_MARGIN, Math.min(left, vw - width - VIEWPORT_MARGIN))
+    // Arrow position relative to the popover's own coord system
+    const arrowLeft = triggerCenter - left
+
+    return { top, left, width, arrowLeft, side }
+  }, [size])
+
+  const openPopover = React.useCallback(() => {
+    setOpen(true)
+    setPos(computePosition())
+  }, [computePosition])
+
+  const closePopover = React.useCallback(() => {
+    setOpen(false)
+  }, [])
+
+  // Close on outside click, escape, scroll, resize
   React.useEffect(() => {
     if (!open) return
     function onDoc(e: MouseEvent) {
-      if (!containerRef.current?.contains(e.target as Node)) setOpen(false)
+      if (!triggerRef.current?.contains(e.target as Node)) {
+        // Also allow clicks inside the popover itself (which is portalled) via a data attribute check
+        const target = e.target as HTMLElement | null
+        if (target?.closest("[data-explain-popover]")) return
+        closePopover()
+      }
     }
     function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") setOpen(false)
+      if (e.key === "Escape") closePopover()
     }
+    function onScroll() { closePopover() }
+    function onResize() { closePopover() }
     document.addEventListener("mousedown", onDoc)
     document.addEventListener("keydown", onKey)
+    window.addEventListener("scroll", onScroll, true)
+    window.addEventListener("resize", onResize)
     return () => {
       document.removeEventListener("mousedown", onDoc)
       document.removeEventListener("keydown", onKey)
+      window.removeEventListener("scroll", onScroll, true)
+      window.removeEventListener("resize", onResize)
     }
-  }, [open])
+  }, [open, closePopover])
 
   return (
-    <span
-      ref={containerRef}
-      className="relative inline-flex items-center align-middle"
-      onMouseEnter={() => setOpen(true)}
-      onMouseLeave={() => setOpen(false)}
-    >
+    <>
       <button
+        ref={triggerRef}
         type="button"
+        onMouseEnter={openPopover}
+        onMouseLeave={closePopover}
+        onFocus={openPopover}
+        onBlur={closePopover}
         onClick={(e) => {
           e.preventDefault()
           e.stopPropagation()
-          setOpen((v) => !v)
+          if (open) closePopover()
+          else openPopover()
         }}
-        onFocus={() => setOpen(true)}
-        onBlur={() => setOpen(false)}
         aria-label={`Explication : ${title}`}
         aria-expanded={open}
         className={cn(
-          "inline-flex h-4 w-4 items-center justify-center rounded-full transition-all",
+          "inline-flex h-4 w-4 items-center justify-center rounded-full transition-all align-middle shrink-0",
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--accent-coral)]/40",
           TRIGGER_TONE[tone],
           triggerClassName
@@ -100,18 +159,23 @@ export function Explain({
       >
         <Info className="h-2.5 w-2.5" strokeWidth={2.75} aria-hidden />
       </button>
-      {open && (
-        <span
+
+      {mounted && open && pos && createPortal(
+        <div
+          data-explain-popover
           role="tooltip"
-          className={cn(
-            "absolute z-50 rounded-xl border border-border bg-card p-3.5 shadow-lg pointer-events-auto",
-            SIZE[size],
-            side === "bottom" ? "top-full mt-2" : "bottom-full mb-2",
-            align === "start" && "left-0",
-            align === "center" && "left-1/2 -translate-x-1/2",
-            align === "end" && "right-0"
-          )}
+          onMouseEnter={openPopover}
+          onMouseLeave={closePopover}
           onClick={(e) => e.stopPropagation()}
+          style={{
+            position: "fixed",
+            top: pos.top,
+            left: pos.left,
+            width: pos.width,
+            maxHeight: "min(60vh, 420px)",
+            zIndex: 60,
+          }}
+          className="rounded-xl border border-border bg-card p-3.5 shadow-lg overflow-y-auto animate-in fade-in-0 zoom-in-95"
         >
           <p className={cn(
             "font-semibold text-[13px] mb-2 flex items-center gap-1.5",
@@ -123,9 +187,10 @@ export function Explain({
           <div className="space-y-2 text-[11.5px] text-foreground/80 leading-relaxed">
             {children}
           </div>
-        </span>
+        </div>,
+        document.body
       )}
-    </span>
+    </>
   )
 }
 

@@ -27,10 +27,12 @@ def get_service_shares() -> List[ServiceShare]:
     cvs: dict[str, float] = {}
     for svc in services:
         daily = df[svc].dropna().values.astype(float)
-        if daily.mean() > 0:
-            cvs[svc] = float(np.std(daily, ddof=1) / np.mean(daily) * 100)
-        else:
+        # ddof=1 std is undefined for n<2 and NaN silently propagates through
+        # the schema; also guard against zero mean to avoid division-by-zero.
+        if len(daily) < 2 or daily.mean() <= 0:
             cvs[svc] = 0.0
+            continue
+        cvs[svc] = float(np.std(daily, ddof=1) / np.mean(daily) * 100)
 
     ranked = sorted(totals.items(), key=lambda x: x[1], reverse=True)
     result: List[ServiceShare] = []

@@ -14,6 +14,7 @@ import { EmptyState } from "@/components/ui/empty-state"
 import { useOutliers } from "@/lib/hooks/useApi"
 import { cn } from "@/lib/utils"
 import { CHART_COLORS, COLOR_CORAL, COLOR_MUTED, chartTooltipStyle, num } from "./shared"
+import { Explain, Verdict } from "@/components/ui/explain"
 
 const METHOD_LABEL: Record<string, string> = {
   zscore:            "Z-score",
@@ -21,6 +22,59 @@ const METHOD_LABEL: Record<string, string> = {
   iqr:               "IQR / Tukey",
   isolation_forest:  "Isolation Forest",
   lof:               "LOF",
+}
+
+function methodExplain(method: string, count: number, pct: number): React.ReactNode {
+  const verdictTone = pct === 0 ? "success" : pct > 20 ? "warning" : "info"
+  const verdictText =
+    pct === 0
+      ? `Aucun point ne dépasse le seuil. La série est propre selon ce test.`
+      : pct > 20
+        ? `${count} points flaggés (${pct.toFixed(1)}%). Beaucoup pour un détecteur strict — le seuil est peut-être trop bas ou vos données ont des queues épaisses.`
+        : `${count} points flaggés (${pct.toFixed(1)}%). Quantité raisonnable — inspectez chaque date pour comprendre.`
+  switch (method) {
+    case "zscore":
+      return (
+        <>
+          <p><strong>Z-score</strong> mesure de combien d&apos;écarts-types une valeur s&apos;éloigne de la moyenne. Un |z| supérieur à 2 signale une donnée &laquo; inhabituelle &raquo; (5% des cas dans une loi normale).</p>
+          <p className="text-muted-foreground">Sensible aux outliers eux-mêmes : la moyenne et l&apos;écart-type sont biaisés par les points extrêmes.</p>
+          <Verdict tone={verdictTone as "info" | "success" | "warning"}>{verdictText}</Verdict>
+        </>
+      )
+    case "modified_zscore":
+      return (
+        <>
+          <p><strong>Z modifié (Iglewicz-Hoaglin)</strong> utilise la médiane et le MAD (Median Absolute Deviation) au lieu de la moyenne et de l&apos;écart-type. Beaucoup plus robuste aux outliers.</p>
+          <p className="text-muted-foreground">Seuil classique : |mod-z| supérieur à 3.5.</p>
+          <Verdict tone={verdictTone as "info" | "success" | "warning"}>{verdictText}</Verdict>
+        </>
+      )
+    case "iqr":
+      return (
+        <>
+          <p><strong>IQR / méthode de Tukey</strong> : un point est un outlier s&apos;il tombe hors de [Q1 − k·IQR, Q3 + k·IQR] avec k=1.5 par défaut.</p>
+          <p className="text-muted-foreground">Non paramétrique, ne présuppose aucune loi.</p>
+          <Verdict tone={verdictTone as "info" | "success" | "warning"}>{verdictText}</Verdict>
+        </>
+      )
+    case "isolation_forest":
+      return (
+        <>
+          <p><strong>Isolation Forest</strong> isole récursivement chaque point via des arbres aléatoires. Les points anomaux nécessitent moins de splits pour être isolés → score plus bas.</p>
+          <p className="text-muted-foreground">Multivarié, capture des anomalies subtiles que les tests univariés ratent.</p>
+          <Verdict tone={verdictTone as "info" | "success" | "warning"}>{verdictText}</Verdict>
+        </>
+      )
+    case "lof":
+      return (
+        <>
+          <p><strong>LOF (Local Outlier Factor)</strong> compare la densité locale autour d&apos;un point à celle de ses voisins. Un LOF supérieur à 1 = point moins dense que ses voisins → probablement isolé.</p>
+          <p className="text-muted-foreground">Efficace pour les outliers &laquo; contextuels &raquo; qui semblent normaux globalement.</p>
+          <Verdict tone={verdictTone as "info" | "success" | "warning"}>{verdictText}</Verdict>
+        </>
+      )
+  }
+  return null
 }
 
 export default function OutliersTab() {
@@ -81,6 +135,14 @@ export default function OutliersTab() {
             sub={`${s.flaggedPct.toFixed(1)}% flaggé${s.flaggedCount > 1 ? "s" : ""}${s.threshold != null ? ` · seuil ${s.threshold}` : ""}`}
             icon={s.flaggedCount === 0 ? ShieldCheck : AlertTriangle}
             tone={s.flaggedCount === 0 ? "success" : "coral"}
+            info={
+              <Explain
+                title={METHOD_LABEL[s.method] ?? s.method}
+                tone={s.flaggedCount === 0 ? "success" : "warning"}
+              >
+                {methodExplain(s.method, s.flaggedCount, s.flaggedPct)}
+              </Explain>
+            }
           />
         ))}
         <KpiCard
@@ -89,6 +151,24 @@ export default function OutliersTab() {
           sub={`${data.mahalanobis.length > 0 ? ((mahalanobisFlagged / data.mahalanobis.length) * 100).toFixed(1) : "0"}% · matrice par service`}
           icon={Sigma}
           tone={mahalanobisFlagged === 0 ? "success" : "destructive"}
+          info={
+            <Explain
+              title="Distance de Mahalanobis (MCD)"
+              tone={mahalanobisFlagged === 0 ? "success" : "destructive"}
+            >
+              <p>
+                <strong>Mahalanobis</strong> mesure la distance d&apos;un point à un centre de nuage, en tenant compte de la <em>corrélation entre variables</em>. Ici, la matrice est bâtie <strong>par service</strong>.
+              </p>
+              <p className="text-muted-foreground">
+                <strong>MCD (Minimum Covariance Determinant)</strong> est la version robuste : la covariance est estimée sur un sous-ensemble représentatif, insensible aux outliers extrêmes.
+              </p>
+              <Verdict tone={mahalanobisFlagged === 0 ? "success" : "destructive"}>
+                {mahalanobisFlagged === 0
+                  ? "Aucun point n'est significativement éloigné du centre robuste."
+                  : `${mahalanobisFlagged} jours détectés — vérifiez la corrélation entre services ces jours-là (bug de synchronisation ? incident global ?).`}
+              </Verdict>
+            </Explain>
+          }
         />
       </section>
 
@@ -121,6 +201,16 @@ export default function OutliersTab() {
       <SectionCard
         title="Consensus multi-détecteurs"
         description="Coût brut · nombre de détecteurs qui flaggent chaque date (0 à 5)"
+        info={
+          <Explain title="Consensus multi-détecteurs" tone="info">
+            <p>
+              Chaque méthode a ses forces et ses angles morts. Le <strong>consensus</strong> compte combien de détecteurs (sur 5) sont d&apos;accord pour flagger une date donnée.
+            </p>
+            <p>
+              Une date flaggée par <strong>3 méthodes ou plus</strong> est une anomalie de forte confiance (barre corail). Flaggée par 1-2 méthodes seulement (barre ambre) : à investiguer, potentiellement un faux positif d&apos;un détecteur trop sensible.
+            </p>
+          </Explain>
+        }
       >
         <ResponsiveContainer width="100%" height={280}>
           <ComposedChart data={consensusRows} margin={{ left: -18, right: 8, top: 8 }}>

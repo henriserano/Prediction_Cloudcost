@@ -16,6 +16,7 @@ import {
   CHART_COLORS, COLOR_BRAND, COLOR_CORAL, COLOR_MUTED, chartTooltipStyle, num,
 } from "./shared"
 import { cn } from "@/lib/utils"
+import { Explain } from "@/components/ui/explain"
 
 const HORIZONS: { label: string; value: number }[] = [
   { label: "30 j", value: 30 },
@@ -60,6 +61,16 @@ export default function EnsembleTab() {
           sub={`Moyenne pondérée · ${data.points.length} points`}
           icon={Target}
           tone="coral"
+          info={
+            <Explain title="Prévision stacking" tone="warning">
+              <p>
+                La <strong>prévision stacking</strong> est une moyenne pondérée des 6 modèles de base, où chaque modèle reçoit un poids <em>proportionnel à l&apos;inverse de son MAE</em> (mesuré en cross-validation).
+              </p>
+              <p className="text-muted-foreground">
+                Résultat : les modèles précis pèsent plus lourd, les modèles imprécis sont &laquo; noyés &raquo; mais gardent une petite voix — c&apos;est ce qui rend le stacking robuste.
+              </p>
+            </Explain>
+          }
         />
         <KpiCard
           label="Modèles agrégés"
@@ -67,6 +78,19 @@ export default function EnsembleTab() {
           sub="Bagging + Stacking"
           icon={Layers3}
           tone="default"
+          info={
+            <Explain title="Bagging vs Stacking" tone="info" size="lg">
+              <p>
+                <strong>Bagging</strong> = <em>bootstrap aggregation</em> · moyenne simple non pondérée des prédictions. Simple, robuste au bruit, mais accorde autant d&apos;importance à un mauvais modèle qu&apos;à un bon.
+              </p>
+              <p>
+                <strong>Stacking</strong> = <em>stacked generalization</em> · combinaison pondérée où les poids sont appris. Ici, poids ∝ 1/MAE (méthode simple). Version avancée : entraîner un &laquo; meta-model &raquo; sur les prédictions out-of-fold.
+              </p>
+              <p className="text-muted-foreground">
+                Dans le graphique ci-dessous, la ligne <strong>navy pointillée</strong> est le bagging, la ligne <strong>corail pleine</strong> est le stacking. Comparez les deux pour voir si la pondération apporte quelque chose.
+              </p>
+            </Explain>
+          }
         />
         <KpiCard
           label="Meilleur modèle base"
@@ -216,6 +240,24 @@ export default function EnsembleTab() {
       <SectionCard
         title="Décomposition bias² / variance / total error"
         description="Sur les folds de walk-forward CV · plus la variance est haute, plus le modèle sur-apprend"
+        info={
+          <Explain title="Le tradeoff bias-variance" tone="info" size="lg">
+            <p>
+              L&apos;erreur totale d&apos;un modèle se décompose en trois termes indépendants :
+            </p>
+            <p>
+              <strong>Erreur totale = Bias² + Variance + Bruit irréductible</strong>
+            </p>
+            <ul className="space-y-1.5 pl-3 list-disc marker:text-[color:var(--accent-coral)]">
+              <li><strong>Bias²</strong> · erreur systématique due à un modèle trop simple qui ne capture pas la vraie relation. Un bias élevé = <em>sous-apprentissage</em>.</li>
+              <li><strong>Variance</strong> · sensibilité aux fluctuations des données d&apos;entraînement. Une variance élevée = <em>sur-apprentissage</em>.</li>
+              <li><strong>Bruit irréductible</strong> · limite théorique liée à l&apos;imprédictibilité intrinsèque du phénomène.</li>
+            </ul>
+            <p className="text-muted-foreground">
+              <strong>Le compromis</strong> : réduire le bias augmente typiquement la variance et vice-versa. L&apos;objectif est de minimiser la somme des deux, pas l&apos;un des deux.
+            </p>
+          </Explain>
+        }
       >
         <div className="overflow-x-auto -mx-1">
           <table className="w-full text-sm min-w-[520px]">

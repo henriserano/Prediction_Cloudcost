@@ -12,6 +12,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { EmptyState } from "@/components/ui/empty-state"
 import { useMissing } from "@/lib/hooks/useApi"
 import { COLOR_CORAL, COLOR_MUTED, COLOR_SUCCESS, chartTooltipStyle } from "./shared"
+import { Explain, Verdict } from "@/components/ui/explain"
 
 const MECHANISM_INFO: Record<string, { badge: "success" | "warning" | "destructive"; explanation: string }> = {
   "MCAR-like": {
@@ -85,6 +86,25 @@ export default function MissingTab() {
           sub="Basé sur la corrélation missing ↔ niveau"
           icon={HelpCircle}
           tone={info.badge === "success" ? "success" : info.badge === "warning" ? "coral" : "destructive"}
+          info={
+            <Explain
+              title="MCAR / MAR / MNAR"
+              tone={info.badge === "success" ? "success" : info.badge === "warning" ? "warning" : "destructive"}
+              size="lg"
+            >
+              <p>
+                Trois mécanismes classiques (Rubin 1976) qui déterminent la stratégie d&apos;imputation :
+              </p>
+              <ul className="space-y-1.5 pl-3 list-disc marker:text-[color:var(--accent-coral)]">
+                <li><strong>MCAR</strong> · Missing Completely At Random : le manque est indépendant de tout. Simple à traiter, retrait des lignes acceptable.</li>
+                <li><strong>MAR</strong> · Missing At Random : le manque dépend d&apos;autres variables observées (ex : un service ne facture pas les weekends). Imputation conditionnelle (KNN, MICE).</li>
+                <li><strong>MNAR</strong> · Missing Not At Random : le manque dépend de la valeur manquante elle-même (ex : les gros coûts sont masqués). Cas critique — modélisation explicite requise.</li>
+              </ul>
+              <Verdict tone={info.badge === "success" ? "success" : info.badge === "warning" ? "warning" : "destructive"}>
+                {info.explanation}
+              </Verdict>
+            </Explain>
+          }
         />
       </section>
 
@@ -102,6 +122,16 @@ export default function MissingTab() {
       <SectionCard
         title="Manques par service"
         description="Pourcentage de jours sans données par service · trié décroissant"
+        info={
+          <Explain title="Interpréter les manques par service" tone="info">
+            <p>
+              Un service à <strong>100%</strong> manquant n&apos;a jamais produit de facturation sur la période — probablement une nouvelle intégration.
+            </p>
+            <p className="text-muted-foreground">
+              Les services à <strong>&gt; 80%</strong> perturbent les modèles multi-variés (PCA, ensemble forecast). Envisagez de les exclure de l&apos;analyse ou d&apos;imputer par 0.
+            </p>
+          </Explain>
+        }
       >
         {serviceRows.length === 0 ? (
           <EmptyState title="Aucun service à afficher" />

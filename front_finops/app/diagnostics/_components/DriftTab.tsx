@@ -16,6 +16,7 @@ import {
   COLOR_BRAND, COLOR_CORAL, COLOR_MUTED, COLOR_DEST,
   chartTooltipStyle, num, fmtP,
 } from "./shared"
+import { Explain, Verdict } from "@/components/ui/explain"
 
 const PSI_VARIANT: Record<string, "success" | "warning" | "destructive"> = {
   stable: "success",
@@ -59,6 +60,24 @@ export default function DriftTab() {
           sub={`p = ${fmtP(data.ks.pValue)} · D = ${num(data.ks.statistic, 3)}`}
           icon={GitCompareArrows}
           tone={data.ks.driftDetected ? "destructive" : "success"}
+          info={
+            <Explain
+              title="Test de Kolmogorov-Smirnov"
+              tone={data.ks.driftDetected ? "destructive" : "success"}
+            >
+              <p>
+                Compare deux distributions et mesure leur écart maximal. L&apos;hypothèse H₀ dit &laquo; les deux distributions sont identiques &raquo;.
+              </p>
+              <p className="text-muted-foreground">
+                <strong>p-value &lt; 0.05</strong> → rejet de H₀ → les distributions diffèrent → <strong>drift</strong>.
+              </p>
+              <Verdict tone={data.ks.driftDetected ? "destructive" : "success"}>
+                {data.ks.driftDetected
+                  ? `p = ${fmtP(data.ks.pValue)} < 0.05 : votre distribution récente est significativement différente de la référence.`
+                  : `p = ${fmtP(data.ks.pValue)} ≥ 0.05 : rien à signaler, la distribution reste stable.`}
+              </Verdict>
+            </Explain>
+          }
         />
         <KpiCard
           label="PSI"
@@ -70,6 +89,36 @@ export default function DriftTab() {
               : data.psi.verdict === "moderate" ? "coral"
               : "destructive"
           }
+          info={
+            <Explain
+              title="Population Stability Index (PSI)"
+              tone={
+                data.psi.verdict === "stable" ? "success"
+                  : data.psi.verdict === "moderate" ? "warning"
+                  : "destructive"
+              }
+            >
+              <p>
+                Le PSI compare la distribution binnée d&apos;une variable entre deux périodes. Chaque bin contribue à la somme totale : PSI = Σ (%ᵣ − %ₐ) · ln(%ᵣ / %ₐ).
+              </p>
+              <p className="text-muted-foreground">
+                Seuils conventionnels : <strong>&lt; 0.1</strong> stable · <strong>0.1–0.25</strong> modéré · <strong>&gt; 0.25</strong> significatif (repair !).
+              </p>
+              <Verdict
+                tone={
+                  data.psi.verdict === "stable" ? "success"
+                    : data.psi.verdict === "moderate" ? "warning"
+                    : "destructive"
+                }
+              >
+                PSI = {num(data.psi.psi, 3)}. {data.psi.verdict === "stable"
+                  ? "Aucune action requise."
+                  : data.psi.verdict === "moderate"
+                    ? "Léger déplacement : surveillez, ré-entraînez vos modèles si ça persiste."
+                    : "Drift significatif : ré-entraîner les modèles est fortement recommandé."}
+              </Verdict>
+            </Explain>
+          }
         />
         <KpiCard
           label="Page-Hinkley"
@@ -77,6 +126,24 @@ export default function DriftTab() {
           sub={`${data.nChangepointsDetected === 0 ? "aucun" : "changepoint" + (data.nChangepointsDetected > 1 ? "s" : "")} détecté${data.nChangepointsDetected > 1 ? "s" : ""}`}
           icon={Waves}
           tone={data.nChangepointsDetected === 0 ? "success" : "coral"}
+          info={
+            <Explain
+              title="Page-Hinkley (online change detection)"
+              tone={data.nChangepointsDetected === 0 ? "success" : "warning"}
+            >
+              <p>
+                Test cumulatif qui accumule l&apos;écart entre la valeur observée et la moyenne courante. Quand le cumul dépasse un seuil, un <strong>changepoint</strong> est déclenché.
+              </p>
+              <p className="text-muted-foreground">
+                Idéal pour la détection <strong>online</strong> (temps réel) contrairement à KS/PSI qui sont batch.
+              </p>
+              <Verdict tone={data.nChangepointsDetected === 0 ? "success" : "warning"}>
+                {data.nChangepointsDetected === 0
+                  ? "Aucun changement de régime détecté sur la série."
+                  : `${data.nChangepointsDetected} changepoints détectés — un événement structurel a modifié votre série ces jours-là.`}
+              </Verdict>
+            </Explain>
+          }
         />
       </section>
 

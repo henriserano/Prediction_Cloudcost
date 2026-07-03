@@ -219,18 +219,21 @@ def compute_drift(reference_frac: float = 0.5, psi_bins: int = 10) -> DriftRespo
         n_cur=int(len(cur)),
     )
 
-    # 2. Population Stability Index — bin edges from the reference distribution
-    edges = np.quantile(ref, np.linspace(0, 1, psi_bins + 1))
-    edges = np.unique(edges)
-    if len(edges) < 3:
-        # Series is too concentrated — PSI would divide by zero
+    # 2. Population Stability Index — bin edges from the reference quantiles,
+    # extended to ±∞ so that current-window values outside the reference range
+    # are still counted (otherwise np.histogram drops them and PSI silently
+    # under-reports drift on mean shifts). Laplace smoothing prevents log(0).
+    inner_edges = np.unique(np.quantile(ref, np.linspace(0, 1, psi_bins + 1)))
+    if len(inner_edges) < 2:
+        # Reference is a single value — PSI is mathematically undefined.
         psi = PSIResult(psi=0.0, verdict="insufficient-data", bins=[])
     else:
+        edges = np.concatenate([[-np.inf], inner_edges[1:-1], [np.inf]])
         ref_hist, _ = np.histogram(ref, bins=edges)
         cur_hist, _ = np.histogram(cur, bins=edges)
-        # Laplace smoothing to avoid log(0)
-        ref_pct = (ref_hist + 1e-6) / (ref_hist.sum() + 1e-6 * len(ref_hist))
-        cur_pct = (cur_hist + 1e-6) / (cur_hist.sum() + 1e-6 * len(cur_hist))
+        eps = 1e-6
+        ref_pct = (ref_hist + eps) / (ref_hist.sum() + eps * len(ref_hist))
+        cur_pct = (cur_hist + eps) / (cur_hist.sum() + eps * len(cur_hist))
         contributions = (cur_pct - ref_pct) * np.log(cur_pct / ref_pct)
         psi_value = float(contributions.sum())
         if psi_value < 0.1:
@@ -239,10 +242,15 @@ def compute_drift(reference_frac: float = 0.5, psi_bins: int = 10) -> DriftRespo
             verdict = "moderate"
         else:
             verdict = "significant"
+        # Present ±∞ edges to callers as the actual data extrema so the payload
+        # stays JSON-serializable and readable.
+        display_edges = edges.copy()
+        display_edges[0] = float(min(np.min(ref), np.min(cur)))
+        display_edges[-1] = float(max(np.max(ref), np.max(cur)))
         bins = [
             PSIBin(
-                lower=round(float(edges[i]), 4),
-                upper=round(float(edges[i + 1]), 4),
+                lower=round(float(display_edges[i]), 4),
+                upper=round(float(display_edges[i + 1]), 4),
                 ref_pct=round(float(ref_pct[i]) * 100, 2),
                 cur_pct=round(float(cur_pct[i]) * 100, 2),
                 contribution=round(float(contributions[i]), 6),
@@ -426,39 +434,54 @@ def compute_missingness() -> MissingnessResponse:
                 days=int(len(g)),
             ))
 
-    svc = _service_matrix()
+    # Compute per-service missing rate using the RAW events store (not the
+    # zero-filled pivot). A day where a service has no row in the raw store
+    # is genuinely missing observation; a day where it appears with cost 0
+    # is a legitimate zero, not missing data.
     per_service_missing_pct: dict[str, float] = {}
-    if len(svc) > 0:
-        for col in [c for c in svc.columns if c != "ds"]:
-            values = svc[col].to_numpy(dtype=float)
-            missing_frac = float(np.mean(values == 0.0))
-            per_service_missing_pct[col] = round(missing_frac * 100, 2)
+    try:
+        from routes.routes_events import get_injected_events_df
 
-    # Mechanism hint heuristic:
-    #  MCAR-like: gaps are short and uniformly spread
-    #  MAR-like:  services with high missing % correlate with total cost level
-    #  MNAR-like: missingness clusters at low/high extremes of cost
+        events_df = get_injected_events_df()
+    except Exception:
+        events_df = pd.DataFrame()
+
+    if len(events_df) > 0 and "service" in events_df.columns:
+        n_calendar = len(calendar)
+        for svc_name, grp in events_df.groupby("service"):
+            observed_days = grp["ds"].dt.normalize().nunique()
+            missing_frac = 1.0 - (observed_days / n_calendar) if n_calendar else 0.0
+            per_service_missing_pct[str(svc_name)] = round(max(0.0, missing_frac) * 100, 2)
+    else:
+        # Fallback when raw events are unavailable (e.g., analytics running off
+        # parquet). Skip the per-service field rather than reporting incorrect
+        # numbers from a zero-filled pivot.
+        per_service_missing_pct = {}
+
+    # Mechanism hint — a coarse heuristic based on where calendar gaps fall:
+    #  MCAR-like:  no calendar gaps at all
+    #  MNAR-like:  gap days concentrate below the 25th percentile of cost
+    #              (values missing because they were low → depends on the value)
+    #  MAR-like:   gaps exist but do not concentrate in a specific cost regime
     y = df["y"].to_numpy(dtype=float)
-    if len(gaps) == 0 and not any(pct > 5 for pct in per_service_missing_pct.values()):
+    if len(missing_dates) == 0:
         hint = "MCAR-like"
-    elif per_service_missing_pct:
-        low_days = y < np.percentile(y, 25)
-        # Reindex to calendar to compare missingness on low-cost days
-        full = pd.DataFrame({"ds": calendar}).merge(
-            df, on="ds", how="left"
-        )
-        low_mask = full["y"].fillna(0) < np.percentile(y, 25)
+    elif len(y) >= 4:
+        # Use the observed distribution to infer whether missing days would
+        # have been low-cost (MNAR) — we approximate the missing day cost by
+        # the average of its neighbours in time.
+        full = pd.DataFrame({"ds": calendar}).merge(df, on="ds", how="left")
+        full["neighbor_est"] = full["y"].interpolate(method="linear", limit_direction="both")
+        low_thresh = np.percentile(y, 25)
         missing_mask = full["y"].isna()
         if missing_mask.sum() > 0:
-            frac_low = float((missing_mask & low_mask).sum() / missing_mask.sum())
-            if frac_low > 0.7:
-                hint = "MNAR-like"
-            else:
-                hint = "MAR-like"
+            imputed_costs = full.loc[missing_mask, "neighbor_est"].to_numpy(dtype=float)
+            frac_low = float(np.mean(imputed_costs < low_thresh))
+            hint = "MNAR-like" if frac_low > 0.7 else "MAR-like"
         else:
             hint = "MCAR-like"
     else:
-        hint = "MCAR-like"
+        hint = "insufficient-data"
 
     return MissingnessResponse(
         calendar_days_expected=int(len(calendar)),
@@ -520,13 +543,20 @@ def compute_dim_reduction(n_components: int = 5, run_tsne: bool = True) -> DimRe
             from sklearn.manifold import TSNE
 
             perplexity = max(2, min(30, len(cols) - 1))
-            embed = TSNE(
+            # sklearn ≥ 1.5 renamed `n_iter` → `max_iter`; feature-detect so the
+            # code stays compatible with both APIs.
+            tsne_kwargs = dict(
                 n_components=2,
                 perplexity=perplexity,
                 init="pca",
                 random_state=42,
-                n_iter=500,
-            ).fit_transform(X_scaled.T)  # services × days → services × 2
+            )
+            import inspect
+            if "max_iter" in inspect.signature(TSNE).parameters:
+                tsne_kwargs["max_iter"] = 500
+            else:
+                tsne_kwargs["n_iter"] = 500
+            embed = TSNE(**tsne_kwargs).fit_transform(X_scaled.T)
             tsne_2d = [
                 {"service": cols[i], "x": round(float(embed[i, 0]), 4),
                  "y": round(float(embed[i, 1]), 4)}
@@ -622,7 +652,9 @@ def compute_ensemble_forecast(horizon: int = 60) -> EnsembleForecastResponse:
     lo = np.percentile(stacked, 10, axis=0)
     hi = np.percentile(stacked, 90, axis=0)
 
-    last_date = pd.Timestamp(dates[-1])
+    # Normalise to midnight so future dates don't carry over intra-day drift
+    # if the ingested data was ever tagged with a non-midnight timestamp.
+    last_date = pd.Timestamp(dates[-1]).normalize()
     future_dates = pd.date_range(last_date + pd.Timedelta(days=1), periods=horizon, freq="D")
 
     points = [
@@ -637,22 +669,26 @@ def compute_ensemble_forecast(horizon: int = 60) -> EnsembleForecastResponse:
         for i in range(horizon)
     ]
 
-    # Bias-variance decomposition on the CV folds.
-    # bias^2 = (mean prediction across folds - true mean)^2 averaged over horizon
-    # variance = variance of predictions across folds, averaged over horizon
+    # Bias-variance decomposition on the CV folds, computed per fold and then
+    # averaged so that bias reflects per-fold prediction quality and variance
+    # reflects instability of the prediction across folds relative to the same
+    # test target — not variability across different test folds' true values.
+    #
+    # For each fold f (true = y_f, pred = p_f), we compute the residual r_f =
+    # (p_f - y_f). Total MSE = mean(r_f^2). Variance is the across-fold
+    # variance of residuals at each step, then averaged. Bias^2 = MSE - Var.
     bv: list[BiasVarianceRow] = []
     if cv_trues:
-        y_true_flat = np.concatenate(cv_trues)
+        true_stack = np.vstack(cv_trues)  # (n_folds, h_cv)
         for name, preds_fold in cv_preds.items():
             preds_stack = np.vstack(preds_fold)  # (n_folds, h_cv)
-            mean_pred_per_step = np.mean(preds_stack, axis=0)
-            var_per_step = np.var(preds_stack, axis=0)
-            # True per-step: aggregate over folds
-            true_stack = np.vstack(cv_trues)  # (n_folds, h_cv)
-            mean_true_per_step = np.mean(true_stack, axis=0)
-            bias_sq = float(np.mean((mean_pred_per_step - mean_true_per_step) ** 2))
-            var = float(np.mean(var_per_step))
-            total = float(np.mean((preds_stack - true_stack) ** 2))
+            residuals = preds_stack - true_stack  # (n_folds, h_cv)
+            total = float(np.mean(residuals ** 2))
+            # Variance of the residual across folds (per step), averaged
+            var = float(np.mean(np.var(residuals, axis=0)))
+            # Bias^2 as the remainder; clamp non-negative to guard against
+            # tiny numerical negatives from floating-point subtraction.
+            bias_sq = max(0.0, total - var)
             bv.append(
                 BiasVarianceRow(
                     model=name,

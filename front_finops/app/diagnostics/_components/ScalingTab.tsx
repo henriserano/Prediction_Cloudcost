@@ -8,6 +8,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { EmptyState } from "@/components/ui/empty-state"
 import { useScaling } from "@/lib/hooks/useApi"
 import { COLOR_BRAND, COLOR_CORAL, COLOR_TEAL, COLOR_MUTED, chartTooltipStyle, num } from "./shared"
+import { Explain } from "@/components/ui/explain"
 
 interface ScalerDefinition {
   key: "standard" | "minmax" | "robust"
@@ -101,6 +102,16 @@ export default function ScalingTab() {
       <SectionCard
         title="Séries mises à l'échelle"
         description="Trois transformations superposées · toutes ramenées à des unités comparables"
+        info={
+          <Explain title="Pourquoi mettre à l'échelle ?" tone="info">
+            <p>
+              De nombreux algorithmes ML supposent que <strong>toutes les variables ont des amplitudes comparables</strong> — sinon les variables à grande échelle dominent artificiellement la fonction de coût.
+            </p>
+            <p className="text-muted-foreground">
+              Sur ce graphique, les trois courbes montrent la <em>même série</em> transformée différemment. Le tracé reste identique en forme, seule l&apos;échelle change. Le choix du scaler dépend de la robustesse aux outliers (voir Robust) et des hypothèses de votre modèle aval.
+            </p>
+          </Explain>
+        }
       >
         <ResponsiveContainer width="100%" height={320}>
           <LineChart data={data.points} margin={{ left: -18, right: 8, top: 8 }}>
