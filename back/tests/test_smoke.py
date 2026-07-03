@@ -231,6 +231,38 @@ async def test_aws_status_returns_200_even_without_credentials(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_data_status_reports_empty_when_no_events_and_no_fallback():
+    """GET /api/data/status must respond with source=empty when nothing is loaded."""
+    import httpx
+    from httpx import ASGITransport
+    from main import app
+
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/data/status")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["source"] in {"empty", "events", "parquet_fallback"}
+    assert isinstance(body["rows_daily"], int)
+    assert isinstance(body["parquet_fallback_enabled"], bool)
+
+
+@pytest.mark.asyncio
+async def test_gcp_sync_returns_401_without_token():
+    """POST /api/gcp/sync without OAuth must return 401."""
+    import httpx
+    from httpx import ASGITransport
+    from main import app
+
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/gcp/sync?project_id=my-project-id-123")
+
+    assert response.status_code == 401
+    body = response.json()
+    assert body["error"]["code"] == "UNAUTHORIZED"
+
+
+@pytest.mark.asyncio
 async def test_aws_billing_without_credentials_returns_401(monkeypatch):
     """GET /api/aws/billing must surface 401 when STS rejects the request."""
     import httpx

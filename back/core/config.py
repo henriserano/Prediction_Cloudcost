@@ -56,6 +56,13 @@ class Settings(BaseSettings):
         "account ID suffix automatically; set the full name if it differs.",
     )
 
+    # Data pipeline — controls whether the bundled parquet demo files are used
+    # when no live data has been ingested via /api/events or /api/gcp/sync.
+    # Kept True by default so the dashboard always shows numbers, but live
+    # data always takes precedence when present. Set to False in prod to make
+    # missing data an explicit "no data yet" state rather than fake numbers.
+    data_allow_parquet_fallback: bool = Field(default=True)
+
     # AWS — boto3 uses its default credential chain (env, shared file, IAM role).
     # AWS_REGION is honored automatically by boto3 as well; expose it so the
     # backend can log which region it will hit and pass it explicitly to clients.

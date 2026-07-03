@@ -114,6 +114,21 @@ class GCPBillingResponse(BaseModel):
     )
 
 
+class GCPSyncResponse(BaseModel):
+    """Summary of a /api/gcp/sync run."""
+
+    project_id: str
+    ingested_rows: int
+    period: DateRange
+    total_cost: float
+    currency: str = Field(default="EUR")
+    source: str = Field(
+        default="bigquery_export",
+        description="Where the ingested data came from.",
+    )
+    services_seen: int = Field(default=0)
+
+
 class GCPBillingAccount(BaseModel):
     """Represents a Cloud Billing account visible to the authenticated user."""
 

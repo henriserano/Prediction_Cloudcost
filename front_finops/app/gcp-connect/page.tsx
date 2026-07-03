@@ -21,6 +21,7 @@ import {
   useGCPServices,
   useIngestEvents,
 } from "@/lib/hooks/useApi"
+import { useSelectedGCPProject } from "@/lib/hooks/useSelectedGCPProject"
 import type { GCPBillingByMonth, GCPBillingByService, GCPLogEntry, GCPServiceInfo } from "@/lib/types"
 
 // ---------------------------------------------------------------------------
@@ -499,7 +500,7 @@ function SearchParamsBanners() {
 export default function GCPConnectPage() {
   const { data: status, isLoading: statusLoading } = useGCPStatus()
   const { data: projects, isLoading: projectsLoading } = useGCPProjects()
-  const [selectedProject, setSelectedProject] = useState("")
+  const [selectedProject, setSelectedProject] = useSelectedGCPProject()
 
   const isAuthenticated = status?.authenticated === true
   const email = status?.email ?? ""

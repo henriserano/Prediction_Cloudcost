@@ -11,6 +11,9 @@ import {
   ArrowUpRight,
   Trash2,
   Cloud as CloudIcon,
+  Loader2,
+  ChevronDown,
+  ChevronRight,
 } from "lucide-react"
 import PageShell from "@/components/layout/PageShell"
 import { SectionCard } from "@/components/ui/section-card"
@@ -19,8 +22,8 @@ import { Badge } from "@/components/ui/badge"
 import { useIngestEvents, useGCPStatus } from "@/lib/hooks/useApi"
 import { api } from "@/lib/api"
 import { useQuery, useMutation } from "@tanstack/react-query"
-import type { BillingEvent } from "@/lib/types"
 import { cn } from "@/lib/utils"
+import { parseBillingFile, type ParsedResult } from "@/lib/parsers/billing-file"
 
 // ---------------------------------------------------------------------------
 // Tab definition
@@ -66,85 +69,6 @@ function WarnBanner({ message }: { message: string }) {
 }
 
 // ---------------------------------------------------------------------------
-// CSV parsing
-// ---------------------------------------------------------------------------
-
-interface ParsedResult {
-  events: BillingEvent[]
-  errors: string[]
-  totalRows: number
-}
-
-function parseCSV(text: string): ParsedResult {
-  const errors: string[] = []
-  const lines = text
-    .replace(/﻿/, "")
-    .split(/\r?\n/)
-    .filter((l) => l.trim().length > 0)
-
-  if (lines.length < 2) {
-    return { events: [], errors: ["Le fichier ne contient pas de données."], totalRows: 0 }
-  }
-
-  const firstLine = lines[0]
-  const delimiter = firstLine.includes(";") && !firstLine.includes(",") ? ";" : ","
-
-  const header = firstLine
-    .split(delimiter)
-    .map((h) => h.trim().toLowerCase().replace(/^"|"$/g, ""))
-
-  const idxDate = header.findIndex((h) => ["date", "day", "usage_date", "jour"].includes(h))
-  const idxService = header.findIndex((h) =>
-    ["service", "service_name", "service_description", "sku"].includes(h)
-  )
-  const idxCost = header.findIndex((h) =>
-    ["cost", "amount", "montant", "coût", "cout", "total"].includes(h)
-  )
-  const idxDesc = header.findIndex((h) => ["description", "desc", "libelle", "libellé"].includes(h))
-
-  if (idxDate < 0 || idxService < 0 || idxCost < 0) {
-    return {
-      events: [],
-      errors: [
-        `Colonnes requises manquantes. Attendues : date, service, cost. Trouvées : ${header.join(", ")}`,
-      ],
-      totalRows: lines.length - 1,
-    }
-  }
-
-  const events: BillingEvent[] = []
-  for (let i = 1; i < lines.length; i++) {
-    const cols = lines[i].split(delimiter).map((c) => c.trim().replace(/^"|"$/g, ""))
-    const rawDate = cols[idxDate]
-    const rawCost = cols[idxCost]?.replace(/\s/g, "").replace(",", ".")
-    const service = cols[idxService]
-    const description = idxDesc >= 0 ? cols[idxDesc] : undefined
-
-    if (!rawDate || !service || !rawCost) {
-      errors.push(`Ligne ${i + 1} : valeur manquante`)
-      continue
-    }
-    const cost = parseFloat(rawCost)
-    if (Number.isNaN(cost)) {
-      errors.push(`Ligne ${i + 1} : coût invalide "${cols[idxCost]}"`)
-      continue
-    }
-    if (!/^\d{4}-\d{2}-\d{2}/.test(rawDate)) {
-      errors.push(`Ligne ${i + 1} : date invalide "${rawDate}" (attendu YYYY-MM-DD)`)
-      continue
-    }
-    events.push({
-      date: rawDate.slice(0, 10),
-      service,
-      cost,
-      ...(description ? { description } : {}),
-    })
-  }
-
-  return { events, errors, totalRows: lines.length - 1 }
-}
-
-// ---------------------------------------------------------------------------
 // AWS hooks (placeholder endpoints)
 // ---------------------------------------------------------------------------
 
@@ -183,67 +107,133 @@ function useConnectAWS() {
 }
 
 // ---------------------------------------------------------------------------
-// Tab 1 — File upload
+// Tab 1 — File upload (multi-file, CSV + Excel)
 // ---------------------------------------------------------------------------
 
+interface FileEntry {
+  id: string
+  file: File
+  status: "parsing" | "ready" | "error"
+  parsed?: ParsedResult
+}
+
+let entryIdCounter = 0
+const nextId = () => `f_${++entryIdCounter}_${Date.now()}`
+
 function FileTab() {
-  const [file, setFile] = useState<File | null>(null)
-  const [parsed, setParsed] = useState<ParsedResult | null>(null)
+  const [entries, setEntries] = useState<FileEntry[]>([])
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [dragActive, setDragActive] = useState(false)
   const [replace, setReplace] = useState(false)
   const inputRef = useRef<HTMLInputElement | null>(null)
   const { mutate: ingest, isPending, isSuccess, data, error, reset } = useIngestEvents()
 
-  async function handleFile(f: File) {
-    setFile(f)
+  async function ingestFiles(files: File[]) {
+    if (files.length === 0) return
     reset()
-    if (f.name.toLowerCase().endsWith(".xlsx") || f.name.toLowerCase().endsWith(".xls")) {
-      setParsed({
-        events: [],
-        errors: ["Le format Excel n'est pas encore pris en charge côté client. Merci d'exporter votre fichier au format CSV (UTF-8) et de le re-déposer."],
-        totalRows: 0,
+
+    // Register all files immediately in "parsing" state
+    const staged: FileEntry[] = files.map((f) => ({
+      id: nextId(),
+      file: f,
+      status: "parsing",
+    }))
+    setEntries((prev) => [...prev, ...staged])
+
+    // Parse each in parallel; a single failure never blocks the others
+    await Promise.all(
+      staged.map(async (entry) => {
+        try {
+          const parsed = await parseBillingFile(entry.file)
+          const hasEvents = parsed.events.length > 0
+          const hasBlockingError = !hasEvents && parsed.errors.length > 0
+          setEntries((prev) =>
+            prev.map((e) =>
+              e.id === entry.id
+                ? {
+                    ...e,
+                    parsed,
+                    status: hasBlockingError ? "error" : "ready",
+                  }
+                : e
+            )
+          )
+        } catch {
+          setEntries((prev) =>
+            prev.map((e) => (e.id === entry.id ? { ...e, status: "error" } : e))
+          )
+        }
       })
-      return
-    }
-    try {
-      const text = await f.text()
-      setParsed(parseCSV(text))
-    } catch {
-      setParsed({ events: [], errors: ["Impossible de lire le fichier."], totalRows: 0 })
-    }
+    )
   }
 
   function handleDrop(e: React.DragEvent<HTMLDivElement>) {
     e.preventDefault()
     setDragActive(false)
-    const f = e.dataTransfer.files?.[0]
-    if (f) void handleFile(f)
+    const files = Array.from(e.dataTransfer.files ?? [])
+    if (files.length) void ingestFiles(files)
   }
 
-  function handleReset() {
-    setFile(null)
-    setParsed(null)
+  function handleInputChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(e.target.files ?? [])
+    if (files.length) void ingestFiles(files)
+    if (inputRef.current) inputRef.current.value = ""
+  }
+
+  function removeEntry(id: string) {
+    setEntries((prev) => prev.filter((e) => e.id !== id))
+    setExpanded((prev) => {
+      const next = new Set(prev)
+      next.delete(id)
+      return next
+    })
+  }
+
+  function resetAll() {
+    setEntries([])
+    setExpanded(new Set())
     reset()
     if (inputRef.current) inputRef.current.value = ""
   }
 
-  function handleSubmit() {
-    if (!parsed || parsed.events.length === 0) return
-    ingest({ events: parsed.events, replace })
+  function toggleExpanded(id: string) {
+    setExpanded((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
   }
 
-  const preview = useMemo(() => parsed?.events.slice(0, 5) ?? [], [parsed])
-  const canSubmit = parsed && parsed.events.length > 0 && !isPending && !isSuccess
+  // Aggregate stats + payload
+  const aggregate = useMemo(() => {
+    const events = entries.flatMap((e) => e.parsed?.events ?? [])
+    const totalRows = entries.reduce((s, e) => s + (e.parsed?.totalRows ?? 0), 0)
+    const totalErrors = entries.reduce((s, e) => s + (e.parsed?.errors.length ?? 0), 0)
+    const filesOk = entries.filter((e) => e.status === "ready").length
+    const filesErr = entries.filter((e) => e.status === "error").length
+    const filesParsing = entries.filter((e) => e.status === "parsing").length
+    return { events, totalRows, totalErrors, filesOk, filesErr, filesParsing }
+  }, [entries])
+
+  const canSubmit =
+    aggregate.events.length > 0 && aggregate.filesParsing === 0 && !isPending && !isSuccess
+
+  function handleSubmit() {
+    if (!canSubmit) return
+    ingest({ events: aggregate.events, replace })
+  }
 
   return (
     <SectionCard
-      title="Importer un fichier de facturation"
+      title="Importer un ou plusieurs fichiers de facturation"
       description={
         <>
-          Format attendu : colonnes <code className="rounded bg-muted px-1 py-0.5 text-[10.5px]">date</code>,{" "}
+          Formats acceptés : <strong>CSV</strong>, <strong>Excel</strong> (.xlsx, .xls, .xlsm).
+          Colonnes requises : <code className="rounded bg-muted px-1 py-0.5 text-[10.5px]">date</code>,{" "}
           <code className="rounded bg-muted px-1 py-0.5 text-[10.5px]">service</code>,{" "}
-          <code className="rounded bg-muted px-1 py-0.5 text-[10.5px]">cost</code> (optionnel{" "}
-          <code className="rounded bg-muted px-1 py-0.5 text-[10.5px]">description</code>). Dates au format ISO YYYY-MM-DD.
+          <code className="rounded bg-muted px-1 py-0.5 text-[10.5px]">cost</code>. Optionnel{" "}
+          <code className="rounded bg-muted px-1 py-0.5 text-[10.5px]">description</code>. Dates ISO, EU (JJ/MM/AAAA) ou format Excel — tout est reconnu automatiquement.
         </>
       }
       contentClassName="space-y-4"
@@ -262,7 +252,7 @@ function FileTab() {
         }}
         role="button"
         tabIndex={0}
-        aria-label="Zone de dépôt de fichier"
+        aria-label="Zone de dépôt de fichiers"
         className={cn(
           "flex flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed px-6 py-10 text-center cursor-pointer transition-all",
           dragActive
@@ -274,87 +264,210 @@ function FileTab() {
           <UploadCloud className="h-6 w-6 text-[color:var(--accent-coral)]" aria-hidden />
         </div>
         <div>
-          <p className="text-sm font-semibold text-foreground">Glissez-déposez votre fichier ici</p>
+          <p className="text-sm font-semibold text-foreground">
+            Glissez-déposez vos fichiers ici
+          </p>
           <p className="text-xs text-muted-foreground mt-0.5">
-            ou cliquez pour parcourir · CSV (UTF-8) recommandé
+            ou cliquez pour parcourir · plusieurs fichiers autorisés
           </p>
         </div>
         <input
           ref={inputRef}
           type="file"
-          accept=".csv,.xlsx,.xls,text/csv"
+          multiple
+          accept=".csv,.xlsx,.xls,.xlsm,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
           className="hidden"
-          onChange={(e) => {
-            const f = e.target.files?.[0]
-            if (f) void handleFile(f)
-          }}
+          onChange={handleInputChange}
         />
       </div>
 
-      {file && (
-        <div className="flex items-center justify-between rounded-lg border border-border bg-muted/30 px-3 py-2 text-sm">
-          <div className="flex items-center gap-2 min-w-0">
-            <FileSpreadsheet className="h-4 w-4 text-muted-foreground shrink-0" aria-hidden />
-            <span className="truncate font-medium">{file.name}</span>
-            <span className="text-xs text-muted-foreground shrink-0 tabular-nums">
-              {(file.size / 1024).toFixed(1)} Ko
-            </span>
-          </div>
-          <button
-            onClick={handleReset}
-            className="rounded-md p-1 text-muted-foreground hover:text-destructive hover:bg-destructive/8 transition-colors"
-            aria-label="Retirer le fichier"
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-          </button>
-        </div>
-      )}
-
-      {parsed && parsed.errors.length > 0 && parsed.events.length === 0 && (
-        <ErrorBanner message={parsed.errors[0]} />
-      )}
-      {parsed && parsed.errors.length > 0 && parsed.events.length > 0 && (
-        <WarnBanner
-          message={`${parsed.errors.length} ligne${parsed.errors.length > 1 ? "s" : ""} ignorée${parsed.errors.length > 1 ? "s" : ""} sur ${parsed.totalRows}.`}
-        />
-      )}
-
-      {parsed && parsed.events.length > 0 && (
+      {/* File list */}
+      {entries.length > 0 && (
         <div className="space-y-2">
           <div className="flex items-center justify-between">
             <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
-              Aperçu · {parsed.events.length} ligne{parsed.events.length > 1 ? "s" : ""} valide{parsed.events.length > 1 ? "s" : ""}
+              Fichiers · {entries.length}
             </p>
-            <Badge variant="outline">
-              {parsed.events.length}/{parsed.totalRows}
-            </Badge>
+            <button
+              onClick={resetAll}
+              className="text-[11px] text-muted-foreground hover:text-destructive transition-colors"
+            >
+              Tout retirer
+            </button>
           </div>
-          <div className="rounded-lg border border-border overflow-hidden">
-            <table className="w-full text-xs">
-              <thead className="bg-muted/50 text-muted-foreground">
-                <tr>
-                  <th className="text-left px-3 py-2 font-medium">Date</th>
-                  <th className="text-left px-3 py-2 font-medium">Service</th>
-                  <th className="text-right px-3 py-2 font-medium">Coût</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border">
-                {preview.map((ev, i) => (
-                  <tr key={i}>
-                    <td className="px-3 py-2 tabular-nums">{ev.date}</td>
-                    <td className="px-3 py-2 truncate max-w-[240px]">{ev.service}</td>
-                    <td className="px-3 py-2 text-right tabular-nums font-medium">
-                      {ev.cost.toLocaleString("fr-FR", { minimumFractionDigits: 2 })}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+
+          <ul className="space-y-1.5">
+            {entries.map((entry) => {
+              const isExpanded = expanded.has(entry.id)
+              const parsed = entry.parsed
+              const hasErrors = (parsed?.errors.length ?? 0) > 0
+              return (
+                <li
+                  key={entry.id}
+                  className={cn(
+                    "rounded-lg border transition-colors",
+                    entry.status === "error"
+                      ? "border-destructive/25 bg-destructive/5"
+                      : entry.status === "ready" && hasErrors
+                        ? "border-[color:var(--warning)]/30 bg-[color:var(--warning)]/8"
+                        : "border-border bg-muted/20"
+                  )}
+                >
+                  <div className="flex items-center gap-2.5 px-3 py-2.5">
+                    <FileEntryIcon status={entry.status} />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium truncate">{entry.file.name}</p>
+                      <div className="flex items-center gap-2 text-[11px] text-muted-foreground tabular-nums">
+                        <span>{formatSize(entry.file.size)}</span>
+                        {parsed && (
+                          <>
+                            <span aria-hidden>·</span>
+                            <span>
+                              {parsed.events.length}/{parsed.totalRows} ligne{parsed.totalRows > 1 ? "s" : ""} valide{parsed.events.length > 1 ? "s" : ""}
+                            </span>
+                            <Badge variant="muted" size="sm">
+                              {parsed.format.toUpperCase()}
+                            </Badge>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                    {entry.status === "parsing" ? (
+                      <Badge variant="muted" size="sm">
+                        <Loader2 className="h-3 w-3 animate-spin" aria-hidden />
+                        Analyse…
+                      </Badge>
+                    ) : entry.status === "error" ? (
+                      <Badge variant="destructive" size="sm">Erreur</Badge>
+                    ) : hasErrors ? (
+                      <Badge variant="warning" size="sm">
+                        {parsed?.errors.length} avertissement{(parsed?.errors.length ?? 0) > 1 ? "s" : ""}
+                      </Badge>
+                    ) : (
+                      <Badge variant="success" size="sm">OK</Badge>
+                    )}
+                    {parsed && (parsed.errors.length > 0 || parsed.events.length > 0) && (
+                      <button
+                        onClick={() => toggleExpanded(entry.id)}
+                        className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+                        aria-label={isExpanded ? "Réduire les détails" : "Afficher les détails"}
+                        aria-expanded={isExpanded}
+                      >
+                        {isExpanded ? (
+                          <ChevronDown className="h-3.5 w-3.5" />
+                        ) : (
+                          <ChevronRight className="h-3.5 w-3.5" />
+                        )}
+                      </button>
+                    )}
+                    <button
+                      onClick={() => removeEntry(entry.id)}
+                      className="rounded-md p-1 text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
+                      aria-label={`Retirer ${entry.file.name}`}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+
+                  {/* Details */}
+                  {isExpanded && parsed && (
+                    <div className="border-t border-border/60 px-3 py-2.5 space-y-2 bg-card/50">
+                      {parsed.detectedColumns && (
+                        <p className="text-[11px] text-muted-foreground">
+                          Colonnes détectées :{" "}
+                          <span className="text-foreground font-medium">{parsed.detectedColumns.date}</span> · {" "}
+                          <span className="text-foreground font-medium">{parsed.detectedColumns.service}</span> · {" "}
+                          <span className="text-foreground font-medium">{parsed.detectedColumns.cost}</span>
+                          {parsed.detectedColumns.description && (
+                            <> · <span className="text-foreground font-medium">{parsed.detectedColumns.description}</span></>
+                          )}
+                        </p>
+                      )}
+                      {parsed.errors.length > 0 && (
+                        <div className="max-h-32 overflow-y-auto rounded-md bg-muted/40 border border-border/60 p-2 space-y-0.5">
+                          {parsed.errors.slice(0, 20).map((err, i) => (
+                            <p key={i} className="text-[11px] text-muted-foreground">
+                              {err.line > 0 ? `Ligne ${err.line} · ` : ""}
+                              {err.message}
+                            </p>
+                          ))}
+                          {parsed.errors.length > 20 && (
+                            <p className="text-[11px] text-muted-foreground italic">
+                              + {parsed.errors.length - 20} autre{parsed.errors.length - 20 > 1 ? "s" : ""}…
+                            </p>
+                          )}
+                        </div>
+                      )}
+                      {parsed.events.length > 0 && (
+                        <div className="rounded-md border border-border/60 overflow-hidden">
+                          <table className="w-full text-xs">
+                            <thead className="bg-muted/60 text-muted-foreground">
+                              <tr>
+                                <th className="text-left px-2.5 py-1.5 font-medium">Date</th>
+                                <th className="text-left px-2.5 py-1.5 font-medium">Service</th>
+                                <th className="text-right px-2.5 py-1.5 font-medium">Coût</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-border">
+                              {parsed.events.slice(0, 5).map((ev, i) => (
+                                <tr key={i}>
+                                  <td className="px-2.5 py-1.5 tabular-nums">{ev.date}</td>
+                                  <td className="px-2.5 py-1.5 truncate max-w-[220px]">{ev.service}</td>
+                                  <td className="px-2.5 py-1.5 text-right tabular-nums font-medium">
+                                    {ev.cost.toLocaleString("fr-FR", { minimumFractionDigits: 2 })}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </li>
+              )
+            })}
+          </ul>
+        </div>
+      )}
+
+      {/* Aggregate summary */}
+      {entries.length > 0 && aggregate.filesParsing === 0 && (
+        <div className="rounded-xl border border-border bg-card p-3.5 grid grid-cols-3 gap-3">
+          <div>
+            <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-semibold">
+              Fichiers OK
+            </p>
+            <p className="mt-0.5 font-heading text-lg font-semibold tabular-nums text-[color:var(--success)]">
+              {aggregate.filesOk}
+            </p>
+          </div>
+          <div>
+            <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-semibold">
+              Événements valides
+            </p>
+            <p className="mt-0.5 font-heading text-lg font-semibold tabular-nums text-foreground">
+              {aggregate.events.length.toLocaleString("fr-FR")}
+            </p>
+          </div>
+          <div>
+            <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-semibold">
+              Avertissements
+            </p>
+            <p
+              className={cn(
+                "mt-0.5 font-heading text-lg font-semibold tabular-nums",
+                aggregate.totalErrors > 0 ? "text-[color:var(--warning-foreground)]" : "text-muted-foreground"
+              )}
+            >
+              {aggregate.totalErrors}
+            </p>
           </div>
         </div>
       )}
 
-      {parsed && parsed.events.length > 0 && (
+      {/* Replace toggle */}
+      {aggregate.events.length > 0 && (
         <label className="flex items-center gap-2 text-sm">
           <input
             type="checkbox"
@@ -363,30 +476,72 @@ function FileTab() {
             className="h-4 w-4 rounded border-border accent-[color:var(--accent-coral)]"
           />
           <span className="text-muted-foreground">
-            Remplacer les données existantes <span className="text-foreground/60">(sinon, ajout à l&apos;existant)</span>
+            Remplacer les données existantes{" "}
+            <span className="text-foreground/60">(sinon, ajout à l&apos;existant)</span>
           </span>
         </label>
       )}
 
+      {/* Global banners */}
       {isSuccess && data && (
         <SuccessBanner
-          message={`${data.ingested} événement${data.ingested > 1 ? "s" : ""} importé${data.ingested > 1 ? "s" : ""} · période ${data.dateRange.start} → ${data.dateRange.end}.`}
+          message={`${data.ingested.toLocaleString("fr-FR")} événement${data.ingested > 1 ? "s" : ""} importé${data.ingested > 1 ? "s" : ""} · période ${data.dateRange.start} → ${data.dateRange.end}.`}
         />
       )}
-      {error && <ErrorBanner message="Échec de l'import. Vérifiez le format du fichier et réessayez." />}
+      {error && (
+        <ErrorBanner message="Échec de l'import côté serveur. Vérifiez le backend et réessayez." />
+      )}
+      {aggregate.filesErr > 0 && !isSuccess && (
+        <WarnBanner
+          message={`${aggregate.filesErr} fichier${aggregate.filesErr > 1 ? "s" : ""} illisible${aggregate.filesErr > 1 ? "s" : ""} — ignoré${aggregate.filesErr > 1 ? "s" : ""} dans le batch.`}
+        />
+      )}
 
-      <div className="flex gap-2">
+      {/* Actions */}
+      <div className="flex gap-2 flex-wrap">
         <Button onClick={handleSubmit} disabled={!canSubmit}>
-          {isPending ? "Import en cours…" : isSuccess ? "Importé" : "Envoyer au modèle"}
+          {isPending
+            ? "Import en cours…"
+            : isSuccess
+              ? "Importé"
+              : `Envoyer au modèle${aggregate.events.length > 0 ? ` · ${aggregate.events.length.toLocaleString("fr-FR")}` : ""}`}
         </Button>
         {isSuccess && (
-          <Button variant="outline" onClick={handleReset}>
-            Importer un autre fichier
+          <Button variant="outline" onClick={resetAll}>
+            Importer d&apos;autres fichiers
           </Button>
         )}
       </div>
     </SectionCard>
   )
+}
+
+function FileEntryIcon({ status }: { status: FileEntry["status"] }) {
+  if (status === "parsing") {
+    return (
+      <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-muted text-muted-foreground shrink-0">
+        <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+      </span>
+    )
+  }
+  if (status === "error") {
+    return (
+      <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-destructive/12 text-destructive shrink-0">
+        <XCircle className="h-4 w-4" aria-hidden />
+      </span>
+    )
+  }
+  return (
+    <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-muted text-muted-foreground shrink-0">
+      <FileSpreadsheet className="h-4 w-4" aria-hidden />
+    </span>
+  )
+}
+
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} o`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} Ko`
+  return `${(bytes / 1024 / 1024).toFixed(2)} Mo`
 }
 
 // ---------------------------------------------------------------------------

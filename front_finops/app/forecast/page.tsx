@@ -35,6 +35,10 @@ const FAMILY_VARIANT: Record<string, "default" | "coral" | "success" | "warning"
 const COLOR_CORAL = "oklch(0.66 0.185 28)"
 const COLOR_MUTED = "oklch(0.65 0.02 250)"
 
+// Metrics can be null when a fold failed backend-side. Never call .toFixed directly.
+const num = (n: number | null | undefined, d = 2) =>
+  n == null || Number.isNaN(n) ? "—" : n.toFixed(d)
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Horizon segmented control
 // ─────────────────────────────────────────────────────────────────────────────
@@ -125,7 +129,7 @@ function ModelPicker({
             </div>
             <Badge variant={variant} size="sm">{m.family}</Badge>
             <span className="text-[10px] text-muted-foreground tabular-nums font-medium">
-              MAE {m.mae.toFixed(2)} €
+              MAE {num(m.mae)} €
             </span>
             {active && (
               <span
@@ -165,7 +169,7 @@ export default function ForecastPage() {
       title="Prévision"
       description={
         summary
-          ? `Champion : ${summary.bestModel} · horizon ${summary.horizonDays} j · MAE ${summary.bestModelMae.toFixed(2)} €`
+          ? `Champion : ${summary.bestModel} · horizon ${summary.horizonDays} j · MAE ${num(summary.bestModelMae)} €`
           : "Sélectionnez un modèle et un horizon"
       }
     >
@@ -192,7 +196,7 @@ export default function ForecastPage() {
             <KpiCard
               label={`Prévision · ${horizon} jours`}
               value={`${forecastTotal.toLocaleString("fr-FR", { maximumFractionDigits: 0 })} €`}
-              sub={`~${summary.dailyAvgForecast.toFixed(0)} €/j en moyenne`}
+              sub={`~${num(summary.dailyAvgForecast, 0)} €/j en moyenne`}
               icon={TrendingUp}
               tone="coral"
             />
@@ -205,10 +209,10 @@ export default function ForecastPage() {
             />
             <KpiCard
               label="Précision"
-              value={`${summary.bestModelMae.toFixed(2)} €`}
-              sub={`MAPE ${summary.bestModelMape.toFixed(1)}% · RMSE ${activeBench?.rmse.toFixed(2) ?? "—"} €`}
+              value={`${num(summary.bestModelMae)} €`}
+              sub={`MAPE ${num(summary.bestModelMape, 1)}% · RMSE ${num(activeBench?.rmse)} €`}
               icon={Target}
-              tone={summary.bestModelMape < 15 ? "success" : "destructive"}
+              tone={summary.bestModelMape != null && summary.bestModelMape < 15 ? "success" : "destructive"}
             />
           </>
         )}
@@ -340,18 +344,18 @@ export default function ForecastPage() {
                         <td className="py-2.5 pr-3 hidden sm:table-cell">
                           <Badge variant={variant} size="sm">{m.family}</Badge>
                         </td>
-                        <td className="py-2.5 text-right tabular-nums">{m.mae.toFixed(2)} €</td>
-                        <td className="py-2.5 text-right tabular-nums hidden sm:table-cell">{m.rmse.toFixed(2)} €</td>
-                        <td className="py-2.5 text-right tabular-nums">{m.mape.toFixed(1)}%</td>
+                        <td className="py-2.5 text-right tabular-nums">{num(m.mae)} €</td>
+                        <td className="py-2.5 text-right tabular-nums hidden sm:table-cell">{num(m.rmse)} €</td>
+                        <td className="py-2.5 text-right tabular-nums">{num(m.mape, 1)}%</td>
                         <td
                           className={cn(
                             "py-2.5 text-right tabular-nums hidden sm:table-cell",
-                            m.r2 < 0 ? "text-destructive" : "text-[color:var(--success)]"
+                            m.r2 != null && m.r2 < 0 ? "text-destructive" : "text-[color:var(--success)]"
                           )}
                         >
-                          {m.r2.toFixed(4)}
+                          {num(m.r2, 4)}
                         </td>
-                        <td className="py-2.5 text-right tabular-nums font-bold pr-1">{m.score.toFixed(2)}</td>
+                        <td className="py-2.5 text-right tabular-nums font-bold pr-1">{num(m.score)}</td>
                       </tr>
                     )
                   })}

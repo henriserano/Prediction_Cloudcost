@@ -51,6 +51,27 @@ def get_service_shares() -> List[ServiceShare]:
     return result
 
 
+def _empty_kpi() -> KPIData:
+    """Neutral KPI payload returned when no data has been loaded yet.
+
+    Prevents 500s on /api/kpi when the events store is empty and no parquet
+    fallback is available — the frontend should surface an empty state instead
+    of an error toast.
+    """
+    return KPIData(
+        total_spend=0.0,
+        daily_avg=0.0,
+        trend_slope=0.0,
+        forecast_next_30=0.0,
+        anomaly_count=0,
+        top_service="",
+        top_service_pct=0.0,
+        data_points=0,
+        period_start="",
+        period_end="",
+    )
+
+
 def get_kpi() -> KPIData:
     cached = app_cache.get("analytics:kpi")
     if cached is not None:
@@ -58,28 +79,44 @@ def get_kpi() -> KPIData:
     daily = load_daily_costs()
     svc_df = load_daily_per_service()
 
+    if len(daily) == 0 or "y" not in daily.columns:
+        kpi = _empty_kpi()
+        app_cache.set("analytics:kpi", kpi)
+        return kpi
+
     arr = daily["y"].values.astype(float)
     total_spend = float(arr.sum())
     daily_avg = float(np.mean(arr))
 
-    # Linear trend slope (€/day)
-    x = np.arange(len(arr), dtype=float)
-    coeffs = np.polyfit(x, arr, 1)
-    slope = float(coeffs[0])
+    # Linear trend slope (€/day) — polyfit needs ≥ 2 points.
+    if len(arr) >= 2:
+        x = np.arange(len(arr), dtype=float)
+        coeffs = np.polyfit(x, arr, 1)
+        slope = float(coeffs[0])
+    else:
+        slope = 0.0
 
-    # 30-day forecast using average of last 14 days
-    last_14_avg = float(np.mean(arr[-14:]))
+    # 30-day forecast using average of the last up-to-14 days
+    last_window = arr[-14:] if len(arr) >= 14 else arr
+    last_14_avg = float(np.mean(last_window))
     forecast_30 = round(last_14_avg * 30, 2)
 
-    # Anomaly count (Z > 2)
-    mean_, std_ = np.mean(arr), np.std(arr, ddof=1)
-    anomaly_count = int(np.sum(np.abs((arr - mean_) / std_) > 2.0))
+    # Anomaly count (Z > 2) — std needs ≥ 2 samples with ddof=1.
+    if len(arr) >= 2:
+        mean_, std_ = np.mean(arr), np.std(arr, ddof=1)
+        anomaly_count = int(np.sum(np.abs((arr - mean_) / std_) > 2.0)) if std_ > 0 else 0
+    else:
+        anomaly_count = 0
 
     # Top service
     services = [c for c in svc_df.columns if c != "ds"]
     totals = {svc: float(svc_df[svc].sum()) for svc in services}
-    top_svc = max(totals, key=lambda k: totals[k])
-    top_pct = round(totals[top_svc] / total_spend * 100, 2)
+    if totals:
+        top_svc = max(totals, key=lambda k: totals[k])
+        top_pct = round(totals[top_svc] / total_spend * 100, 2) if total_spend > 0 else 0.0
+    else:
+        top_svc = ""
+        top_pct = 0.0
 
     kpi = KPIData(
         total_spend=round(total_spend, 2),

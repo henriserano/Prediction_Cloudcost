@@ -22,6 +22,7 @@ from schemas.gcp import (
     GCPLogEntry,
     GCPProject,
     GCPService,
+    GCPSyncResponse,
     DateRange,
 )
 from core.config import get_settings
@@ -680,6 +681,155 @@ def gcp_billing(
             code="GCP_BILLING_ERROR",
             status_code=502,
         )
+
+
+# ---------------------------------------------------------------------------
+# Sync — pull real GCP data into the in-memory store
+# ---------------------------------------------------------------------------
+
+def _bq_rows_for_project(project_id: str, months: int) -> Optional[list[dict]]:
+    """Query the Billing BigQuery export and return per-day, per-service rows.
+
+    Returns None when the export is not configured or the library is missing —
+    the caller must raise a config error, not return an empty result.
+    """
+    settings = get_settings()
+    if not (
+        settings.gcp_billing_export_project
+        and settings.gcp_billing_export_dataset
+        and settings.gcp_billing_export_table
+    ):
+        return None
+
+    try:
+        from google.cloud import bigquery  # type: ignore
+    except Exception:
+        logger.warning("bigquery_library_unavailable_during_sync")
+        return None
+
+    client = bigquery.Client(project=settings.gcp_billing_export_project)
+    table_fqn = (
+        f"`{settings.gcp_billing_export_project}."
+        f"{settings.gcp_billing_export_dataset}."
+        f"{settings.gcp_billing_export_table}`"
+    )
+
+    query = f"""
+        SELECT
+          DATE(usage_start_time) AS day,
+          service.description AS service,
+          SUM(cost) AS cost,
+          ANY_VALUE(currency) AS currency
+        FROM {table_fqn}
+        WHERE project.id = @project_id
+          AND usage_start_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @months MONTH)
+        GROUP BY day, service
+        HAVING cost > 0
+        ORDER BY day
+    """
+    job = client.query(
+        query,
+        job_config=bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("project_id", "STRING", project_id),
+                bigquery.ScalarQueryParameter("months", "INT64", months),
+            ]
+        ),
+    )
+    return [dict(r) for r in job.result()]
+
+
+@router.post(
+    "/sync",
+    response_model=GCPSyncResponse,
+    summary="Pull real cost data from GCP and refresh in-memory analytics",
+)
+def gcp_sync(
+    project_id: Annotated[str, Query(description="GCP project ID to sync")],
+    months: Annotated[int, Query(ge=1, le=24)] = 6,
+) -> GCPSyncResponse:
+    """Fetch cost data from the BigQuery Billing Export and load it into the
+    in-memory events store, then invalidate every downstream cache so /kpi,
+    /daily, /services, /forecast/* all recompute against the fresh data.
+
+    Requires the ``GCP_BILLING_EXPORT_*`` env vars to be set. Never falls back
+    to the parquet demo — the point of this route is to guarantee live data.
+    """
+    _validate_project_id(project_id)
+    _get_credentials()  # ensure the user is authenticated; raises 401 otherwise
+
+    rows = _bq_rows_for_project(project_id, months)
+    if rows is None:
+        raise AppError(
+            "BigQuery Billing Export is not configured. Set "
+            "GCP_BILLING_EXPORT_PROJECT, GCP_BILLING_EXPORT_DATASET and "
+            "GCP_BILLING_EXPORT_TABLE in back/.env, then restart the server.",
+            code="CONFIGURATION_ERROR",
+            status_code=500,
+        )
+    if not rows:
+        raise AppError(
+            f"No billing rows found in the export for project '{project_id}' "
+            f"over the last {months} months. Verify the export table name and "
+            f"that this project actually incurred cost.",
+            code="NOT_FOUND",
+            status_code=404,
+            details={"project_id": project_id, "months": months},
+        )
+
+    from routes.routes_events import _injected_events  # type: ignore
+    from core.cache import app_cache
+    from data.loader import invalidate_cache
+
+    normalized: list[dict] = []
+    currency = "EUR"
+    for r in rows:
+        day = r["day"]
+        day_iso = day.isoformat() if hasattr(day, "isoformat") else str(day)
+        currency = r.get("currency") or currency
+        normalized.append(
+            {
+                "ds": day_iso,
+                "Sous-total (€)": float(r.get("cost") or 0.0),
+                "service": str(r.get("service") or "Unknown"),
+                "description": "",
+            }
+        )
+
+    _injected_events.clear()
+    _injected_events.extend(normalized)
+
+    app_cache.clear()
+    invalidate_cache()
+
+    import pandas as pd
+
+    df = pd.DataFrame(normalized)
+    df["ds"] = pd.to_datetime(df["ds"])
+    period_start = df["ds"].min().strftime("%Y-%m-%d")
+    period_end = df["ds"].max().strftime("%Y-%m-%d")
+    total_cost = float(df["Sous-total (€)"].sum())
+    services_seen = df["service"].nunique()
+
+    logger.info(
+        "gcp_sync_completed",
+        extra={
+            "project_id": project_id,
+            "ingested_rows": len(normalized),
+            "total_cost": round(total_cost, 2),
+            "services_seen": int(services_seen),
+        },
+    )
+
+    return GCPSyncResponse(
+        project_id=project_id,
+        ingested_rows=len(normalized),
+        period=DateRange(start=period_start, end=period_end),
+        total_cost=round(total_cost, 2),
+        currency=currency,
+        source="bigquery_export",
+        services_seen=int(services_seen),
+    )
 
 
 # ---------------------------------------------------------------------------
