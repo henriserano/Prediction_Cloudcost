@@ -75,6 +75,13 @@ variable "certificate_arn" {
   default     = ""
 }
 
+variable "api_key" {
+  description = "API key protecting the mutating backend endpoints (POST /api/events, /api/events/upload, /api/aws/connect, /admin/cache/clear). Required in prod. Injected as the API_KEY env var only when non-empty."
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
 variable "health_check_path" {
   description = "ALB target group health check path"
   type        = string

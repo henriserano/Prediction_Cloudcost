@@ -19,15 +19,32 @@ from schemas.analytics import (
     StationarityTest,
 )
 from core.cache import app_cache
+from core.errors import NotEnoughData
 
 
 # ---------------------------------------------------------------------------
 # Daily series helpers
 # ---------------------------------------------------------------------------
 
+# Minimum points for the statistical routines: STL with period=7 requires at
+# least 2 full cycles (14); ADF/KPSS need a comparable minimum to be defined.
+_MIN_POINTS_SEASONAL = 14
+
+
 def _series() -> pd.Series:
     df = load_daily_costs()
     return df.set_index("ds")["y"]
+
+
+def _require_min_points(n_points: int, minimum: int, what: str) -> None:
+    """Raise a clean 422 instead of letting scipy/statsmodels traceback (SEC-017)."""
+    if n_points < minimum:
+        raise NotEnoughData(
+            f"Not enough data for {what}: {n_points} daily point(s) available, "
+            f"at least {minimum} required. Ingest data via /api/events or "
+            f"/api/gcp/sync first.",
+            details={"points": int(n_points), "min_required": minimum},
+        )
 
 
 def _rolling_mean(s: pd.Series, window: int = 7) -> pd.Series:
@@ -78,6 +95,7 @@ def get_descriptive_stats() -> DescriptiveStats:
         return cached
     s = _series()
     arr = s.values.astype(float)
+    _require_min_points(len(arr), 2, "descriptive statistics")
     q1, q3 = np.percentile(arr, [25, 75])
     result = DescriptiveStats(
         mean=round(float(np.mean(arr)), 4),
@@ -103,6 +121,7 @@ def get_stationarity() -> StationarityResult:
 
     s = _series()
     arr = s.values.astype(float)
+    _require_min_points(len(arr), _MIN_POINTS_SEASONAL, "ADF/KPSS stationarity tests")
 
     # ADF  (H0: unit root  →  p < 0.05 ⟹ stationary)
     adf_res = adfuller(arr, autolag="AIC")
@@ -134,6 +153,7 @@ def get_stl_decomposition() -> tuple[List[STLPoint], STLStrengths]:
     from statsmodels.tsa.seasonal import STL
 
     s = _series()
+    _require_min_points(len(s), _MIN_POINTS_SEASONAL, "STL decomposition (period=7)")
     stl = STL(s, period=7, robust=True)
     stl_fit = stl.fit()
 
@@ -168,6 +188,7 @@ def get_anomalies(z_threshold: float = 2.0) -> List[AnomalyPoint]:
         return cached
     s = _series()
     arr = s.values.astype(float)
+    _require_min_points(len(arr), 2, "anomaly detection")
     mean_, std_ = float(np.mean(arr)), float(np.std(arr, ddof=1))
 
     result = [
@@ -192,6 +213,7 @@ def get_acf_pacf(nlags: int = 28) -> List[ACFPoint]:
 
     s = _series()
     arr = s.values.astype(float)
+    _require_min_points(len(arr), nlags + 1, f"ACF/PACF with nlags={nlags}")
     acf_vals = acf(arr, nlags=nlags, fft=True)
     pacf_vals = pacf(arr, nlags=nlags)
 

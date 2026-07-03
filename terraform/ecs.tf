@@ -15,6 +15,18 @@ resource "aws_ecs_cluster_capacity_providers" "main" {
   cluster_name       = aws_ecs_cluster.main.name
   capacity_providers = ["FARGATE", "FARGATE_SPOT"]
 
+  # prod: guarantee at least one task on on-demand FARGATE (base = 1), with
+  # FARGATE_SPOT absorbing extra capacity. dev/staging: SPOT only (~70% cheaper,
+  # interruptions acceptable).
+  dynamic "default_capacity_provider_strategy" {
+    for_each = var.env == "prod" ? [1] : []
+    content {
+      capacity_provider = "FARGATE"
+      weight            = 1
+      base              = 1
+    }
+  }
+
   default_capacity_provider_strategy {
     capacity_provider = "FARGATE_SPOT"
     weight            = 4
@@ -46,10 +58,18 @@ resource "aws_ecs_task_definition" "app" {
         }
       ]
 
-      environment = [
-        { name = "ENV", value = var.env },
-        { name = "PORT", value = tostring(var.app_port) }
-      ]
+      environment = concat(
+        [
+          { name = "ENV", value = var.env },
+          { name = "PORT", value = tostring(var.app_port) }
+        ],
+        # API key protecting the mutating endpoints — injected only when set.
+        var.api_key != "" ? [{ name = "API_KEY", value = var.api_key }] : []
+      )
+      # TODO: move API_KEY (and any other sensitive value) to AWS Secrets
+      # Manager — a plain env var is visible in the task definition (ECS
+      # console, DescribeTaskDefinition). See the commented `secrets` block
+      # below for the recommended pattern.
       # For production: use AWS Secrets Manager instead of plain env vars for
       # any sensitive values (OAuth secrets, API keys, etc.).
       # secrets = [

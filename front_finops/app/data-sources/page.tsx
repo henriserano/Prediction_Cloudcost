@@ -19,11 +19,12 @@ import PageShell from "@/components/layout/PageShell"
 import { SectionCard } from "@/components/ui/section-card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { useIngestEvents, useGCPStatus } from "@/lib/hooks/useApi"
+import { useGCPStatus } from "@/lib/hooks/useApi"
 import { api } from "@/lib/api"
 import { useQuery, useMutation } from "@tanstack/react-query"
 import { cn } from "@/lib/utils"
 import { parseBillingFile, type ParsedResult } from "@/lib/parsers/billing-file"
+import type { BillingEvent, EventsIngestResponse, EventsUploadResponse } from "@/lib/types"
 
 // ---------------------------------------------------------------------------
 // Tab definition
@@ -120,13 +121,64 @@ interface FileEntry {
 let entryIdCounter = 0
 const nextId = () => `f_${++entryIdCounter}_${Date.now()}`
 
+interface SubmitBatchInput {
+  csvEvents: BillingEvent[]
+  excelFiles: File[]
+  replace: boolean
+}
+
+interface SubmitBatchResult {
+  ingested: number
+  dateRange: { start: string; end: string }
+}
+
+// Excel files are re-sent RAW to POST /api/events/upload (multipart) so the
+// backend ingests every row — the client-side preview only holds a sample.
+// CSV files are fully parsed client-side and posted as events to /api/events.
+function useSubmitBatch() {
+  return useMutation<SubmitBatchResult, Error, SubmitBatchInput>({
+    mutationFn: async ({ csvEvents, excelFiles, replace }) => {
+      let ingested = 0
+      let dateRange = { start: "", end: "" }
+      // The first request carries the user's replace choice; the second one
+      // always appends, otherwise it would wipe what the first just stored.
+      let effectiveReplace = replace
+
+      if (excelFiles.length > 0) {
+        const form = new FormData()
+        excelFiles.forEach((f) => form.append("files", f))
+        form.append("replace", String(effectiveReplace))
+        const res = await api.post<EventsUploadResponse>("/api/events/upload", form, {
+          headers: { "Content-Type": "multipart/form-data" },
+        })
+        ingested += res.data.ingested
+        dateRange = res.data.dateRange
+        effectiveReplace = false
+      }
+
+      if (csvEvents.length > 0) {
+        const res = await api.post<EventsIngestResponse>("/api/events", {
+          events: csvEvents,
+          replace: effectiveReplace,
+        })
+        ingested += res.data.ingested
+        // dateRange reflects the whole store after ingestion — the last
+        // response is therefore the most complete one.
+        dateRange = res.data.dateRange
+      }
+
+      return { ingested, dateRange }
+    },
+  })
+}
+
 function FileTab() {
   const [entries, setEntries] = useState<FileEntry[]>([])
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [dragActive, setDragActive] = useState(false)
   const [replace, setReplace] = useState(false)
   const inputRef = useRef<HTMLInputElement | null>(null)
-  const { mutate: ingest, isPending, isSuccess, data, error, reset } = useIngestEvents()
+  const { mutate: ingest, isPending, isSuccess, data, error, reset } = useSubmitBatch()
 
   async function ingestFiles(files: File[]) {
     if (files.length === 0) return
@@ -205,23 +257,33 @@ function FileTab() {
     })
   }
 
-  // Aggregate stats + payload
+  // Aggregate stats + payload.
+  // CSV entries → fully parsed events, posted as JSON to /api/events.
+  // Excel entries → raw File sent multipart to /api/events/upload (the parsed
+  // events are only a preview sample, never re-posted).
   const aggregate = useMemo(() => {
-    const events = entries.flatMap((e) => e.parsed?.events ?? [])
+    const ready = entries.filter((e) => e.status === "ready" && e.parsed)
+    const csvEvents = ready
+      .filter((e) => e.parsed!.format === "csv")
+      .flatMap((e) => e.parsed!.events)
+    const excelFiles = ready
+      .filter((e) => e.parsed!.format === "excel" && e.parsed!.validRows > 0)
+      .map((e) => e.file)
+    const validRows = ready.reduce((s, e) => s + e.parsed!.validRows, 0)
     const totalRows = entries.reduce((s, e) => s + (e.parsed?.totalRows ?? 0), 0)
     const totalErrors = entries.reduce((s, e) => s + (e.parsed?.errors.length ?? 0), 0)
     const filesOk = entries.filter((e) => e.status === "ready").length
     const filesErr = entries.filter((e) => e.status === "error").length
     const filesParsing = entries.filter((e) => e.status === "parsing").length
-    return { events, totalRows, totalErrors, filesOk, filesErr, filesParsing }
+    return { csvEvents, excelFiles, validRows, totalRows, totalErrors, filesOk, filesErr, filesParsing }
   }, [entries])
 
   const canSubmit =
-    aggregate.events.length > 0 && aggregate.filesParsing === 0 && !isPending && !isSuccess
+    aggregate.validRows > 0 && aggregate.filesParsing === 0 && !isPending && !isSuccess
 
   function handleSubmit() {
     if (!canSubmit) return
-    ingest({ events: aggregate.events, replace })
+    ingest({ csvEvents: aggregate.csvEvents, excelFiles: aggregate.excelFiles, replace })
   }
 
   return (
@@ -323,7 +385,7 @@ function FileTab() {
                           <>
                             <span aria-hidden>·</span>
                             <span>
-                              {parsed.events.length}/{parsed.totalRows} ligne{parsed.totalRows > 1 ? "s" : ""} valide{parsed.events.length > 1 ? "s" : ""}
+                              {parsed.validRows}/{parsed.totalRows} ligne{parsed.totalRows > 1 ? "s" : ""} valide{parsed.validRows > 1 ? "s" : ""}
                             </span>
                             <Badge variant="muted" size="sm">
                               {parsed.format.toUpperCase()}
@@ -447,7 +509,7 @@ function FileTab() {
               Événements valides
             </p>
             <p className="mt-0.5 font-heading text-lg font-semibold tabular-nums text-foreground">
-              {aggregate.events.length.toLocaleString("fr-FR")}
+              {aggregate.validRows.toLocaleString("fr-FR")}
             </p>
           </div>
           <div>
@@ -467,7 +529,7 @@ function FileTab() {
       )}
 
       {/* Replace toggle */}
-      {aggregate.events.length > 0 && (
+      {aggregate.validRows > 0 && (
         <label className="flex items-center gap-2 text-sm">
           <input
             type="checkbox"
@@ -504,7 +566,7 @@ function FileTab() {
             ? "Import en cours…"
             : isSuccess
               ? "Importé"
-              : `Envoyer au modèle${aggregate.events.length > 0 ? ` · ${aggregate.events.length.toLocaleString("fr-FR")}` : ""}`}
+              : `Envoyer au modèle${aggregate.validRows > 0 ? ` · ${aggregate.validRows.toLocaleString("fr-FR")}` : ""}`}
         </Button>
         {isSuccess && (
           <Button variant="outline" onClick={resetAll}>
@@ -741,7 +803,8 @@ function AWSTab() {
         </div>
 
         <p className="text-[11px] text-muted-foreground leading-relaxed">
-          Les identifiants transitent en HTTPS vers votre backend et ne sont pas stockés dans le navigateur.
+          Les identifiants sont transmis à votre backend via le proxy de l&apos;application et ne sont pas stockés dans le navigateur.
+          La sécurité du transport dépend de la configuration de votre déploiement (HTTPS recommandé).
           Utilisez un utilisateur IAM disposant uniquement des droits{" "}
           <code className="rounded bg-muted px-1 py-0.5 text-[10.5px]">ce:Get*</code>,{" "}
           <code className="rounded bg-muted px-1 py-0.5 text-[10.5px]">ce:List*</code>,{" "}

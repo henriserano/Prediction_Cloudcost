@@ -13,6 +13,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { KpiCard } from "@/components/ui/kpi-card"
 import { SectionCard } from "@/components/ui/section-card"
 import { EmptyState } from "@/components/ui/empty-state"
+import { QueryError } from "@/components/ui/query-error"
 import { useKPI, useDaily, useServices, useAnomalies } from "@/lib/hooks/useApi"
 
 // Sia chart palette — navy, coral, teal, violet, gold, secondary tones
@@ -31,13 +32,34 @@ const COLOR_CORAL = "oklch(0.66 0.185 28)"
 const COLOR_MUTED = "oklch(0.65 0.02 250)"
 
 export default function DashboardPage() {
-  const { data: kpi, isLoading: kpiLoading } = useKPI()
-  const { data: daily, isLoading: dailyLoading } = useDaily(60)
-  const { data: services, isLoading: servicesLoading } = useServices()
-  const { data: anomalies, isLoading: anomaliesLoading } = useAnomalies()
+  const { data: kpi, isLoading: kpiLoading, error: kpiError, refetch: refetchKpi } = useKPI()
+  const { data: daily, isLoading: dailyLoading, error: dailyError, refetch: refetchDaily } = useDaily(60)
+  const { data: services, isLoading: servicesLoading, error: servicesError, refetch: refetchServices } = useServices()
+  const { data: anomalies, isLoading: anomaliesLoading, error: anomaliesError, refetch: refetchAnomalies } = useAnomalies()
+
+  const hasError = !!(kpiError || dailyError || servicesError || anomaliesError)
 
   const detectedAnomalies = anomalies?.filter((a) => a.isAnomaly) ?? []
   const trendPct = kpi ? ((kpi.trendSlope / Math.max(kpi.dailyAvg, 1)) * 100) : 0
+
+  if (hasError) {
+    return (
+      <PageShell
+        eyebrow="Executive dashboard"
+        title="Vue d'ensemble"
+        description="Impossible de charger les indicateurs FinOps"
+      >
+        <QueryError
+          onRetry={() => {
+            if (kpiError) void refetchKpi()
+            if (dailyError) void refetchDaily()
+            if (servicesError) void refetchServices()
+            if (anomaliesError) void refetchAnomalies()
+          }}
+        />
+      </PageShell>
+    )
+  }
 
   return (
     <PageShell

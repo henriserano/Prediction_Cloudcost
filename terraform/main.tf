@@ -10,10 +10,10 @@ terraform {
 
   # ── Remote state (uncomment once you have an S3 bucket + DynamoDB table) ──
   # backend "s3" {
-  #   bucket         = "demo-finops-tfstate"
+  #   bucket         = "finops-tfstate"
   #   key            = "finops-backend/terraform.tfstate"
   #   region         = var.aws_region
-  #   dynamodb_table = "demo-finops-tflock"
+  #   dynamodb_table = "finops-tflock"
   #   encrypt        = true
   # }
 }

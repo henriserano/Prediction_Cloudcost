@@ -1,6 +1,6 @@
 # Frontend · FinOps GCP Dashboard
 
-Dashboard interactif Next.js 16 pour la visualisation et l'analyse des coûts multi-cloud (GCP + AWS) demo. **100% branché sur l'API FastAPI** — plus de mockData. Sept pages, 31 hooks TanStack Query, un parseur CSV/Excel bilingue, un flux OAuth GCP complet.
+Dashboard interactif Next.js 16 pour la visualisation et l'analyse des coûts multi-cloud (GCP + AWS) d'un compte de facturation d'entreprise (données de démonstration). **100% branché sur l'API FastAPI** — plus de mockData. Sept pages, 31 hooks TanStack Query, un parseur CSV/Excel bilingue, un flux OAuth GCP complet.
 
 > ⚠️ **Next.js 16 : breaking changes vs 15.x.** APIs, conventions et layout de fichiers peuvent différer des ressources d'entraînement. Consulter `AGENTS.md` puis `node_modules/next/dist/docs/` avant modification. Respecter les avis de dépréciation.
 
@@ -481,7 +481,11 @@ Variables d'environnement :
 | Variable | Défaut | Description |
 |---|---|---|
 | `NEXT_PUBLIC_API_URL` | `http://localhost:8080` (dev), **required** en prod | Base URL du backend FastAPI |
+| `BACKEND_API_KEY` | (vide) | **Secret côté serveur** (pas de préfixe `NEXT_PUBLIC`). Clé envoyée en header `X-API-Key` par les Route Handlers Next (`app/api/events`, `app/api/events/upload`, `app/api/aws/connect`) vers les endpoints mutateurs du backend. Vide en dev (le backend laisse passer). **À définir sur Vercel** en production. |
+| `BACKEND_API_URL` | (vide → fallback `NEXT_PUBLIC_API_URL`) | Optionnel : URL interne du backend utilisée par les Route Handlers si elle diffère de l'URL publique |
 | `NODE_ENV` | (auto) | `development` / `production` — pilote l'ajout de HSTS |
+
+> **Proxy des endpoints mutateurs** : les rewrites Next ne peuvent pas ajouter de headers. Les POST `/api/events`, `/api/events/upload` et `/api/aws/connect` passent donc par des Route Handlers App Router (`app/api/**/route.ts`, prioritaires sur les rewrites) qui forwardent body/query/cookies et ajoutent `X-API-Key`. Les GET restent sur les rewrites ; les endpoints GCP utilisent un cookie de session, pas la clé.
 
 ---
 
@@ -519,6 +523,7 @@ vercel --prod
 Variables à définir dans Vercel :
 
 - `NEXT_PUBLIC_API_URL` = URL publique du backend (ex : `https://finops-dev-alb-…elb.amazonaws.com`)
+- `BACKEND_API_KEY` = clé API du backend (header `X-API-Key` des endpoints mutateurs) — secret runtime côté serveur, jamais exposé au client
 
 ### Docker (self-hosted)
 

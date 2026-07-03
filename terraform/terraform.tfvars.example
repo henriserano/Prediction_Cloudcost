@@ -15,12 +15,20 @@ container_cpu    = 512   # 0.5 vCPU
 container_memory = 2048  # 2 GB
 desired_count    = 1
 
-# HTTPS — set to your ACM certificate ARN to enable TLS
+# HTTPS — set to your ACM certificate ARN to enable TLS.
+# REQUIRED when env = "prod" (terraform will refuse to apply an HTTP-only ALB in prod).
 # certificate_arn = "arn:aws:acm:eu-west-1:123456789012:certificate/xxxxxxxx"
 certificate_arn = ""
 
+# API key protecting the mutating backend endpoints (POST /api/events,
+# /api/events/upload, /api/aws/connect, /admin/cache/clear). Required in prod.
+# Prefer TF_VAR_api_key over storing it in this file; AWS Secrets Manager is
+# the recommended target for production (see ecs.tf).
+api_key = ""
+
 # Google OAuth2 — register at https://console.cloud.google.com/apis/credentials
+# The redirect URI must be HTTPS (OAuth over plain HTTP exposes the auth code).
 google_client_id     = ""
 google_client_secret = ""
-google_redirect_uri  = "http://<your-alb-dns>/api/gcp/callback"
+google_redirect_uri  = "https://<your-alb-dns>/api/gcp/callback"
 frontend_url         = "https://<your-vercel-url>"

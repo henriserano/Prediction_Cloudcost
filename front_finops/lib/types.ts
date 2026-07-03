@@ -269,3 +269,7 @@ export interface GCPServiceInfo { serviceId: string; name: string; enabled: bool
 export interface BillingEvent { date: string; service: string; cost: number; description?: string }
 export interface EventsIngestRequest { events: BillingEvent[]; replace?: boolean }
 export interface EventsIngestResponse { ingested: number; totalRows: number; dateRange: { start: string; end: string }; previewKpi: { totalSpend: number; dailyAvg: number } }
+// POST /api/events/upload (multipart) — MultiFileUploadResponse backend-side
+export interface EventsUploadResponse { filesProcessed: number; ingested: number; totalRows: number; dateRange: { start: string; end: string }; previewKpi: { totalSpend: number; dailyAvg: number }; perFile: Record<string, number>; warnings: string[] }
+// GET /health — backend liveness (also returns cache/data fingerprints, ignored here)
+export interface HealthStatus { status: string }

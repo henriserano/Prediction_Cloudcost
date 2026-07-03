@@ -18,11 +18,13 @@ class ModelBenchmark(BaseModel):
     rank: int
     model: str
     family: str
-    mae: float
-    rmse: float
-    mape: float
-    r2: float
-    score: float
+    # Metrics are None when the model failed every CV fold or produced
+    # non-finite values — inf/NaN are never serialized (invalid JSON).
+    mae: Optional[float] = None
+    rmse: Optional[float] = None
+    mape: Optional[float] = None
+    r2: Optional[float] = None
+    score: Optional[float] = None
     winner: bool
 
 
@@ -31,6 +33,6 @@ class ForecastSummary(BaseModel):
     total_forecast: float
     daily_avg_forecast: float
     best_model: str
-    best_model_mae: float
-    best_model_mape: float
+    best_model_mae: Optional[float] = None
+    best_model_mape: Optional[float] = None
     models_evaluated: int

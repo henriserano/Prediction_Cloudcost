@@ -6,6 +6,8 @@ import { usePathname } from "next/navigation"
 import { Menu, ChevronRight } from "lucide-react"
 import { useSidebar } from "@/lib/context/sidebar-context"
 import { Badge } from "@/components/ui/badge"
+import { useHealth } from "@/lib/hooks/useApi"
+import { cn } from "@/lib/utils"
 
 interface PageShellProps {
   title: string
@@ -24,6 +26,34 @@ const ROUTE_LABELS: Record<string, string> = {
   diagnostics: "Diagnostics",
   "data-sources": "Sources de données",
   "gcp-connect": "GCP Connect",
+}
+
+// Real backend status via GET /health (useHealth: staleTime 30 s, refetch 60 s).
+// Green pulsing "Live" when the backend answers, grey/red "Hors ligne" on error.
+function HealthBadge() {
+  const { status } = useHealth()
+
+  if (status === "error") {
+    return (
+      <Badge variant="muted">
+        <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-destructive" />
+        Hors ligne
+      </Badge>
+    )
+  }
+
+  return (
+    <Badge variant="live" className={cn(status === "pending" && "opacity-60")}>
+      <span
+        aria-hidden
+        className={cn(
+          "h-1.5 w-1.5 rounded-full bg-[color:var(--success)]",
+          status === "success" && "animate-pulse"
+        )}
+      />
+      Live
+    </Badge>
+  )
 }
 
 function useCrumbs(): { href: string; label: string }[] {
@@ -68,13 +98,7 @@ export default function PageShell({
             </p>
           )}
         </div>
-        <Badge variant="live" className="animate-pulse-slow">
-          <span
-            aria-hidden
-            className="h-1.5 w-1.5 rounded-full bg-[color:var(--success)]"
-          />
-          Live
-        </Badge>
+        <HealthBadge />
       </div>
 
       {/* Desktop header */}
@@ -141,13 +165,7 @@ export default function PageShell({
           </div>
           <div className="flex items-center gap-3 shrink-0">
             {actions}
-            <Badge variant="live">
-              <span
-                aria-hidden
-                className="h-1.5 w-1.5 rounded-full bg-[color:var(--success)] animate-pulse"
-              />
-              Live
-            </Badge>
+            <HealthBadge />
           </div>
         </div>
       </header>

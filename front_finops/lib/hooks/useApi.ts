@@ -22,6 +22,8 @@ import type {
   GCPServiceInfo,
   EventsIngestRequest,
   EventsIngestResponse,
+  EventsUploadResponse,
+  HealthStatus,
   OutliersResponse,
   DriftResponse,
   DistributionResponse,
@@ -35,6 +37,18 @@ import type {
 // Stale time — data doesn't change between deploys, 5 min cache is fine
 // --------------------------------------------------------------------------
 const STALE = 5 * 60 * 1000
+
+// Backend liveness — proxied by the Next rewrite /health → backend /health.
+// Short staleTime + periodic refetch so the header badge reflects reality.
+export function useHealth() {
+  return useQuery<HealthStatus>({
+    queryKey: ["health"],
+    queryFn: () => api.get("/health").then((r) => r.data),
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+    retry: 1,
+  })
+}
 
 export function useKPI() {
   return useQuery<KPIData>({
@@ -196,6 +210,23 @@ export function useIngestEvents() {
   return useMutation<EventsIngestResponse, Error, EventsIngestRequest>({
     mutationFn: (body: EventsIngestRequest) =>
       api.post("/api/events", body).then((r) => r.data),
+  })
+}
+
+// Multipart upload of raw billing files (Excel notably — parsed backend-side
+// via openpyxl so ALL rows are ingested, not just the preview sample).
+export function useUploadEvents() {
+  return useMutation<EventsUploadResponse, Error, { files: File[]; replace?: boolean }>({
+    mutationFn: ({ files, replace = false }) => {
+      const form = new FormData()
+      files.forEach((f) => form.append("files", f))
+      form.append("replace", String(replace))
+      return api
+        .post("/api/events/upload", form, {
+          headers: { "Content-Type": "multipart/form-data" },
+        })
+        .then((r) => r.data)
+    },
   })
 }
 

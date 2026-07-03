@@ -67,23 +67,26 @@ jobs:
         with:
           python-version: "3.11"
 
-      # bandit: produces a JSON report uploaded as an artifact; || true so the
-      # step does not fail the workflow (findings are reviewed offline)
+      # bandit: BLOCKING — fails the workflow on any finding not triaged in
+      # bandit.yaml (tests excluded, reviewed skips documented in that file).
+      # The JSON report is still uploaded as an artifact for review.
       - name: Bandit SAST scan
         run: |
           pip install --upgrade pip bandit
-          bandit -r back/ -f json -o bandit-report.json || true
+          bandit -c bandit.yaml -r back/ -f json -o bandit-report.json
 
       - name: Upload bandit report
         uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: bandit-report
           path: bandit-report.json
           retention-days: 30
 
-      # semgrep: broader semantic pattern matching; --error exits non-zero on findings
+      # semgrep: broader semantic pattern matching; BLOCKING — --error exits
+      # non-zero on findings and fails the workflow.
       - name: Semgrep scan
         run: |
           pip install semgrep
           semgrep --config=p/python --config=p/security-audit back/ \
-            --error --metrics=off || true
+            --error --metrics=off

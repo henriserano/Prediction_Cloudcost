@@ -39,6 +39,11 @@ class Settings(BaseSettings):
     # CORS — comma-separated origins; "*" in dev
     cors_origins: str = Field(default="*")
 
+    # SEC-013: Shared API key protecting mutating/admin endpoints (header
+    # ``X-API-Key``). Empty in dev = open (local convenience). In prod the app
+    # REFUSES to start when this is empty — see the startup checks in main.py.
+    api_key: str = Field(default="")
+
     # Google OAuth2
     google_client_id: str = Field(default="")
     google_client_secret: str = Field(default="")

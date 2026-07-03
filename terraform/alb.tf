@@ -44,6 +44,15 @@ resource "aws_lb_listener" "http" {
   port              = 80
   protocol          = "HTTP"
 
+  # HTTPS is mandatory in prod: an OAuth flow (and its tokens) transits through
+  # this listener — never serve it over plain HTTP in production.
+  lifecycle {
+    precondition {
+      condition     = var.env != "prod" || local.https_enabled
+      error_message = "In prod, certificate_arn must be set: the ALB must serve HTTPS (HTTP is then only a 301 redirect). Provision an ACM certificate in the deployment region and set certificate_arn."
+    }
+  }
+
   # If HTTPS is configured, redirect HTTP → HTTPS; otherwise forward directly
   dynamic "default_action" {
     for_each = local.https_enabled ? [1] : []

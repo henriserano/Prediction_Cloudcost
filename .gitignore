@@ -1,14 +1,19 @@
-Rapports_Billing Account for demo.com, 2026-01-01 — 2026-06-30.csv
-Rapports_Billing Account for demo.com, 2026-01-01 — 2026-06-23.csv
-CLAUDE.md
-Cloud Run Revision - Container CPU Utilization.csv
-Cloud Run Revision - Instance Count.csv
-Cloud Run Revision - Request Count.csv
-Cloud Run Revision - Request Latency.csv
-daily_costs.parquet
-daily_per_service.parquet
-./.claude
-./lightning_logs
-./back/.env
+# ── Python ─────────────────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+
+# ── Environnements / secrets ───────────────────────────────────────────────────
 .env
 .env.*
+back/.env
+
+# ── Artefacts d'entraînement / outils locaux ───────────────────────────────────
+lightning_logs/
+.claude/settings.local.json
+*.tsbuildinfo
+
+# ── Données brutes locales (exports billing réels — jamais versionnés) ─────────
+Rapports_Billing*.csv
+Cloud Run Revision - *.csv
+/daily_costs.parquet
+/daily_per_service.parquet

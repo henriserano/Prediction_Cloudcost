@@ -57,7 +57,11 @@ def _per_service_from_events(events_df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _read_events_df() -> pd.DataFrame:
-    """Return the current in-memory events DataFrame (empty if none)."""
+    """Return the current in-memory events DataFrame (empty if none).
+
+    SEC-015: get_injected_events_df() snapshots the shared store under its
+    lock, so this read is safe against concurrent mutations.
+    """
     try:
         from routes.routes_events import get_injected_events_df
 

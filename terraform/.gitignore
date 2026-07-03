@@ -1,5 +1,5 @@
 .terraform/
-.terraform.lock.hcl
+# .terraform.lock.hcl is intentionally NOT ignored — commit it to pin provider versions
 terraform.tfstate
 terraform.tfstate.backup
 terraform.tfvars

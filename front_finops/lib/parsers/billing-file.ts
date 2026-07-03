@@ -11,7 +11,14 @@ export interface ParseError {
 }
 
 export interface ParsedResult {
+  /**
+   * CSV: the FULL set of valid events (ingested as-is via POST /api/events).
+   * Excel: a PREVIEW SAMPLE only (≤100 rows from /api/events/preview) — the
+   * raw file must be re-sent to POST /api/events/upload for full ingestion.
+   */
   events: BillingEvent[]
+  /** Number of rows that will actually be ingested (CSV: events.length; Excel: backend parsedRows). */
+  validRows: number
   errors: ParseError[]
   totalRows: number
   detectedColumns?: {
@@ -69,6 +76,7 @@ export async function parseBillingFile(file: File): Promise<ParsedResult> {
   } catch (e) {
     return {
       events: [],
+      validRows: 0,
       errors: [
         {
           line: 0,
@@ -95,6 +103,7 @@ async function parseCSV(file: File): Promise<ParsedResult> {
   if (allLines.every((l) => l.trim() === "")) {
     return {
       events: [],
+      validRows: 0,
       errors: [{ line: 0, message: "Le fichier est vide." }],
       totalRows: 0,
       format: "csv",
@@ -113,6 +122,7 @@ async function parseCSV(file: File): Promise<ParsedResult> {
   if (parsedLines.length < 2) {
     return {
       events: [],
+      validRows: 0,
       errors: [{ line: 0, message: "Le fichier ne contient pas assez de lignes." }],
       totalRows: 0,
       format: "csv",
@@ -125,6 +135,7 @@ async function parseCSV(file: File): Promise<ParsedResult> {
     const headerCandidates = parsedLines.slice(0, 3).map((p) => p.cells.join(", ")).join("  |  ")
     return {
       events: [],
+      validRows: 0,
       errors: [
         {
           line: parsedLines[0].lineNum,
@@ -233,6 +244,9 @@ async function parseExcel(file: File): Promise<ParsedResult> {
       { headers: { "Content-Type": "multipart/form-data" } },
     )
     const data = res.data
+    // data.sample is capped (~100 rows) by the backend — it is used for the
+    // on-screen preview ONLY. Ingestion of Excel files re-sends the raw file
+    // to POST /api/events/upload so ALL parsed rows are stored, not the sample.
     const events: BillingEvent[] = data.sample.map((r) => ({
       date: r.date,
       service: r.service,
@@ -241,6 +255,7 @@ async function parseExcel(file: File): Promise<ParsedResult> {
     const errors: ParseError[] = data.warnings.map((w, i) => ({ line: i + 1, message: w }))
     return {
       events,
+      validRows: data.parsedRows,
       errors,
       totalRows: data.parsedRows,
       format: "excel",
@@ -249,6 +264,7 @@ async function parseExcel(file: File): Promise<ParsedResult> {
   } catch (e) {
     return {
       events: [],
+      validRows: 0,
       errors: [
         {
           line: 0,
@@ -391,6 +407,7 @@ function normalizeRows(
 
   return {
     events,
+    validRows: events.length,
     errors,
     totalRows: rows.length,
     format,

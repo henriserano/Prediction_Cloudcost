@@ -1,6 +1,6 @@
 # FinOps GCP · Analyse & prévision des coûts cloud
 
-Plateforme d'analyse et de prévision des coûts multi-cloud (GCP + AWS) construite pour demo. Ingère les exports de billing (BigQuery Export, Cost Explorer, CSV, Excel), exécute une pipeline statistique complète (EDA, décomposition STL, détection d'anomalies, benchmark de 6 modèles de prévision, diagnostics avancés) et expose les résultats via une API REST FastAPI consommée par un dashboard Next.js 16.
+Plateforme d'analyse et de prévision des coûts multi-cloud (GCP + AWS) pour un compte de facturation GCP d'entreprise (données de démonstration). Ingère les exports de billing (BigQuery Export, Cost Explorer, CSV, Excel), exécute une pipeline statistique complète (EDA, décomposition STL, détection d'anomalies, benchmark de 6 modèles de prévision, diagnostics avancés) et expose les résultats via une API REST FastAPI consommée par un dashboard Next.js 16.
 
 ---
 
@@ -70,7 +70,7 @@ Plateforme d'analyse et de prévision des coûts multi-cloud (GCP + AWS) constru
 | Backend | Python 3.11, FastAPI 0.115, Uvicorn, Pydantic v2, pandas, statsmodels, scikit-learn |
 | Intégrations cloud | google-auth + google-api-python-client (GCP), boto3 (AWS Cost Explorer, STS) |
 | Frontend | Next.js 16, React 19, TypeScript 5, Tailwind CSS 4, Recharts 2, TanStack Query 5, axios, Zod |
-| Infra | AWS ECS Fargate + FARGATE_SPOT · ALB · ECR · VPC (2 AZ) · CloudWatch · Terraform ≥ 1.6 |
+| Infra | AWS ECS Fargate + FARGATE_SPOT · ALB · ECR · VPC (2 AZ, subnets publics uniquement — pas de NAT, trade-off coût documenté INFRA-001) · CloudWatch · Terraform ≥ 1.6 |
 | CI | GitHub Actions (frontend build+lint, docker smoke test, weekly pip-audit + bandit + semgrep) |
 
 ---
@@ -136,7 +136,6 @@ Facturation_prediction/
 │   ├── main.tf variables.tf locals.tf outputs.tf
 │   ├── vpc.tf security_groups.tf ecr.tf iam.tf alb.tf ecs.tf
 │   ├── cloudwatch.tf autoscaling.tf
-│   ├── vpc_endpoints.tf          # ⚠️ vide actuellement — voir terraform/README.md
 │   ├── terraform.tfvars.example  # committer celui-ci, PAS terraform.tfvars
 │   └── README.md                 # doc infra détaillée
 │
@@ -217,14 +216,14 @@ terraform apply
 ```
 
 Séquence (6 étapes, voir `deploy.sh`) :
-1. `terraform apply` ciblé sur ECR (+ VPC endpoints — voir gotcha ci-dessous)
+1. `terraform apply` ciblé sur ECR (le repository doit exister avant le push)
 2. `docker build --platform linux/amd64 -t <ecr>:<tag>` depuis `back/`
 3. `docker push` (tag = git SHA + `latest`)
-4. `terraform apply` complet avec `-var image_tag=<sha>`
+4. `terraform apply` complet avec `-var image_tag=<sha>` (les outputs ECS/ALB sont lus après cette étape — le script fonctionne donc aussi sur une infra vierge)
 5. `aws ecs update-service --force-new-deployment`
 6. `aws ecs wait services-stable`
 
-> ⚠️ **Gotcha** : `deploy.sh` cible `aws_vpc_endpoint.{ecr_api,ecr_dkr,logs,s3}` (lignes 48-51) mais `terraform/vpc_endpoints.tf` est vide. Ces targets sont ignorées silencieusement. À corriger avant prod (soit implémenter les endpoints, soit retirer les targets). Détails dans `terraform/README.md`.
+> Pas de VPC endpoints : les tâches ECS tournent en subnets publics avec IP publique (trade-off coût documenté INFRA-001) et atteignent ECR/CloudWatch via l'Internet Gateway.
 
 ---
 
@@ -238,7 +237,7 @@ Trois sources de données possibles, résolues dans cet ordre par `back/data/loa
 | 2 | Parquet démo bundlé dans `back/data/` | `DATA_ALLOW_PARQUET_FALLBACK=true` (défaut) | `parquet_fallback` |
 | 3 | Vide (aucune donnée) | Sinon | `empty` |
 
-Les parquets bundlés couvrent **2026-01-05 → 2026-06-23** (170 jours) d'exports GCP Billing demo sur 9 services : BigQuery, Cloud Run, Cloud SQL, Cloud Spanner, Vertex AI, Invoice, et divers Claude models. Utiles pour démo/dev sans devoir se connecter à GCP.
+Les parquets bundlés contiennent des **données synthétiques de démonstration** (aucune donnée client réelle) couvrant **2026-01-05 → 2026-06-23** (170 jours) au format export GCP Billing, sur 9 services : BigQuery, Cloud Run, Cloud SQL, Cloud Spanner, Vertex AI, Invoice, et divers Claude models. Utiles pour démo/dev sans devoir se connecter à GCP.
 
 L'ingestion supporte :
 - **CSV** (encodage auto : utf-8, cp1252, latin-1)
@@ -258,7 +257,8 @@ Caps de sécurité : 100 000 lignes en mémoire, 10 MB par fichier. Voir `back/R
 - **CORS wildcard** : warning loggé au démarrage si `CORS_ORIGINS=*` avec `ENV=prod` — à configurer explicitement.
 - **OAuth2 GCP** : state TTL 600 s, whitelist des codes d'erreur avant log, validation projet_id/severity avant interpolation dans les filtres API.
 - **Ingestion événements** : validation Pydantic (cost ∈ [0, 1M€], date YYYY-MM-DD), défense en profondeur re-validée en route.
-- **CI weekly** : `pip-audit`, `npm audit --audit-level=high`, `bandit`, `semgrep p/python p/security-audit`.
+- **CI weekly** : `pip-audit`, `npm audit --audit-level=high`, `bandit` (bloquant, config `bandit.yaml`), `semgrep p/python p/security-audit` (bloquant).
+- **API_KEY backend** : les endpoints mutateurs (`POST /api/events`, `/api/events/upload`, `/api/aws/connect`, `/admin/cache/clear`) sont protégés par une clé API — obligatoire en `ENV=prod`. Voir `back/README.md` (backend) et `front_finops/README.md` (`BACKEND_API_KEY` sur Vercel).
 
 **Gestion des secrets (Sia policy)** :
 - `terraform.tfvars` ne doit **jamais** être committé s'il contient des secrets. Utiliser des variables d'environnement `TF_VAR_*` ou AWS Secrets Manager.

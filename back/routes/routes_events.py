@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import io
+import threading
 from typing import Annotated, List, Optional
 
 import pandas as pd
-from fastapi import APIRouter, File, Form, UploadFile
+from fastapi import APIRouter, Depends, File, Form, UploadFile
 from pydantic import BaseModel, Field
 
-from core.errors import BadRequest
+from core.auth import require_api_key
+from core.errors import BadRequest, PayloadTooLarge
 from core.logging import get_logger
 from schemas.gcp import EventsIngestRequest, EventsIngestResponse, DateRange, PreviewKPI
 
@@ -18,11 +20,55 @@ router = APIRouter(prefix="/api", tags=["events"])
 # Module-level store: list of normalised row dicts
 _injected_events: list[dict] = []
 
+# SEC-015: the store is mutated from sync endpoints running in the threadpool
+# and from async upload handlers — every read-modify-write (including the
+# _MAX_STORE_SIZE check, which is otherwise a TOCTOU) must hold this lock.
+_events_lock = threading.Lock()
+
 # Absolute upper bound on total rows kept in the in-memory store (SEC-005).
 _MAX_STORE_SIZE = 100_000
 
 # Per-file size cap to avoid memory blow-ups on hostile uploads (10 MB).
 _MAX_FILE_BYTES = 10 * 1024 * 1024
+
+# Maximum number of files accepted in a single multipart request (SEC-016).
+_MAX_FILES_PER_REQUEST = 5
+
+
+async def _read_upload_limited(uf: UploadFile) -> bytes:
+    """Read an UploadFile in chunks, aborting with 413 past _MAX_FILE_BYTES.
+
+    SEC-016: never buffer the whole body before checking the size — a hostile
+    client could otherwise exhaust memory with a single oversized part.
+    """
+    chunks: list[bytes] = []
+    size = 0
+    while True:
+        chunk = await uf.read(1024 * 1024)
+        if not chunk:
+            break
+        size += len(chunk)
+        if size > _MAX_FILE_BYTES:
+            raise PayloadTooLarge(
+                f"{uf.filename or 'unnamed'}: file exceeds the "
+                f"{_MAX_FILE_BYTES // (1024 * 1024)} MB limit.",
+                details={"max_bytes": _MAX_FILE_BYTES},
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def replace_injected_events(rows: list[dict]) -> None:
+    """Atomically replace the whole store (used by /api/gcp/sync). SEC-015."""
+    global _injected_events
+    if len(rows) > _MAX_STORE_SIZE:
+        raise BadRequest(
+            f"Ingesting {len(rows)} rows would exceed the maximum store size "
+            f"of {_MAX_STORE_SIZE}.",
+            details={"incoming": len(rows), "max": _MAX_STORE_SIZE},
+        )
+    with _events_lock:
+        _injected_events = list(rows)
 
 # Column aliases we accept in uploaded CSVs. First value that matches wins.
 _DATE_COLUMN_ALIASES = ("Mois", "Date", "Usage Start Date", "usage_start_time", "day", "ds")
@@ -195,7 +241,7 @@ class MultiFileUploadResponse(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
-@router.post("/events", response_model=EventsIngestResponse)
+@router.post("/events", response_model=EventsIngestResponse, dependencies=[Depends(require_api_key)])
 def ingest_events(body: EventsIngestRequest) -> EventsIngestResponse:
     """
     Ingest billing events into the in-memory store.
@@ -227,18 +273,27 @@ def ingest_events(body: EventsIngestRequest) -> EventsIngestResponse:
             }
         )
 
-    if body.replace:
-        _injected_events = new_rows
-    else:
-        # Enforce absolute store cap before appending (SEC-005).
-        if len(_injected_events) + len(new_rows) > _MAX_STORE_SIZE:
-            raise BadRequest(
-                f"Appending {len(new_rows)} events would exceed the maximum store size "
-                f"of {_MAX_STORE_SIZE} rows. Use replace=True to reset the store first.",
-                details={"current_size": len(_injected_events), "incoming": len(new_rows), "max": _MAX_STORE_SIZE},
-            )
-        # Use extend instead of concatenation to avoid O(N) list copy (SEC-005).
-        _injected_events.extend(new_rows)
+    # SEC-005 / SEC-015: cap check + mutation are atomic under the lock, and
+    # the cap applies to BOTH the replace and the append paths.
+    with _events_lock:
+        if body.replace:
+            if len(new_rows) > _MAX_STORE_SIZE:
+                raise BadRequest(
+                    f"Ingesting {len(new_rows)} events would exceed the maximum store "
+                    f"size of {_MAX_STORE_SIZE} rows.",
+                    details={"incoming": len(new_rows), "max": _MAX_STORE_SIZE},
+                )
+            _injected_events = new_rows
+        else:
+            if len(_injected_events) + len(new_rows) > _MAX_STORE_SIZE:
+                raise BadRequest(
+                    f"Appending {len(new_rows)} events would exceed the maximum store size "
+                    f"of {_MAX_STORE_SIZE} rows. Use replace=True to reset the store first.",
+                    details={"current_size": len(_injected_events), "incoming": len(new_rows), "max": _MAX_STORE_SIZE},
+                )
+            # Use extend instead of concatenation to avoid O(N) list copy (SEC-005).
+            _injected_events.extend(new_rows)
+        store_snapshot = list(_injected_events)
 
     # Invalidate downstream caches so analytics/forecast see fresh data
     try:
@@ -253,9 +308,9 @@ def ingest_events(body: EventsIngestRequest) -> EventsIngestResponse:
     except Exception:
         pass
 
-    # Build summary statistics from the full store
-    total_rows = len(_injected_events)
-    df = _build_dataframe(_injected_events)
+    # Build summary statistics from the snapshot taken under the lock
+    total_rows = len(store_snapshot)
+    df = _build_dataframe(store_snapshot)
 
     dates = df["ds"].dt.strftime("%Y-%m-%d")
     date_start = dates.min()
@@ -277,6 +332,7 @@ def ingest_events(body: EventsIngestRequest) -> EventsIngestResponse:
     "/events/upload",
     response_model=MultiFileUploadResponse,
     summary="Ingest one or several billing CSV files in a single multipart request",
+    dependencies=[Depends(require_api_key)],
 )
 async def upload_billing_files(
     files: Annotated[List[UploadFile], File(description="One or more billing CSV or Excel files (.csv, .xlsx, .xls, .ods)")],
@@ -294,13 +350,19 @@ async def upload_billing_files(
 
     if not files:
         raise BadRequest("No files provided.")
+    if len(files) > _MAX_FILES_PER_REQUEST:
+        raise BadRequest(
+            f"Too many files: {len(files)}. Maximum is {_MAX_FILES_PER_REQUEST} per request.",
+            details={"max_files": _MAX_FILES_PER_REQUEST},
+        )
 
     all_rows: list[dict] = []
     per_file: dict[str, int] = {}
     warnings: list[str] = []
 
     for uf in files:
-        raw = await uf.read()
+        # SEC-016: chunked read with a hard cap — raises 413 on oversize.
+        raw = await _read_upload_limited(uf)
         rows, file_warnings = _parse_billing_file(uf.filename or "unnamed.csv", raw)
         all_rows.extend(rows)
         per_file[uf.filename or "unnamed.csv"] = len(rows)
@@ -312,20 +374,30 @@ async def upload_billing_files(
             details={"warnings": warnings, "per_file": per_file},
         )
 
-    if replace:
-        _injected_events = list(all_rows)
-    else:
-        if len(_injected_events) + len(all_rows) > _MAX_STORE_SIZE:
-            raise BadRequest(
-                f"Appending {len(all_rows)} rows would exceed the store cap "
-                f"of {_MAX_STORE_SIZE}. Retry with replace=true.",
-                details={
-                    "current_size": len(_injected_events),
-                    "incoming": len(all_rows),
-                    "max": _MAX_STORE_SIZE,
-                },
-            )
-        _injected_events.extend(all_rows)
+    # SEC-005 / SEC-015: cap check + mutation are atomic, and the cap applies
+    # to BOTH the replace and the append paths.
+    with _events_lock:
+        if replace:
+            if len(all_rows) > _MAX_STORE_SIZE:
+                raise BadRequest(
+                    f"Ingesting {len(all_rows)} rows would exceed the store cap "
+                    f"of {_MAX_STORE_SIZE}.",
+                    details={"incoming": len(all_rows), "max": _MAX_STORE_SIZE},
+                )
+            _injected_events = list(all_rows)
+        else:
+            if len(_injected_events) + len(all_rows) > _MAX_STORE_SIZE:
+                raise BadRequest(
+                    f"Appending {len(all_rows)} rows would exceed the store cap "
+                    f"of {_MAX_STORE_SIZE}. Retry with replace=true.",
+                    details={
+                        "current_size": len(_injected_events),
+                        "incoming": len(all_rows),
+                        "max": _MAX_STORE_SIZE,
+                    },
+                )
+            _injected_events.extend(all_rows)
+        store_snapshot = list(_injected_events)
 
     # Invalidate downstream caches so analytics/forecast see the fresh data.
     try:
@@ -342,7 +414,7 @@ async def upload_billing_files(
     except Exception:
         pass
 
-    df = _build_dataframe(_injected_events)
+    df = _build_dataframe(store_snapshot)
     dates = df["ds"].dt.strftime("%Y-%m-%d")
     total_spend = float(df["Sous-total (€)"].sum())
     unique_days = df["ds"].nunique()
@@ -360,7 +432,7 @@ async def upload_billing_files(
     return MultiFileUploadResponse(
         files_processed=len(files),
         ingested=len(all_rows),
-        total_rows=len(_injected_events),
+        total_rows=len(store_snapshot),
         date_range=DateRange(start=dates.min(), end=dates.max()),
         preview_kpi=PreviewKPI(total_spend=round(total_spend, 2), daily_avg=round(daily_avg, 2)),
         per_file=per_file,
@@ -387,6 +459,7 @@ class PreviewResponse(BaseModel):
     "/events/preview",
     response_model=PreviewResponse,
     summary="Parse one or several billing files WITHOUT storing them",
+    dependencies=[Depends(require_api_key)],
 )
 async def preview_billing_files(
     files: Annotated[List[UploadFile], File(description="One or more billing files (.csv, .xlsx, .xls, .ods)")],
@@ -398,13 +471,19 @@ async def preview_billing_files(
     """
     if not files:
         raise BadRequest("No files provided.")
+    if len(files) > _MAX_FILES_PER_REQUEST:
+        raise BadRequest(
+            f"Too many files: {len(files)}. Maximum is {_MAX_FILES_PER_REQUEST} per request.",
+            details={"max_files": _MAX_FILES_PER_REQUEST},
+        )
 
     all_rows: list[dict] = []
     per_file: dict[str, int] = {}
     warnings: list[str] = []
 
     for uf in files:
-        raw = await uf.read()
+        # SEC-016: chunked read with a hard cap — raises 413 on oversize.
+        raw = await _read_upload_limited(uf)
         rows, file_warnings = _parse_billing_file(uf.filename or "unnamed.csv", raw)
         all_rows.extend(rows)
         per_file[uf.filename or "unnamed.csv"] = len(rows)
@@ -442,5 +521,11 @@ async def preview_billing_files(
 
 
 def get_injected_events_df() -> pd.DataFrame:
-    """Return the current injected events as a DataFrame (used by other modules)."""
-    return _build_dataframe(_injected_events)
+    """Return the current injected events as a DataFrame (used by other modules).
+
+    SEC-015: the store is snapshotted under the lock; the (potentially slow)
+    DataFrame construction happens outside it.
+    """
+    with _events_lock:
+        snapshot = list(_injected_events)
+    return _build_dataframe(snapshot)

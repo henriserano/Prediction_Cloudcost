@@ -7,7 +7,10 @@
 # Prerequisites:
 #   - AWS CLI v2 configured (aws configure or env vars)
 #   - Docker running
-#   - Terraform applied at least once (terraform apply)
+#   - terraform init already run in terraform/ (the script itself applies the
+#     infrastructure: it works on a virgin AWS account — step 1 creates the ECR
+#     repository first, then the full infra is applied in step 4 after the
+#     image has been pushed)
 #   - jq installed
 #
 set -euo pipefail
@@ -37,29 +40,24 @@ echo "  region : $REGION"
 echo "  tag    : $TAG"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-# ── Step 1 — Terraform apply (infra only — no image_tag change yet) ───────────
+# ── Step 1 — Terraform apply targeted on ECR (repository must exist to push) ──
 # image_tag is intentionally NOT passed here; ECS lifecycle ignores task_definition.
-echo "[1/6] Applying Terraform (infra)..."
+# No VPC endpoints are needed: ECS tasks run in public subnets with a public IP
+# (cost trade-off, see terraform/README.md INFRA-001) and reach ECR/CloudWatch
+# through the Internet Gateway.
+echo "[1/6] Applying Terraform (ECR repository)..."
 cd "$TF_DIR"
 terraform apply \
   -var "env=${ENV}" \
   -var "aws_region=${REGION}" \
   -target=aws_ecr_repository.app \
-  -target=aws_vpc_endpoint.ecr_api \
-  -target=aws_vpc_endpoint.ecr_dkr \
-  -target=aws_vpc_endpoint.logs \
-  -target=aws_vpc_endpoint.s3 \
   -auto-approve
 
-# Read outputs after ECR is guaranteed to exist
+# Only the ECR output is guaranteed to exist at this point (virgin infra:
+# the other outputs become available after the full apply in step 4).
 ECR_URL=$(terraform output -raw ecr_repository_url)
-CLUSTER=$(terraform output -raw ecs_cluster_name)
-SERVICE=$(terraform output -raw ecs_service_name)
-API_URL=$(terraform output -raw api_base_url)
 
 echo "  ECR  : $ECR_URL"
-echo "  ECS  : $CLUSTER / $SERVICE"
-echo "  URL  : $API_URL"
 
 # ── Step 2 — Docker build ─────────────────────────────────────────────────────
 echo "[2/6] Building Docker image (linux/amd64)..."
@@ -87,6 +85,15 @@ terraform apply \
   -var "env=${ENV}" \
   -var "aws_region=${REGION}" \
   -auto-approve
+
+# Full infra now exists — safe to read the remaining outputs (robust on a
+# virgin AWS account, where these outputs only appear after the apply above).
+CLUSTER=$(terraform output -raw ecs_cluster_name)
+SERVICE=$(terraform output -raw ecs_service_name)
+API_URL=$(terraform output -raw api_base_url)
+
+echo "  ECS  : $CLUSTER / $SERVICE"
+echo "  URL  : $API_URL"
 
 # ── Step 5 — Force new ECS deployment ─────────────────────────────────────────
 echo "[5/6] Triggering rolling deployment..."

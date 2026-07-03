@@ -48,14 +48,30 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 settings = get_settings()
 
-# SEC-008: Warn loudly if cors_origins is left as wildcard in production.
+# SEC-008 / SEC-012: CORS wildcard with credentials is a hard error in prod.
 # In prod, CORS_ORIGINS must be set to the specific frontend domain (e.g.
 # "https://finops.example.com") — never "*". The wildcard default is
-# only acceptable for local development.
-if settings.env == "prod" and "*" in settings.cors_origins_list:
+# only acceptable for local development, where it stays a warning.
+if "*" in settings.cors_origins_list:
+    if settings.env == "prod":
+        raise RuntimeError(
+            "SECURITY (SEC-012): CORS_ORIGINS is '*' in production while "
+            "allow_credentials=True. Set CORS_ORIGINS to the specific frontend "
+            "domain(s) and restart."
+        )
     logger.warning(
-        "SECURITY: cors_origins is set to '*' in production. "
-        "Set CORS_ORIGINS to the specific frontend domain to prevent credential theft.",
+        "SECURITY: cors_origins is set to '*'. "
+        "Set CORS_ORIGINS to the specific frontend domain before deploying to prod.",
+    )
+
+# SEC-013: Mutating/admin endpoints are protected by the X-API-Key header.
+# Refuse to start in prod when no API key is configured — otherwise those
+# endpoints would silently be left open.
+if settings.env == "prod" and not settings.api_key:
+    raise RuntimeError(
+        "SECURITY (SEC-013): API_KEY is empty in production. Set the API_KEY "
+        "environment variable (used to authenticate X-API-Key on mutating "
+        "endpoints) and restart."
     )
 
 # SEC-011: Disable interactive API docs in production to avoid exposing the

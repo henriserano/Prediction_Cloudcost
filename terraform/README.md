@@ -46,7 +46,7 @@ Infrastructure as code pour le backend FinOps. Déploie une architecture AWS ECS
 │  │  (pas de subnet privé · pas de NAT gateway)                              │   │
 │  └──────────────────────────────────────────────────────────────────────────┘   │
 │                                                                                  │
-│  ECR : finops-<env>-backend (lifecycle : garde 5 images)                         │
+│  ECR : finops-<env>-backend (lifecycle : garde 10 images)                        │
 │  CloudWatch Logs : /ecs/finops-<env>  (retention 30j prod / 7j dev)              │
 │  CloudWatch Alarms : cpu-high, memory-high, alb-5xx, unhealthy-hosts             │
 │  Auto-scaling : CPU 60% target · Memory 70% target  (min=1, max=2 prod)          │
@@ -58,12 +58,12 @@ Infrastructure as code pour le backend FinOps. Déploie une architecture AWS ECS
 
 | Décision | Motif |
 |---|---|
-| Fargate + FARGATE_SPOT (weight 4) | Économie ~70% vs FARGATE — acceptable pour dev/staging, à réévaluer prod |
+| FARGATE_SPOT only en dev/staging, FARGATE (base 1) + SPOT en appoint en prod | Économie ~70% vs FARGATE en dev ; en prod, au moins une tâche garantie sur on-demand (`var.env` pilote la stratégie dans `ecs.tf`) |
 | Subnets **publics** avec IPs publiques sur les tâches | Pas de NAT gateway → économie ~35 €/mois par AZ. Trade-off sécurité couvert par les Security Groups |
 | Circuit breaker ECS activé | Rollback auto si health checks échouent |
 | `ignore_changes = [task_definition, desired_count]` sur le service | `deploy.sh` gère les updates via AWS CLI ; auto-scaling gère `desired_count` |
 | `containerInsights = disabled` | Économie ~10 €/mois — logs applicatifs et alarms suffisent |
-| HTTP-only par défaut (`certificate_arn = ""`) | Certificat ACM à provisionner séparément avant activation HTTPS |
+| HTTP-only par défaut (`certificate_arn = ""`) en dev/staging | Certificat ACM à provisionner séparément avant activation HTTPS. **En prod, `certificate_arn` est obligatoire** : une `lifecycle precondition` sur le listener HTTP (`alb.tf`) fait échouer le plan si `env = "prod"` sans certificat |
 
 ---
 
@@ -76,14 +76,13 @@ Infrastructure as code pour le backend FinOps. Déploie une architecture AWS ECS
 | `locals.tf` | `prefix = "${app_name}-${env}"`, `azs` dynamiques via data source, `public_subnets` calculés (`cidrsubnet`), `ecr_image`, `https_enabled` |
 | `vpc.tf` | VPC · IGW · N × subnets publics · route table + associations |
 | `security_groups.tf` | `sg-alb` (80/443 depuis Internet) · `sg-ecs` (8080 depuis `sg-alb` uniquement) |
-| `ecr.tf` | Repository ECR avec scan on push + lifecycle policy (garde les 5 dernières images) |
+| `ecr.tf` | Repository ECR avec scan on push + lifecycle policy (garde les 10 dernières images) |
 | `iam.tf` | Execution role ECS · Task role ECS (least privilege — logs only) · Policy CI/CD push ECR |
-| `alb.tf` | ALB · Target group `ip` (Fargate) · Listener HTTP (redirect vers HTTPS si activé) · Listener HTTPS conditionnel |
-| `ecs.tf` | Cluster · Capacity providers (FARGATE_SPOT default) · Task definition · Service (rolling deploy, circuit breaker) |
+| `alb.tf` | ALB · Target group `ip` (Fargate) · Listener HTTP (redirect 301 vers HTTPS si activé) · Listener HTTPS conditionnel · Precondition : HTTPS obligatoire en prod |
+| `ecs.tf` | Cluster · Capacity providers (SPOT only en dev/staging ; FARGATE base 1 + SPOT en prod) · Task definition · Service (rolling deploy, circuit breaker) |
 | `cloudwatch.tf` | Log group + 4 alarmes (cpu-high, memory-high, alb-5xx, unhealthy-hosts) |
 | `autoscaling.tf` | Target tracking : CPU 60% + Memory 70%. Max = 2 (prod), 1 (dev/staging) |
 | `outputs.tf` | 8 outputs consommés par `deploy.sh` (voir tableau ci-dessous) |
-| `vpc_endpoints.tf` | ⚠️ **Fichier vide** — voir [Gaps connus](#gaps-connus--todo-avant-prod) |
 | `terraform.tfvars.example` | Template à copier vers `terraform.tfvars` (jamais committé) |
 
 ---
@@ -104,7 +103,8 @@ Infrastructure as code pour le backend FinOps. Déploie une architecture AWS ECS
 | `desired_count` | number | `1` | — | Nombre de tâches ECS actives |
 | `app_port` | number | `8080` | — | Port du conteneur |
 | `image_tag` | string | `latest` | — | Tag Docker à déployer (surchargé par `deploy.sh` avec le git SHA) |
-| `certificate_arn` | string | `""` | — | ARN ACM pour HTTPS. Si vide → HTTP-only |
+| `certificate_arn` | string | `""` | precondition sur le listener HTTP : non vide si `env = "prod"` | ARN ACM pour HTTPS. Si vide → HTTP-only (dev/staging uniquement) |
+| `api_key` | string | `""` | `sensitive = true` | Clé API des endpoints mutateurs du backend — injectée dans le conteneur en env var `API_KEY` seulement si non vide. Obligatoire en prod côté application. Préférer `TF_VAR_api_key` / Secrets Manager |
 | `health_check_path` | string | `/health` | — | Path du health check ALB |
 | `google_client_id` | string | `""` | — | OAuth2 (voir § Secrets) |
 | `google_client_secret` | string | `""` | `sensitive = true` | OAuth2 secret · **ne jamais committer** |
@@ -157,7 +157,7 @@ terraform apply
 
 Le bloc `terraform {}` de `main.tf` contient un `backend "s3"` commenté. Avant d'activer :
 
-1. Créer manuellement le bucket S3 et la table DynamoDB pour le locking (par exemple `demo-finops-tfstate` + `demo-finops-tflock`).
+1. Créer manuellement le bucket S3 et la table DynamoDB pour le locking (par exemple `finops-tfstate` + `finops-tflock`).
 2. Décommenter le bloc `backend "s3"` dans `main.tf`.
 3. Renseigner `bucket`, `key`, `region`, `dynamodb_table`, `encrypt = true`.
 4. Migrer le state existant : `terraform init -migrate-state`.
@@ -172,28 +172,21 @@ Script à la racine du repo. Séquence 6 étapes :
 ./deploy.sh --env dev --region eu-west-1 [--tag v1.2.3]
 ```
 
-### 1. Terraform apply ciblé (ECR + VPC endpoints)
+### 1. Terraform apply ciblé (ECR)
 
 ```bash
 terraform apply \
   -var "env=${ENV}" -var "aws_region=${REGION}" \
   -target=aws_ecr_repository.app \
-  -target=aws_vpc_endpoint.ecr_api \
-  -target=aws_vpc_endpoint.ecr_dkr \
-  -target=aws_vpc_endpoint.logs \
-  -target=aws_vpc_endpoint.s3 \
   -auto-approve
 ```
 
-⚠️ Les 4 targets `aws_vpc_endpoint.*` **n'existent pas actuellement** (voir [Gaps connus](#gaps-connus--todo-avant-prod)) — elles sont ignorées silencieusement par Terraform. Seul `aws_ecr_repository.app` est effectivement appliqué à cette étape.
+Le repository ECR doit exister avant le `docker push`. Pas de VPC endpoints : les tâches ECS sont en subnets publics avec IP publique et sortent via l'Internet Gateway (trade-off coût, voir INFRA-001 dans `ecs.tf`).
 
-Puis lecture des outputs :
+Puis lecture du seul output garanti à ce stade (sur une infra vierge, les outputs ECS/ALB n'existent qu'après l'apply complet de l'étape 4) :
 
 ```bash
 ECR_URL=$(terraform output -raw ecr_repository_url)
-CLUSTER=$(terraform output -raw ecs_cluster_name)
-SERVICE=$(terraform output -raw ecs_service_name)
-API_URL=$(terraform output -raw api_base_url)
 ```
 
 ### 2. Docker build
@@ -228,6 +221,14 @@ terraform apply \
 ```
 
 Crée une nouvelle révision de `aws_ecs_task_definition.app` pointant vers l'image poussée. Le service ECS ne redémarre pas encore (grâce à `lifecycle.ignore_changes = [task_definition]`).
+
+Les outputs restants sont lus après cet apply (robuste sur une infra vierge) :
+
+```bash
+CLUSTER=$(terraform output -raw ecs_cluster_name)
+SERVICE=$(terraform output -raw ecs_service_name)
+API_URL=$(terraform output -raw api_base_url)
+```
 
 ### 5. Force new deployment
 
@@ -288,7 +289,7 @@ Internet → ALB (SG allow 80/443 from 0.0.0.0/0)
               ECR pull · CloudWatch logs · Google API · AWS Cost Explorer
 ```
 
-L'egress est `0.0.0.0/0` sur le SG ECS. Le trafic sortant vers ECR et CloudWatch traverse l'IGW (pas de VPC endpoints — voir gaps).
+L'egress est `0.0.0.0/0` sur le SG ECS. Le trafic sortant vers ECR et CloudWatch traverse l'IGW (pas de VPC endpoints — choix assumé tant que les tâches restent en subnets publics ; à réévaluer si l'on passe en subnets privés).
 
 ### Secrets — bonnes pratiques
 
@@ -296,10 +297,11 @@ L'egress est `0.0.0.0/0` sur le SG ECS. Le trafic sortant vers ECR et CloudWatch
 
 Options (par ordre de préférence) :
 
-1. **AWS Secrets Manager** (recommandé pour prod) : stocker `google_client_secret` dans Secrets Manager, référencer via `secrets = [{ name = "GOOGLE_CLIENT_SECRET", valueFrom = "arn:aws:secretsmanager:…" }]` dans la task definition. Étendre le task role avec `secretsmanager:GetSecretValue`.
+1. **AWS Secrets Manager** (recommandé pour prod) : stocker `google_client_secret` et `api_key` dans Secrets Manager, référencer via `secrets = [{ name = "GOOGLE_CLIENT_SECRET", valueFrom = "arn:aws:secretsmanager:…" }]` dans la task definition. Étendre le task role avec `secretsmanager:GetSecretValue`.
 2. **Variables `TF_VAR_*`** au moment de `terraform apply` :
    ```bash
    export TF_VAR_google_client_secret="…"
+   export TF_VAR_api_key="…"
    terraform apply
    ```
 3. **`terraform.tfvars` local (jamais committé)** : ajouter au `.gitignore` (déjà présent).
@@ -355,9 +357,9 @@ Points relevés lors de l'audit — à traiter avant un déploiement production 
 | Sévérité | Sujet | Détail | Action |
 |---|---|---|---|
 | **Critique** | State en local | `terraform.tfstate` non protégé, pas de locking, pas de versioning. Risque de corruption / perte / conflits multi-user | Activer backend S3 + DynamoDB (bloc déjà présent dans `main.tf`, commenté). Créer bucket + table puis `terraform init -migrate-state` |
-| **Critique** | `vpc_endpoints.tf` vide | `deploy.sh` cible `aws_vpc_endpoint.{ecr_api, ecr_dkr, logs, s3}` mais aucune ressource n'existe. Silencieusement ignoré | Soit implémenter les 4 endpoints (économies data transfer + sécurité), soit retirer les `-target` de `deploy.sh` |
-| **Critique** | Secrets en clair | Si `terraform.tfvars` a jamais contenu / a été committé avec `google_client_secret`, il est compromis | Rotation immédiate + migrer vers Secrets Manager ou `TF_VAR_*` |
-| **Élevé** | HSTS + HTTPS désactivés | `certificate_arn = ""` → ALB en HTTP-only. Trafic non chiffré | Provisionner un cert ACM dans `eu-west-1`, renseigner `certificate_arn` |
+| **Critique** | Secrets en clair | Si `terraform.tfvars` a jamais contenu / a été committé avec `google_client_secret` ou `api_key`, il est compromis | Rotation immédiate + migrer vers Secrets Manager ou `TF_VAR_*` |
+| **Élevé** | HSTS + HTTPS désactivés en dev/staging | `certificate_arn = ""` → ALB en HTTP-only. Trafic non chiffré. En **prod**, une `lifecycle precondition` (`alb.tf`) bloque désormais l'apply sans certificat | Provisionner un cert ACM dans `eu-west-1`, renseigner `certificate_arn` |
+| **Élevé** | `API_KEY` en env var claire | La clé est visible dans la task definition (console ECS, `DescribeTaskDefinition`) | Migrer vers Secrets Manager (bloc `secrets` commenté dans `ecs.tf`) |
 | **Élevé** | Alarmes sans actions | Les 4 alarmes ne déclenchent aucune notification | Créer `aws_sns_topic.alerts` + subscriptions email/Slack, brancher via `alarm_actions` |
 | **Moyen** | Tâches en subnets publics | Assignation d'IP publique aux tâches Fargate. SG restreint l'accès, mais surface d'attaque non-nulle | Ajouter subnets privés + NAT gateway (~35 €/mois/AZ) et basculer `assign_public_ip = false` |
 | **Moyen** | `readonlyRootFilesystem = false` | Le conteneur peut écrire n'importe où | Passer à `true` + monter tmpfs pour `/tmp` |

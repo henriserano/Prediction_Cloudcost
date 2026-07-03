@@ -37,3 +37,17 @@ class NotFound(AppError):
 class DependencyError(AppError):
     def __init__(self, message: str = "Missing/invalid dependency", *, details: Any = None):
         super().__init__(message, code="DEPENDENCY_ERROR", status_code=500, details=details)
+
+
+class NotEnoughData(AppError):
+    """Raised when a statistical routine is asked to run on an empty or
+    too-short series (SEC-017). Maps to HTTP 422 so the frontend can show a
+    "sync some data first" state instead of a 500."""
+
+    def __init__(self, message: str = "Not enough data", *, details: Any = None):
+        super().__init__(message, code="NOT_ENOUGH_DATA", status_code=422, details=details)
+
+
+class PayloadTooLarge(AppError):
+    def __init__(self, message: str = "Payload too large", *, details: Any = None):
+        super().__init__(message, code="PAYLOAD_TOO_LARGE", status_code=413, details=details)

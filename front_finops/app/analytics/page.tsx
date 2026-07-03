@@ -9,6 +9,7 @@ import PageShell from "@/components/layout/PageShell"
 import { SectionCard } from "@/components/ui/section-card"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Badge } from "@/components/ui/badge"
+import { QueryError } from "@/components/ui/query-error"
 import { useSTL, useSTLStrengths, useAnomalies, useStats, useStationarity } from "@/lib/hooks/useApi"
 
 const COLOR_BRAND = "oklch(0.22 0.055 258)"
@@ -46,15 +47,37 @@ function StrengthBar({ label, value, color }: { label: string; value: number; co
 }
 
 export default function AnalyticsPage() {
-  const { data: stl, isLoading: stlLoading } = useSTL()
-  const { data: strengths, isLoading: strengthsLoading } = useSTLStrengths()
-  const { data: anomalies, isLoading: anomaliesLoading } = useAnomalies()
-  const { data: stats, isLoading: statsLoading } = useStats()
-  const { data: stationarity, isLoading: statLoading } = useStationarity()
+  const { data: stl, isLoading: stlLoading, error: stlError, refetch: refetchStl } = useSTL()
+  const { data: strengths, isLoading: strengthsLoading, error: strengthsError, refetch: refetchStrengths } = useSTLStrengths()
+  const { data: anomalies, isLoading: anomaliesLoading, error: anomaliesError, refetch: refetchAnomalies } = useAnomalies()
+  const { data: stats, isLoading: statsLoading, error: statsError, refetch: refetchStats } = useStats()
+  const { data: stationarity, isLoading: statLoading, error: stationarityError, refetch: refetchStationarity } = useStationarity()
+
+  const hasError = !!(stlError || strengthsError || anomaliesError || statsError || stationarityError)
 
   const sigma2 = stats ? 2 * stats.std : 0
   const mean = stats?.mean ?? 0
   const stlSample = stl?.filter((_, i) => i % 2 === 0) ?? []
+
+  if (hasError) {
+    return (
+      <PageShell
+        eyebrow="Statistical analysis"
+        title="Analytique"
+        description="Impossible de charger les analyses statistiques"
+      >
+        <QueryError
+          onRetry={() => {
+            if (stlError) void refetchStl()
+            if (strengthsError) void refetchStrengths()
+            if (anomaliesError) void refetchAnomalies()
+            if (statsError) void refetchStats()
+            if (stationarityError) void refetchStationarity()
+          }}
+        />
+      </PageShell>
+    )
+  }
 
   return (
     <PageShell

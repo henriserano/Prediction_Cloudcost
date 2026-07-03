@@ -119,7 +119,8 @@ uvicorn main:app --host 0.0.0.0 --port 8080 --reload
 
 ```bash
 ENV=prod \
-  CORS_ORIGINS=https://finops.demo.com \
+  CORS_ORIGINS=https://finops.example.com \
+  API_KEY=<clé-api-forte> \
   uvicorn main:app --host 0.0.0.0 --port 8080 --workers 1 --no-access-log
 ```
 
@@ -142,6 +143,7 @@ Chargées par `core/config.py` (Pydantic Settings). Priorité : env vars > fichi
 | `HOST` | `0.0.0.0` | Adresse d'écoute |
 | `PORT` | `8080` | Port d'écoute |
 | `CORS_ORIGINS` | `*` | Virgule-séparé — **doit être explicite en prod** (warning au démarrage sinon) |
+| `API_KEY` | `""` | Clé API protégeant les endpoints mutateurs : `POST /api/events`, `POST /api/events/upload`, `POST /api/aws/connect`, `POST /admin/cache/clear`. **Obligatoire en `ENV=prod`.** Ne jamais committer — injectée au runtime (env var, Terraform `TF_VAR_api_key`, ou Secrets Manager en prod) |
 
 ### OAuth2 Google
 
@@ -181,13 +183,13 @@ Exemple `.env` production :
 
 ```env
 ENV=prod
-CORS_ORIGINS=https://finops.demo.com
+CORS_ORIGINS=https://finops.example.com
 GOOGLE_CLIENT_ID=xxxxxxxxxxxx.apps.googleusercontent.com
-GOOGLE_REDIRECT_URI=https://api.finops.demo.com/api/gcp/callback
-FRONTEND_URL=https://finops.demo.com
+GOOGLE_REDIRECT_URI=https://api.finops.example.com/api/gcp/callback
+FRONTEND_URL=https://finops.example.com
 GCP_BILLING_EXPORT_PROJECT=finops-billing
 GCP_BILLING_EXPORT_DATASET=billing_export
-# Ne pas mettre GOOGLE_CLIENT_SECRET ici : Secrets Manager ou env var runtime uniquement
+# Ne pas mettre GOOGLE_CLIENT_SECRET ni API_KEY ici : Secrets Manager ou env var runtime uniquement
 ```
 
 ---
@@ -785,11 +787,12 @@ docker build --platform linux/amd64 -t finops-backend:latest .
 ```bash
 docker run --rm -p 8080:8080 \
   -e ENV=prod \
-  -e CORS_ORIGINS=https://finops.demo.com \
+  -e CORS_ORIGINS=https://finops.example.com \
+  -e API_KEY=… \
   -e GOOGLE_CLIENT_ID=… \
   -e GOOGLE_CLIENT_SECRET=… \
-  -e GOOGLE_REDIRECT_URI=https://api.finops.demo.com/api/gcp/callback \
-  -e FRONTEND_URL=https://finops.demo.com \
+  -e GOOGLE_REDIRECT_URI=https://api.finops.example.com/api/gcp/callback \
+  -e FRONTEND_URL=https://finops.example.com \
   finops-backend:latest
 ```
 

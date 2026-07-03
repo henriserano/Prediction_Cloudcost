@@ -10,6 +10,7 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error
 from data.loader import load_daily_costs
 from schemas.forecast import ForecastPoint, ForecastSummary, ModelBenchmark
 from core.cache import app_cache
+from core.errors import NotEnoughData
 
 
 # ---------------------------------------------------------------------------
@@ -38,7 +39,7 @@ def _rmse(y_true: np.ndarray, y_pred: np.ndarray) -> float:
 # ---------------------------------------------------------------------------
 
 def _ets_forecast(train: np.ndarray, h: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """SimpleExpSmoothing with Holt's trend — used as AutoETS proxy."""
+    """ExponentialSmoothing with Holt's additive trend (ETS)."""
     from statsmodels.tsa.holtwinters import ExponentialSmoothing
 
     model = ExponentialSmoothing(
@@ -115,7 +116,7 @@ def _arima_forecast(train: np.ndarray, h: int) -> Tuple[np.ndarray, np.ndarray, 
 
 
 def _ses_forecast(train: np.ndarray, h: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Simple Exponential Smoothing (Prophet proxy: fast + naive baseline)."""
+    """Simple Exponential Smoothing (fast + naive baseline)."""
     from statsmodels.tsa.holtwinters import SimpleExpSmoothing
 
     fit = SimpleExpSmoothing(train, initialization_method="estimated").fit(optimized=True)
@@ -163,14 +164,47 @@ def _naive_seasonal_forecast(train: np.ndarray, h: int, period: int = 7) -> Tupl
 # Registry
 # ---------------------------------------------------------------------------
 
+# Honest model names: each entry is named after the statsmodels/numpy
+# implementation actually used, not after the deep-learning model it once
+# proxied ("Prophet", "N-HiTS", "TimesNet" were misleading).
 MODELS = {
-    "AutoETS": ("Exp. Smoothing", _ets_forecast),
-    "AutoTheta": ("Theta", _theta_forecast),
-    "AutoARIMA": ("ARIMA", _arima_forecast),
-    "Prophet (SES)": ("Exp. Smoothing", _ses_forecast),
-    "N-HiTS (HW)": ("Holt-Winters", _holt_winters_forecast),
-    "TimesNet (SNaive)": ("Seasonal Naive", _naive_seasonal_forecast),
+    "ETS": ("Exp. Smoothing", _ets_forecast),
+    "Theta": ("Theta", _theta_forecast),
+    "ARIMA(1,1,1)": ("ARIMA", _arima_forecast),
+    "SES": ("Exp. Smoothing", _ses_forecast),
+    "Holt-Winters": ("Holt-Winters", _holt_winters_forecast),
+    "Seasonal Naive": ("Seasonal Naive", _naive_seasonal_forecast),
 }
+
+# Legacy ids still accepted in the ?model= query param so existing frontend
+# references (e.g. the hardcoded "AutoETS" default) keep working.
+MODEL_ALIASES = {
+    "AutoETS": "ETS",
+    "AutoTheta": "Theta",
+    "AutoARIMA": "ARIMA(1,1,1)",
+    "Prophet (SES)": "SES",
+    "N-HiTS (HW)": "Holt-Winters",
+    "TimesNet (SNaive)": "Seasonal Naive",
+}
+
+
+def resolve_model(name: str) -> str | None:
+    """Map a requested model name (current or legacy alias) to a MODELS key."""
+    if name in MODELS:
+        return name
+    return MODEL_ALIASES.get(name)
+
+
+# Minimum series length any model can be fitted on (Holt-Winters needs two
+# full weekly seasons; ARIMA/ETS need a comparable minimum to converge).
+_MIN_SERIES_POINTS = 14
+
+
+def _finite_or_none(x: float | None) -> float | None:
+    """Replace inf/NaN with None so responses stay valid JSON."""
+    if x is None:
+        return None
+    return x if math.isfinite(x) else None
 
 
 # ---------------------------------------------------------------------------
@@ -225,21 +259,30 @@ def get_model_benchmarks() -> List[ModelBenchmark]:
         metrics = _walk_forward_cv(arr, fn)
         scores.append({"model": name, "family": family, **metrics})
 
-    # Rank by MAE ascending
+    # Rank by MAE ascending (inf sorts last)
     scores.sort(key=lambda x: x["mae"])
     best_mae = scores[0]["mae"]
     result = []
     for rank, row in enumerate(scores, 1):
-        score = round(row["mae"] / best_mae, 4) if best_mae > 0 else 1.0
+        if math.isfinite(best_mae) and best_mae > 0 and math.isfinite(row["mae"]):
+            score = round(row["mae"] / best_mae, 4)
+        else:
+            score = None
+        # Sanitize inf/NaN → None so the JSON response stays valid even when a
+        # model failed every CV fold (mae=inf) or produced degenerate metrics.
+        mae = _finite_or_none(row["mae"])
+        rmse = _finite_or_none(row["rmse"])
+        mape = _finite_or_none(row["mape"])
+        r2 = _finite_or_none(row["r2"])
         result.append(
             ModelBenchmark(
                 rank=rank,
                 model=row["model"],
                 family=row["family"],
-                mae=round(row["mae"], 4),
-                rmse=round(row["rmse"], 4),
-                mape=round(row["mape"], 2),
-                r2=round(row["r2"], 4),
+                mae=round(mae, 4) if mae is not None else None,
+                rmse=round(rmse, 4) if rmse is not None else None,
+                mape=round(mape, 2) if mape is not None else None,
+                r2=round(r2, 4) if r2 is not None else None,
                 score=score,
                 winner=(rank == 1),
             )
@@ -248,9 +291,11 @@ def get_model_benchmarks() -> List[ModelBenchmark]:
     return result
 
 
-def get_forecast(horizon: int = 60, model: str = "AutoETS") -> tuple[List[ForecastPoint], ForecastSummary]:
-    if model not in MODELS:
+def get_forecast(horizon: int = 60, model: str = "ETS") -> tuple[List[ForecastPoint], ForecastSummary]:
+    resolved = resolve_model(model)
+    if resolved is None:
         raise ValueError(f"Unknown model '{model}'. Available: {list(MODELS.keys())}")
+    model = resolved
 
     _cache_key = f"forecast:{model}:{horizon}"
     _cached = app_cache.get(_cache_key)
@@ -258,6 +303,15 @@ def get_forecast(horizon: int = 60, model: str = "AutoETS") -> tuple[List[Foreca
         return _cached
 
     df = load_daily_costs()
+    # SEC-017: guard against empty/short series — df["ds"].iloc[-1] would
+    # otherwise raise an IndexError that surfaces as an opaque 500.
+    if len(df) < _MIN_SERIES_POINTS:
+        raise NotEnoughData(
+            f"Not enough data to forecast: {len(df)} daily point(s) available, "
+            f"at least {_MIN_SERIES_POINTS} required. Ingest data via /api/events "
+            f"or /api/gcp/sync first.",
+            details={"points": int(len(df)), "min_required": _MIN_SERIES_POINTS},
+        )
     arr = df["y"].values.astype(float)
     last_date = df["ds"].iloc[-1]
 

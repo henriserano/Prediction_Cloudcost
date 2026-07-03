@@ -3,12 +3,13 @@ from __future__ import annotations
 import os
 import re
 import secrets
+import threading
 import time
 import urllib.parse
 from typing import Annotated, List, Optional
 
 import httpx
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import RedirectResponse
 
 from core.errors import AppError, BadRequest
@@ -44,8 +45,19 @@ router = APIRouter(prefix="/api/gcp", tags=["gcp"])
 
 _OAUTH_STATE_TTL = 600  # seconds — states older than this are rejected
 
-_oauth_states: dict[str, dict] = {}  # state_token → {"created_at": float, "status": str}
-_token_store: dict[str, dict] = {}   # "default" → token info dict
+# SEC-014: OAuth tokens are bound to a per-browser session ("sid") carried in
+# an httpOnly cookie — never shared under a global "default" key, which would
+# let any anonymous visitor read the connected user's GCP projects/costs/logs.
+_SESSION_COOKIE = "sid"
+_SESSION_TTL = 7 * 24 * 3600       # seconds — sessions older than this are evicted
+_MAX_SESSIONS = 100                # hard cap; oldest session evicted beyond this
+
+# SEC-015: these dicts are mutated from sync endpoints running in the
+# threadpool — every read-modify-write must hold _state_lock.
+_state_lock = threading.Lock()
+
+_oauth_states: dict[str, dict] = {}  # state_token → {"created_at": float, "sid": str}
+_token_store: dict[str, dict] = {}   # sid → {"created_at": float, "token": dict}
 
 
 # Allowed OAuth error values returned by Google — anything else is mapped to
@@ -77,11 +89,66 @@ _PROJECT_ID_RE = re.compile(r'^[a-z][a-z0-9\-]{4,28}[a-z0-9]$')
 
 
 def _cleanup_expired_states() -> None:
-    """Remove OAuth state entries older than _OAUTH_STATE_TTL seconds."""
+    """Remove OAuth state entries older than _OAUTH_STATE_TTL seconds.
+
+    Caller must hold _state_lock (SEC-015).
+    """
     now = time.time()
     expired = [k for k, v in _oauth_states.items() if now - v["created_at"] > _OAUTH_STATE_TTL]
     for k in expired:
         _oauth_states.pop(k, None)
+
+
+def _cleanup_expired_sessions() -> None:
+    """Drop sessions past their TTL. Caller must hold _state_lock (SEC-014)."""
+    now = time.time()
+    expired = [k for k, v in _token_store.items() if now - v["created_at"] > _SESSION_TTL]
+    for k in expired:
+        _token_store.pop(k, None)
+
+
+def _store_session_token(sid: str, token_data: dict) -> None:
+    """Bind token_data to ``sid`` with TTL cleanup + oldest-session eviction (SEC-014)."""
+    with _state_lock:
+        _cleanup_expired_sessions()
+        # Cap the number of concurrent sessions; evict the oldest first.
+        while len(_token_store) >= _MAX_SESSIONS:
+            oldest_sid = min(_token_store, key=lambda k: _token_store[k]["created_at"])
+            _token_store.pop(oldest_sid, None)
+        _token_store[sid] = {"created_at": time.time(), "token": token_data}
+
+
+def _get_session_token(request: Request) -> Optional[dict]:
+    """Return the requester's token dict (via the ``sid`` cookie), or None."""
+    sid = request.cookies.get(_SESSION_COOKIE)
+    if not sid:
+        return None
+    with _state_lock:
+        entry = _token_store.get(sid)
+        if entry is None:
+            return None
+        if time.time() - entry["created_at"] > _SESSION_TTL:
+            _token_store.pop(sid, None)
+            return None
+        return entry["token"]
+
+
+def _set_session_cookie(response: RedirectResponse, sid: str) -> None:
+    """Attach the session cookie (httpOnly, SameSite=Lax, Secure in prod).
+
+    The frontend reaches this API through a Next.js rewrite proxy
+    (same-origin), so the cookie flows naturally on every /api/* call.
+    """
+    settings = get_settings()
+    response.set_cookie(
+        key=_SESSION_COOKIE,
+        value=sid,
+        max_age=_SESSION_TTL,
+        path="/",
+        httponly=True,
+        samesite="lax",
+        secure=(settings.env == "prod"),
+    )
 
 
 def _validate_project_id(project_id: str) -> None:
@@ -113,9 +180,9 @@ def _get_env(key: str, default: str = "") -> str:
     return os.getenv(key, default)
 
 
-def _get_credentials() -> dict:
-    """Return stored token dict or raise 401."""
-    token = _token_store.get("default")
+def _get_credentials(request: Request) -> dict:
+    """Return the requester's stored token dict or raise 401 (SEC-014)."""
+    token = _get_session_token(request)
     if not token:
         raise AppError("Not authenticated. Call /api/gcp/auth first.", code="UNAUTHORIZED", status_code=401)
     return token
@@ -178,9 +245,7 @@ def _raise_gcp_upstream_error(exc: httpx.HTTPStatusError, api_name: str, project
 # ---------------------------------------------------------------------------
 
 @router.get("/auth", summary="Redirect to Google OAuth2 consent screen")
-def gcp_auth() -> RedirectResponse:
-    _cleanup_expired_states()
-
+def gcp_auth(request: Request) -> RedirectResponse:
     settings = get_settings()
     client_id = settings.google_client_id or _get_env("GOOGLE_CLIENT_ID")
     redirect_uri = settings.google_redirect_uri or _get_env(
@@ -195,8 +260,15 @@ def gcp_auth() -> RedirectResponse:
             status_code=500,
         )
 
+    # SEC-014: bind the CSRF state to the requester's session so the callback
+    # can store the token under the right sid even though the OAuth redirect
+    # comes back on the backend origin (where the cookie may be absent).
+    sid = request.cookies.get(_SESSION_COOKIE) or secrets.token_urlsafe(32)
+
     state = secrets.token_urlsafe(16)
-    _oauth_states[state] = {"created_at": time.time(), "status": "pending"}
+    with _state_lock:
+        _cleanup_expired_states()
+        _oauth_states[state] = {"created_at": time.time(), "sid": sid}
 
     params = {
         "client_id": client_id,
@@ -209,7 +281,9 @@ def gcp_auth() -> RedirectResponse:
     }
 
     auth_url = _GOOGLE_AUTH_URL + "?" + urllib.parse.urlencode(params)
-    return RedirectResponse(url=auth_url, status_code=302)
+    response = RedirectResponse(url=auth_url, status_code=302)
+    _set_session_cookie(response, sid)
+    return response
 
 
 @router.get("/callback", summary="Handle Google OAuth2 callback")
@@ -232,18 +306,20 @@ def gcp_callback(
         redirect_url = f"{frontend_url}/gcp-connect?error=missing_code"
         return RedirectResponse(url=redirect_url, status_code=302)
 
-    state_entry = _oauth_states.get(state)
+    # SEC-015: pop-then-check atomically under the lock (single-use state).
+    with _state_lock:
+        state_entry = _oauth_states.pop(state, None) if state else None
     if state_entry is None:
         redirect_url = f"{frontend_url}/gcp-connect?error=invalid_state"
         return RedirectResponse(url=redirect_url, status_code=302)
 
     # Reject states that have exceeded the TTL (SEC-003).
     if time.time() - state_entry["created_at"] > _OAUTH_STATE_TTL:
-        _oauth_states.pop(state, None)
         redirect_url = f"{frontend_url}/gcp-connect?error=state_expired"
         return RedirectResponse(url=redirect_url, status_code=302)
 
-    _oauth_states.pop(state, None)
+    # SEC-014: the session the token will be bound to.
+    sid = state_entry["sid"]
 
     client_id = settings.google_client_id or _get_env("GOOGLE_CLIENT_ID")
     client_secret = settings.google_client_secret or _get_env("GOOGLE_CLIENT_SECRET")
@@ -286,15 +362,20 @@ def gcp_callback(
     except Exception:
         token_data["email"] = None
 
-    _token_store["default"] = token_data
+    # SEC-014: store the token under the requester's session, never globally.
+    _store_session_token(sid, token_data)
 
     redirect_url = f"{frontend_url}/gcp-connect?connected=1"
-    return RedirectResponse(url=redirect_url, status_code=302)
+    response = RedirectResponse(url=redirect_url, status_code=302)
+    # Re-issue the cookie so the session survives even if the browser dropped
+    # it between /auth and the callback (harmless when already present).
+    _set_session_cookie(response, sid)
+    return response
 
 
 @router.get("/status", response_model=GCPAuthStatus, summary="Check GCP authentication status")
-def gcp_status() -> GCPAuthStatus:
-    token = _token_store.get("default")
+def gcp_status(request: Request) -> GCPAuthStatus:
+    token = _get_session_token(request)
     if not token:
         return GCPAuthStatus(authenticated=False, email=None, project_id=None)
     return GCPAuthStatus(
@@ -304,10 +385,13 @@ def gcp_status() -> GCPAuthStatus:
     )
 
 
-@router.get("/logout", summary="Clear stored GCP OAuth token")
-def gcp_logout() -> dict:
-    """Clear the in-memory token store, effectively logging the user out."""
-    _token_store.pop("default", None)
+@router.get("/logout", summary="Clear the requester's GCP OAuth session")
+def gcp_logout(request: Request) -> dict:
+    """Remove ONLY the requester's session from the token store (SEC-014)."""
+    sid = request.cookies.get(_SESSION_COOKIE)
+    if sid:
+        with _state_lock:
+            _token_store.pop(sid, None)
     return {"logged_out": True}
 
 
@@ -316,8 +400,8 @@ def gcp_logout() -> dict:
 # ---------------------------------------------------------------------------
 
 @router.get("/projects", response_model=List[GCPProject], summary="List accessible GCP projects")
-def gcp_projects() -> List[GCPProject]:
-    token = _get_credentials()
+def gcp_projects(request: Request) -> List[GCPProject]:
+    token = _get_credentials(request)
     headers = _build_auth_headers(token)
 
     try:
@@ -591,13 +675,13 @@ def _billing_from_parquet(project_id: str, months: int) -> GCPBillingResponse:
     response_model=List[GCPBillingAccount],
     summary="List Cloud Billing accounts accessible with the current OAuth token",
 )
-def gcp_billing_accounts() -> List[GCPBillingAccount]:
+def gcp_billing_accounts(request: Request) -> List[GCPBillingAccount]:
     """Verify the OAuth token can read Cloud Billing by listing accounts.
 
     This is the fastest way to confirm the ``cloud-billing.readonly`` scope was
     granted and that the token still resolves against the Cloud Billing API.
     """
-    token = _get_credentials()
+    token = _get_credentials(request)
     headers = _build_auth_headers(token)
 
     accounts: List[GCPBillingAccount] = []
@@ -641,6 +725,7 @@ def gcp_billing_accounts() -> List[GCPBillingAccount]:
 
 @router.get("/billing", response_model=GCPBillingResponse, summary="Get billing data for a project")
 def gcp_billing(
+    request: Request,
     project_id: Annotated[str, Query(description="GCP project ID")],
     months: Annotated[int, Query(ge=1, le=24, description="Number of months to look back")] = 6,
 ) -> GCPBillingResponse:
@@ -655,7 +740,7 @@ def gcp_billing(
     numbers so the frontend can label the origin.
     """
     _validate_project_id(project_id)
-    token = _get_credentials()
+    token = _get_credentials(request)
     headers = _build_auth_headers(token)
 
     billing_account_id = _fetch_billing_account_id(project_id, headers)
@@ -745,6 +830,7 @@ def _bq_rows_for_project(project_id: str, months: int) -> Optional[list[dict]]:
     summary="Pull real cost data from GCP and refresh in-memory analytics",
 )
 def gcp_sync(
+    request: Request,
     project_id: Annotated[str, Query(description="GCP project ID to sync")],
     months: Annotated[int, Query(ge=1, le=24)] = 6,
 ) -> GCPSyncResponse:
@@ -756,7 +842,7 @@ def gcp_sync(
     to the parquet demo — the point of this route is to guarantee live data.
     """
     _validate_project_id(project_id)
-    _get_credentials()  # ensure the user is authenticated; raises 401 otherwise
+    _get_credentials(request)  # ensure the user is authenticated; raises 401 otherwise
 
     rows = _bq_rows_for_project(project_id, months)
     if rows is None:
@@ -777,7 +863,7 @@ def gcp_sync(
             details={"project_id": project_id, "months": months},
         )
 
-    from routes.routes_events import _injected_events  # type: ignore
+    from routes.routes_events import replace_injected_events
     from core.cache import app_cache
     from data.loader import invalidate_cache
 
@@ -796,8 +882,8 @@ def gcp_sync(
             }
         )
 
-    _injected_events.clear()
-    _injected_events.extend(normalized)
+    # SEC-015: replace the shared store atomically under its lock.
+    replace_injected_events(normalized)
 
     app_cache.clear()
     invalidate_cache()
@@ -838,6 +924,7 @@ def gcp_sync(
 
 @router.get("/logs", response_model=List[GCPLogEntry], summary="Fetch Cloud Logging entries")
 def gcp_logs(
+    request: Request,
     project_id: Annotated[str, Query(description="GCP project ID")],
     limit: Annotated[int, Query(ge=1, le=500)] = 50,
     severity: Annotated[Optional[str], Query(description="Minimum severity filter e.g. ERROR")] = None,
@@ -855,7 +942,7 @@ def gcp_logs(
     else:
         severity_upper = None
 
-    token = _get_credentials()
+    token = _get_credentials(request)
     headers = _build_auth_headers(token)
     headers["Content-Type"] = "application/json"
 
@@ -927,10 +1014,11 @@ def gcp_logs(
 
 @router.get("/services", response_model=List[GCPService], summary="List enabled GCP services for a project")
 def gcp_services(
+    request: Request,
     project_id: Annotated[str, Query(description="GCP project ID")],
 ) -> List[GCPService]:
     _validate_project_id(project_id)
-    token = _get_credentials()
+    token = _get_credentials(request)
     headers = _build_auth_headers(token)
 
     # Category mapping heuristic based on service name patterns

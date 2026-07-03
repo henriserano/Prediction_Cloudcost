@@ -11,6 +11,7 @@ import { SectionCard } from "@/components/ui/section-card"
 import { KpiCard } from "@/components/ui/kpi-card"
 import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
+import { QueryError } from "@/components/ui/query-error"
 import { useForecast, useForecastSummary, useModelBenchmarks } from "@/lib/hooks/useApi"
 import type { ModelBenchmark } from "@/lib/types"
 import { cn } from "@/lib/utils"
@@ -152,9 +153,11 @@ export default function ForecastPage() {
   const [selectedModel, setSelectedModel] = useState("AutoETS")
   const [horizon, setHorizon] = useState(60)
 
-  const { data: benchmarks, isLoading: benchLoading } = useModelBenchmarks()
-  const { data: points, isLoading: forecastLoading } = useForecast(horizon, selectedModel)
-  const { data: summary, isLoading: summaryLoading } = useForecastSummary(horizon, selectedModel)
+  const { data: benchmarks, isLoading: benchLoading, error: benchError, refetch: refetchBench } = useModelBenchmarks()
+  const { data: points, isLoading: forecastLoading, error: forecastError, refetch: refetchForecast } = useForecast(horizon, selectedModel)
+  const { data: summary, isLoading: summaryLoading, error: summaryError, refetch: refetchSummary } = useForecastSummary(horizon, selectedModel)
+
+  const hasError = !!(benchError || forecastError || summaryError)
 
   const lastActualDate = points?.filter((p) => p.actual != null).at(-1)?.date ?? ""
   const forecastTotal = points
@@ -162,6 +165,24 @@ export default function ForecastPage() {
     : 0
 
   const activeBench = benchmarks?.find((m) => m.model === selectedModel)
+
+  if (hasError) {
+    return (
+      <PageShell
+        eyebrow="Forecasting engine"
+        title="Prévision"
+        description="Impossible de charger les prévisions"
+      >
+        <QueryError
+          onRetry={() => {
+            if (benchError) void refetchBench()
+            if (forecastError) void refetchForecast()
+            if (summaryError) void refetchSummary()
+          }}
+        />
+      </PageShell>
+    )
+  }
 
   return (
     <PageShell

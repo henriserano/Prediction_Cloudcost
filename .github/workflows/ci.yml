@@ -1,10 +1,11 @@
-# CI pipeline — runs on every push and pull_request across all branches.
+# CI pipeline — runs on pushes to main/dev and on every pull_request.
+# (push limited to main/dev to avoid double runs on PR branches.)
 # Three jobs run in parallel: backend lint/test, frontend lint/build, docker build.
 name: CI
 
 on:
   push:
-    branches: ["**"]
+    branches: [main, dev]
   pull_request:
     branches: ["**"]
 
@@ -44,8 +45,8 @@ jobs:
           # image stays lean, but install them here for the test job.
           pip install pytest pytest-asyncio
 
-      # Correctness tests + smoke tests. Loaders are monkeypatched so we do not
-      # need the (gitignored) parquet files in CI.
+      # Correctness tests + smoke tests. Loaders are monkeypatched so the tests
+      # do not depend on the bundled demo parquet files (tracked in back/data/).
       - name: Run pytest
         run: pytest -v --tb=short
 

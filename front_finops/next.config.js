@@ -50,6 +50,12 @@ const nextConfig = {
         source: "/api/:path*",
         destination: `${resolvedBackendUrl}/api/:path*`,
       },
+      {
+        // Backend liveness endpoint (root-level, outside /api) — used by the
+        // useHealth() hook to drive the Live/Hors ligne badge in PageShell.
+        source: "/health",
+        destination: `${resolvedBackendUrl}/health`,
+      },
     ]
   },
 }
