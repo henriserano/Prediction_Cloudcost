@@ -19,3 +19,7 @@ boto3>=1.35.0
 langchain-core>=0.3.0
 langchain-aws>=0.2.0
 langgraph>=0.2.0
+# Auth / crypto (POC-grade session + credentials-at-rest encryption)
+argon2-cffi>=23.1.0
+cryptography>=42.0.0
+PyJWT>=2.9.0

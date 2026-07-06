@@ -21,6 +21,9 @@ from routes.routes_data import router as data_router
 from routes.routes_advanced import router as advanced_router
 from routes.routes_chat import router as chat_router
 from routes.routes_tools import router as tools_router
+from routes.routes_auth import router as auth_router
+from routes.routes_conversations import router as conversations_router
+from routes.routes_credentials import router as credentials_router
 
 logger = get_logger(__name__)
 
@@ -141,3 +144,6 @@ app.include_router(data_router)
 app.include_router(advanced_router)
 app.include_router(chat_router)
 app.include_router(tools_router)
+app.include_router(auth_router)
+app.include_router(conversations_router)
+app.include_router(credentials_router)

@@ -7,10 +7,19 @@ from typing import Annotated, AsyncIterator
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
+from fastapi import Request
+
 from agent.graph import DEFAULT_MODEL, DEFAULT_SYSTEM_PROMPT, get_agent
 from core.auth import require_api_key
+from core.config import get_settings
+from core.conversations import (
+    delete_conversation,
+    load_messages,
+    save_conversation,
+)
 from core.errors import AppError
 from core.logging import get_logger
+from core.session import get_current_user_id
 from schemas.chat import ChatRequest, ChatResponse, ChatToolCall
 
 logger = get_logger(__name__)
@@ -118,7 +127,7 @@ def chat(body: ChatRequest) -> ChatResponse:
     dependencies=[Depends(require_api_key)],
     summary="Stream a chat turn as Server-Sent Events",
 )
-async def chat_stream(body: ChatRequest) -> StreamingResponse:
+async def chat_stream(request: Request, body: ChatRequest) -> StreamingResponse:
     """Stream the agent turn as SSE.
 
     Event types emitted (each ``event: TYPE\\ndata: JSON\\n\\n``):
@@ -136,14 +145,20 @@ async def chat_stream(body: ChatRequest) -> StreamingResponse:
     event on a 200 stream rather than a raw 500, so the chatbot UI can render
     the human-readable reason in the current message bubble.
     """
-    from langchain_core.messages import HumanMessage, SystemMessage
+    from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
     thread_id = body.thread_id or uuid.uuid4().hex
+    user_id = get_current_user_id(request)
+    settings = get_settings()
+
+    # Namespace the LangGraph thread by user so two accounts opening the same
+    # ``thread_id`` never cross-talk in the MemorySaver cache.
+    ns_thread_id = f"{user_id or 'anon'}:{thread_id}"
 
     # Try to build the agent up-front so we can surface setup failures inline.
     try:
         agent = get_agent(DEFAULT_MODEL)
-        config = {"configurable": {"thread_id": thread_id}}
+        config = {"configurable": {"thread_id": ns_thread_id}}
         try:
             existing = agent.get_state(config).values.get("messages", [])
         except Exception:
@@ -154,6 +169,19 @@ async def chat_stream(body: ChatRequest) -> StreamingResponse:
             messages.append(
                 SystemMessage(content=body.system_prompt or DEFAULT_SYSTEM_PROMPT)
             )
+            # If the user has a persisted history for this thread but the
+            # process cache is cold (fresh worker, restart, LB pin swap),
+            # replay it so the model has full context on the first turn.
+            if user_id and settings.auth_enabled:
+                for m in load_messages(user_id, thread_id):
+                    role = m.get("role")
+                    content = m.get("content", "")
+                    if not content:
+                        continue
+                    if role == "user":
+                        messages.append(HumanMessage(content=content))
+                    elif role == "assistant":
+                        messages.append(AIMessage(content=content))
         messages.append(HumanMessage(content=body.message))
         setup_error: tuple[str, str] | None = None
     except AppError as exc:
@@ -231,6 +259,19 @@ async def chat_stream(body: ChatRequest) -> StreamingResponse:
                         {"id": ev.get("run_id", ""), "result_preview": preview},
                     )
 
+            # Snapshot the up-to-date transcript once the turn is done. We
+            # pull it back from LangGraph's state so both the freshly-streamed
+            # message and any replayed history live in one place.
+            if user_id and settings.auth_enabled and agent is not None and config is not None:
+                try:
+                    final_state = agent.get_state(config).values
+                    save_conversation(user_id, thread_id, final_state.get("messages", []))
+                except Exception as exc:
+                    logger.warning(
+                        "post_stream_persist_failed",
+                        extra={"error": repr(exc), "user_id": user_id, "thread_id": thread_id},
+                    )
+
             yield _sse(
                 "done",
                 {"thread_id": thread_id, "model": DEFAULT_MODEL, "total_tokens": total_tokens},
@@ -270,16 +311,20 @@ async def chat_stream(body: ChatRequest) -> StreamingResponse:
     dependencies=[Depends(require_api_key)],
     summary="Reset a conversation thread",
 )
-def reset_chat(thread_id: Annotated[str, ...]) -> dict:
+def reset_chat(thread_id: Annotated[str, ...], request: Request) -> dict:
     """Delete every checkpoint for a thread so the next turn starts fresh.
 
-    Useful when the user wants to change topic or drop stale context from the
-    agent's memory without spinning up a new thread on the client side.
+    Removes: the LangGraph in-memory state AND the Dynamo snapshot if the
+    caller is authenticated (so history doesn't come back on next process).
     """
+    user_id = get_current_user_id(request)
+    ns_thread_id = f"{user_id or 'anon'}:{thread_id}"
     agent = get_agent(DEFAULT_MODEL)
-    config = {"configurable": {"thread_id": thread_id}}
+    config = {"configurable": {"thread_id": ns_thread_id}}
     try:
         agent.update_state(config, {"messages": []})
     except Exception as exc:
         logger.warning("chat_reset_failed", extra={"error": repr(exc), "thread_id": thread_id})
+    if user_id and get_settings().auth_enabled:
+        delete_conversation(user_id, thread_id)
     return {"thread_id": thread_id, "reset": True}

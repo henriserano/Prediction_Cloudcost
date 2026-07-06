@@ -61,10 +61,16 @@ resource "aws_ecs_task_definition" "app" {
       environment = concat(
         [
           { name = "ENV", value = var.env },
-          { name = "PORT", value = tostring(var.app_port) }
+          { name = "PORT", value = tostring(var.app_port) },
+          { name = "AWS_REGION", value = var.aws_region },
+          { name = "DDB_TABLE_USERS", value = aws_dynamodb_table.users.name },
+          { name = "DDB_TABLE_CONVERSATIONS", value = aws_dynamodb_table.conversations.name },
+          { name = "DDB_TABLE_CREDENTIALS", value = aws_dynamodb_table.credentials.name },
         ],
         # API key protecting the mutating endpoints — injected only when set.
-        var.api_key != "" ? [{ name = "API_KEY", value = var.api_key }] : []
+        var.api_key != "" ? [{ name = "API_KEY", value = var.api_key }] : [],
+        # JWT signing key for the session cookie (POC auth).
+        var.session_secret != "" ? [{ name = "SESSION_SECRET", value = var.session_secret }] : []
       )
       # TODO: move API_KEY (and any other sensitive value) to AWS Secrets
       # Manager — a plain env var is visible in the task definition (ECS

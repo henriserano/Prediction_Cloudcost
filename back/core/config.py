@@ -78,6 +78,27 @@ class Settings(BaseSettings):
         "in us-east-1 — do not change unless AWS relocates it.",
     )
 
+    # DynamoDB — set by terraform (see terraform/dynamodb.tf). Empty = auth
+    # feature disabled, backend runs stateless as before.
+    ddb_table_users: str = Field(default="")
+    ddb_table_conversations: str = Field(default="")
+    ddb_table_credentials: str = Field(default="")
+    ddb_endpoint_url: str = Field(
+        default="",
+        description="Override for DynamoDB Local (e.g. http://localhost:8000). "
+        "Empty = use real AWS endpoint from AWS_REGION.",
+    )
+
+    # Session cookie signing. Empty in dev = auto-generated ephemeral key
+    # (sessions die on restart, fine for local). Required in prod.
+    session_secret: str = Field(default="")
+    session_cookie_name: str = Field(default="sid")
+    session_ttl_hours: int = Field(default=24 * 7)
+
+    @property
+    def auth_enabled(self) -> bool:
+        return bool(self.ddb_table_users)
+
     @property
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",")]

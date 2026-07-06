@@ -36,6 +36,10 @@ export async function POST(request: Request): Promise<Response> {
   }
   const apiKey = process.env.BACKEND_API_KEY
   if (apiKey) headers["x-api-key"] = apiKey
+  // Forward the session cookie so the backend can identify the logged-in
+  // user and persist the transcript on the right row.
+  const cookie = request.headers.get("cookie")
+  if (cookie) headers["cookie"] = cookie
 
   let upstream: Response
   try {

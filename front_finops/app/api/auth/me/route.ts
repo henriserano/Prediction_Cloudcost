@@ -1,0 +1,8 @@
+import { proxyWithCookies } from "@/lib/server/backend-proxy"
+
+export const runtime = "nodejs"
+export const dynamic = "force-dynamic"
+
+export async function GET(request: Request): Promise<Response> {
+  return proxyWithCookies(request, "/api/auth/me", "GET")
+}

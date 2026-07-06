@@ -26,9 +26,45 @@ certificate_arn = ""
 # the recommended target for production (see ecs.tf).
 api_key = ""
 
+# JWT signing key for the session cookie (auth POC). Must be ≥32 chars in
+# prod — generate with `openssl rand -base64 48`. Rotating invalidates every
+# active session. Same guidance as api_key: prefer TF_VAR_session_secret.
+session_secret = ""
+
 # Google OAuth2 — register at https://console.cloud.google.com/apis/credentials
 # The redirect URI must be HTTPS (OAuth over plain HTTP exposes the auth code).
 google_client_id     = ""
 google_client_secret = ""
 google_redirect_uri  = "https://<your-alb-dns>/api/gcp/callback"
 frontend_url         = "https://<your-vercel-url>"
+
+# ── AWS Bedrock ───────────────────────────────────────────────────────────────
+# All Bedrock values below are NON-SENSITIVE (region, model IDs). Bedrock
+# credentials come from the ECS task role — no AWS keys in env vars.
+# Rotate by editing here and re-applying; no secret rotation needed.
+
+# Region where Bedrock is called. Claude models in EU are hosted in
+# eu-west-3 / eu-central-1 — this can differ from your primary aws_region.
+bedrock_region = "eu-west-3"
+
+# Model ID or cross-region EU inference profile.
+# Examples:
+#   "anthropic.claude-sonnet-4-6"          (single-region)
+#   "eu.anthropic.claude-sonnet-4-6"       (EU cross-region inference profile)
+bedrock_model_id = "eu.anthropic.claude-sonnet-4-6"
+
+# Bedrock Guardrail — strongly recommended when processing client data
+# (PII filtering, prompt-injection defence). Create in the Bedrock console,
+# then paste the ID here. Leave empty to disable.
+bedrock_guardrail_id      = ""
+bedrock_guardrail_version = "DRAFT"
+
+# Least-privilege IAM: narrow this list to the exact model ARNs you invoke.
+# The default allows the whole anthropic.claude-* family across all regions.
+bedrock_allowed_model_arns = [
+  "arn:aws:bedrock:*::foundation-model/anthropic.claude-*",
+]
+
+# Default max output tokens for InvokeModel. Exposed as env var so tuning
+# doesn't require a code deploy.
+bedrock_max_tokens = 4096

@@ -66,3 +66,59 @@ export async function proxyPost(request: Request, path: string): Promise<Respons
     headers: responseHeaders,
   })
 }
+
+// ---------------------------------------------------------------------------
+// Bidirectional proxy — same as proxyPost above but also relays Set-Cookie
+// from the backend response. Used by /api/auth/* routes so the backend can
+// issue the ``sid`` session cookie directly to the browser through Next.
+// ---------------------------------------------------------------------------
+export async function proxyWithCookies(
+  request: Request,
+  path: string,
+  method: "GET" | "POST" | "PUT" | "DELETE" = "POST",
+): Promise<Response> {
+  const search = new URL(request.url).search
+  const target = `${backendBaseUrl()}${path}${search}`
+
+  const headers = new Headers()
+  const contentType = request.headers.get("content-type")
+  if (contentType) headers.set("content-type", contentType)
+  const cookie = request.headers.get("cookie")
+  if (cookie) headers.set("cookie", cookie)
+  const apiKey = process.env.BACKEND_API_KEY
+  if (apiKey) headers.set("x-api-key", apiKey)
+
+  const bodyBuf =
+    method === "GET" || method === "DELETE"
+      ? undefined
+      : await request.arrayBuffer()
+
+  let upstream: Response
+  try {
+    upstream = await fetch(target, {
+      method,
+      headers,
+      body: bodyBuf && bodyBuf.byteLength > 0 ? bodyBuf : undefined,
+      cache: "no-store",
+    })
+  } catch {
+    return Response.json({ detail: "Backend unreachable" }, { status: 502 })
+  }
+
+  const responseHeaders = new Headers()
+  const upstreamContentType = upstream.headers.get("content-type")
+  if (upstreamContentType) responseHeaders.set("content-type", upstreamContentType)
+
+  // Node's fetch merges multiple Set-Cookie into one comma-joined header; use
+  // getSetCookie() (Undici) to get an array we can re-append individually.
+  const upstreamAny = upstream.headers as unknown as {
+    getSetCookie?: () => string[]
+  }
+  const cookies = upstreamAny.getSetCookie?.() ?? []
+  for (const c of cookies) responseHeaders.append("set-cookie", c)
+
+  return new Response(await upstream.arrayBuffer(), {
+    status: upstream.status,
+    headers: responseHeaders,
+  })
+}

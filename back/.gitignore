@@ -1,0 +1,24 @@
+# Backend-local overrides. Most Python patterns are covered by the root
+# .gitignore; this file catches artefacts specific to running the FastAPI
+# app from ./back (venv, uploaded files, local Dynamo dumps, etc.).
+
+# Local venvs — the .venv name is what the README recommends.
+.venv/
+venv/
+
+# Uploaded / ingested billing files (real client data — never versioned).
+uploads/
+data/uploads/
+data/local/
+*.csv
+!data/**/*.csv.example
+!tests/**/*.csv
+
+# LangGraph/langchain cache
+.langgraph/
+.cache/
+
+# Pytest / coverage
+.pytest_cache/
+.coverage
+htmlcov/

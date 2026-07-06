@@ -36,3 +36,18 @@ output "ecr_push_policy_arn" {
 output "aws_region" {
   value = var.aws_region
 }
+
+output "dynamodb_table_users" {
+  description = "DynamoDB table storing user identity"
+  value       = aws_dynamodb_table.users.name
+}
+
+output "dynamodb_table_conversations" {
+  description = "DynamoDB table storing chat threads per user"
+  value       = aws_dynamodb_table.conversations.name
+}
+
+output "dynamodb_table_credentials" {
+  description = "DynamoDB table storing per-user encrypted provider credentials"
+  value       = aws_dynamodb_table.credentials.name
+}

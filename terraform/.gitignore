@@ -1,10 +1,33 @@
+# Local .terraform directory (providers, modules)
 .terraform/
+.terraform.lock.info
+.terraform.tfstate.lock.info
+
 # .terraform.lock.hcl is intentionally NOT ignored — commit it to pin provider versions
+
+# State files may contain sensitive outputs (secret ARNs, resolved passwords).
 terraform.tfstate
 terraform.tfstate.backup
+*.tfstate
+*.tfstate.*
+
+# Variable files often hold API keys, ARNs, session secrets. Only the template
+# (terraform.tfvars.example) is safe to commit.
 terraform.tfvars
+terraform.tfvars.json
+*.auto.tfvars
+*.auto.tfvars.json
+
+# Plan artefacts — binary + may contain full resource plans with sensitive values.
 *.tfplan
+*.tfplan.*
+
+# Override files are intended to be local-only.
 override.tf
 override.tf.json
 *_override.tf
 *_override.tf.json
+
+# Crash logs may leak resource state.
+crash.log
+crash.*.log

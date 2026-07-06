@@ -1,19 +1,103 @@
+# ── Secrets / environnement ────────────────────────────────────────────────────
+# Any .env (root or nested) is off-limits. Template files (.env.example, .env.sample)
+# stay committable so newcomers see the expected variables without the values.
+.env
+.env.*
+**/.env
+**/.env.*
+!.env.example
+!**/.env.example
+!.env.sample
+!**/.env.sample
+
+# Cloud credentials — never commit even by mistake.
+*service-account*.json
+*service_account*.json
+*-service-account.json
+google-credentials*.json
+gcp-*.json
+*application_default_credentials.json
+.aws/
+aws-credentials*
+aws_config*
+.gcloud/
+credentials.json
+secrets.json
+secrets.yml
+secrets.yaml
+secrets.env
+
+# Keys & certificates
+*.pem
+*.key
+!package-lock.json
+*.p12
+*.pfx
+*.crt
+*.cer
+*.der
+id_rsa*
+id_ed25519*
+id_ecdsa*
+known_hosts
+
 # ── Python ─────────────────────────────────────────────────────────────────────
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+*.egg
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+# Local virtual envs — never versioned.
+.venv/
+venv/
+env/
+ENV/
 
-# ── Environnements / secrets ───────────────────────────────────────────────────
-.env
-.env.*
-back/.env
+# ── Node / Next.js (fallback si un dev clone à la racine) ──────────────────────
+node_modules/
+.next/
+out/
 
-# ── Artefacts d'entraînement / outils locaux ───────────────────────────────────
-lightning_logs/
+# ── Éditeurs / OS ──────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+Desktop.ini
+.vscode/
+!.vscode/extensions.json
+!.vscode/settings.shared.json
+.idea/
+*.swp
+*.swo
+*.swn
+*~
+
+# ── Outils locaux Claude / IDE ─────────────────────────────────────────────────
 .claude/settings.local.json
 *.tsbuildinfo
+
+# ── Backups / temporaires ──────────────────────────────────────────────────────
+*.bak
+*.orig
+*.tmp
+*.log
+
+# ── Artefacts d'entraînement ───────────────────────────────────────────────────
+lightning_logs/
 
 # ── Données brutes locales (exports billing réels — jamais versionnés) ─────────
 Rapports_Billing*.csv
 Cloud Run Revision - *.csv
 /daily_costs.parquet
 /daily_per_service.parquet
+
+# ── Dépendances externes explicitement exclues ─────────────────────────────────
+Time-Series-Library/
