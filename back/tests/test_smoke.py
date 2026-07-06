@@ -281,3 +281,89 @@ async def test_aws_billing_without_credentials_returns_401(monkeypatch):
         response = await client.get("/api/aws/billing")
 
     assert response.status_code == 401
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 6. MCP-style tools registry + chat route contract
+# ─────────────────────────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_tools_catalog_lists_every_registered_tool():
+    """GET /api/tools must return a non-empty catalog covering the categories
+    we register: data, analytics, forecast, advanced, cloud.
+    """
+    import httpx
+    from httpx import ASGITransport
+    from main import app
+
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/tools")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] > 10, f"only {body['total']} tools registered"
+    assert set(body["categories"]).issuperset({"analytics", "forecast", "advanced", "data"})
+    # Every entry must expose an input_schema — MCP clients rely on this.
+    for tool in body["tools"]:
+        assert "input_schema" in tool
+        assert tool["input_schema"].get("type") == "object"
+
+
+@pytest.mark.asyncio
+async def test_tool_invoke_get_data_status_works_without_api_key(monkeypatch):
+    """When API_KEY is not configured (dev mode), /api/tools/invoke is open
+    and must be able to run a registered no-arg tool end-to-end.
+    """
+    import httpx
+    from httpx import ASGITransport
+    from main import app
+    from core.config import get_settings
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "api_key", "")
+    monkeypatch.setattr(settings, "env", "dev")
+
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/tools/invoke",
+            json={"name": "get_data_status", "arguments": {}},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["name"] == "get_data_status"
+    assert isinstance(body["result"], str)
+    assert "source" in body["result"]
+
+
+@pytest.mark.asyncio
+async def test_chat_route_reports_missing_bedrock_credentials(monkeypatch):
+    """When AWS_BEARER_TOKEN_BEDROCK and standard AWS creds are absent, /api/chat
+    must fail with a clear configuration error (500) — never crash silently.
+    """
+    import os
+    import httpx
+    from httpx import ASGITransport
+    from main import app
+    from core.config import get_settings
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "api_key", "")
+    monkeypatch.setattr(settings, "env", "dev")
+    for var in ("AWS_BEARER_TOKEN_BEDROCK", "AWS_ACCESS_KEY_ID", "AWS_PROFILE"):
+        monkeypatch.delenv(var, raising=False)
+
+    # Reset the memoised agent so the guard runs fresh.
+    import agent.graph as graph
+    graph._agent_cache.clear()
+
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/chat",
+            json={"message": "hello"},
+        )
+
+    assert response.status_code == 500
+    body = response.json()
+    assert body["error"]["code"] == "CONFIGURATION_ERROR"
+    assert "Bedrock" in body["error"]["message"]

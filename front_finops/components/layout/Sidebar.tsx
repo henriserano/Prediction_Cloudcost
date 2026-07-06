@@ -9,6 +9,7 @@ import {
   FlaskConical,
   DatabaseZap,
   Microscope,
+  MessageCircle,
   X,
   Sparkles,
 } from "lucide-react"
@@ -30,6 +31,7 @@ const PRIMARY: NavItem[] = [
   { href: "/services", label: "Services", icon: Layers, hint: "Pareto 80/20" },
   { href: "/analytics", label: "Analytique", icon: FlaskConical, hint: "STL · Anomalies" },
   { href: "/diagnostics", label: "Diagnostics", icon: Microscope, hint: "Anomalies · Drift · Ensemble" },
+  { href: "/assistant", label: "Assistant", icon: MessageCircle, hint: "Chat FinOps" },
 ]
 
 const SECONDARY: NavItem[] = [
