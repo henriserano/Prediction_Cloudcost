@@ -254,7 +254,7 @@ def gcp_auth(request: Request) -> RedirectResponse:
     settings = get_settings()
     client_id = settings.google_client_id or _get_env("GOOGLE_CLIENT_ID")
     redirect_uri = settings.google_redirect_uri or _get_env(
-        "GOOGLE_REDIRECT_URI", "http://localhost:8080/api/gcp/callback"
+        "GOOGLE_REDIRECT_URI", "https://finopsgcp.vercel.app/api/gcp/callback"
     )
 
     if not client_id:
@@ -298,7 +298,7 @@ def gcp_callback(
     error: Annotated[Optional[str], Query()] = None,
 ) -> RedirectResponse:
     settings = get_settings()
-    frontend_url = settings.frontend_url or _get_env("FRONTEND_URL", "http://localhost:3000")
+    frontend_url = settings.frontend_url or _get_env("FRONTEND_URL", "hhttps://finopsgcp.vercel.app/")
 
     if error:
         # Allowlist permitted OAuth error codes to prevent log injection and
@@ -329,7 +329,7 @@ def gcp_callback(
     client_id = settings.google_client_id or _get_env("GOOGLE_CLIENT_ID")
     client_secret = settings.google_client_secret or _get_env("GOOGLE_CLIENT_SECRET")
     redirect_uri = settings.google_redirect_uri or _get_env(
-        "GOOGLE_REDIRECT_URI", "http://localhost:8080/api/gcp/callback"
+        "GOOGLE_REDIRECT_URI", "https://finopsgcp.vercel.app/api/gcp/callback"
     )
 
     try:
