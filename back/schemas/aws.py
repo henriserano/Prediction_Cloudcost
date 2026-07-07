@@ -9,6 +9,25 @@ from schemas.gcp import DateRange
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
+class AWSAccount(BaseModel):
+    """One AWS account visible to the caller.
+
+    Comes from either the Organizations API (management/delegated admin
+    account) or STS caller-identity (single-account IAM user). The
+    ``source`` field records which path resolved it so the UI can hint at
+    the "single account" case.
+    """
+
+    account_id: str
+    name: str
+    email: Optional[str] = None
+    status: Optional[str] = None
+    source: str = Field(
+        default="sts",
+        description="'organizations' when discovered via ListAccounts, 'sts' when fallback",
+    )
+
+
 class AWSAuthStatus(BaseModel):
     """Reports whether the backend has usable AWS credentials.
 

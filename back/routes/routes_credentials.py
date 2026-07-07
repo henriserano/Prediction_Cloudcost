@@ -14,6 +14,7 @@ from typing import Annotated
 from boto3.dynamodb.conditions import Key
 from fastapi import APIRouter, Depends
 
+from core.aws_session import activate_user_aws, deactivate_user_aws, is_active
 from core.crypto import (
     EncryptedBlob,
     WrappedKek,
@@ -123,6 +124,11 @@ def upsert(
         "credential_upserted",
         extra={"user_id": user_id, "provider": provider},
     )
+
+    # AWS: activate the in-memory session cache so /api/aws/* immediately
+    # returns this user's data without a second unlock round-trip.
+    if provider == "aws":
+        _activate_aws_from_payload(user_id, body.payload)
     return CredentialMetadata(
         provider=provider,
         label=body.label,
@@ -161,7 +167,98 @@ def reveal(
         payload = json.loads(plaintext)
     except json.JSONDecodeError:
         raise Unauthorized("Corrupted credential payload")
+
+    # Same convenience as PUT: seed the AWS session cache on reveal so the
+    # caller can immediately hit /api/aws/* without a second dance.
+    if provider == "aws":
+        _activate_aws_from_payload(user_id, payload)
+
     return CredentialRevealResponse(provider=provider, payload=payload)
+
+
+@router.post(
+    "/aws/activate",
+    summary="Decrypt stored AWS creds and cache them in-memory for the session",
+)
+def activate_aws(
+    body: CredentialReveal,
+    user_id: Annotated[str, Depends(require_current_user_id)],
+) -> dict:
+    """Same as /reveal but without returning the plaintext to the client.
+
+    Used after a page reload: the front asks for the PIN, the server unlocks
+    the AES-GCM blob, and holds a boto3.Session in memory for /api/aws/*
+    calls. No keys ever hit the browser.
+    """
+    user = _load_user_or_401(user_id)
+    kek = _unwrap_or_401(user, body.pin)
+
+    item = credentials_table().get_item(
+        Key={"user_id": user_id, "provider": "aws"}
+    ).get("Item")
+    if not item:
+        raise NotFound("No AWS credentials stored for this user.")
+
+    plaintext = decrypt_with_kek(
+        kek,
+        EncryptedBlob(ciphertext_b64=item["ciphertext"], nonce_b64=item["nonce"]),
+        associated_data=b"aws",
+    )
+    if plaintext is None:
+        raise Unauthorized("Failed to decrypt AWS credentials.")
+    try:
+        payload = json.loads(plaintext)
+    except json.JSONDecodeError:
+        raise Unauthorized("Corrupted AWS credential payload.")
+
+    _activate_aws_from_payload(user_id, payload)
+    return {"activated": True, "provider": "aws"}
+
+
+@router.get(
+    "/aws/status",
+    summary="Whether the current user's AWS session is unlocked in memory",
+)
+def aws_activation_status(
+    user_id: Annotated[str, Depends(require_current_user_id)],
+) -> dict:
+    return {"active": is_active(user_id)}
+
+
+@router.post(
+    "/aws/deactivate",
+    summary="Drop the in-memory AWS session for the current user",
+)
+def deactivate_aws(
+    user_id: Annotated[str, Depends(require_current_user_id)],
+) -> dict:
+    deactivate_user_aws(user_id)
+    return {"active": False}
+
+
+def _activate_aws_from_payload(user_id: str, payload: dict) -> None:
+    """Extract the standard AWS fields from a credentials payload and cache
+    them as a boto3 Session. Silently no-ops if the required fields are
+    missing — the credential row itself isn't rejected, only the activation."""
+    access_key = payload.get("access_key_id") or payload.get("AWS_ACCESS_KEY_ID")
+    secret_key = payload.get("secret_access_key") or payload.get("AWS_SECRET_ACCESS_KEY")
+    region = payload.get("region") or payload.get("AWS_REGION") or "eu-west-1"
+    session_token = (
+        payload.get("session_token") or payload.get("AWS_SESSION_TOKEN")
+    )
+    if not access_key or not secret_key:
+        logger.warning(
+            "aws_activation_missing_fields",
+            extra={"user_id": user_id, "fields": list(payload.keys())},
+        )
+        return
+    activate_user_aws(
+        user_id=user_id,
+        access_key_id=str(access_key),
+        secret_access_key=str(secret_key),
+        region=str(region),
+        session_token=str(session_token) if session_token else None,
+    )
 
 
 @router.delete("/{provider}", summary="Forget stored credentials for one provider")

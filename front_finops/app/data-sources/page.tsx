@@ -21,10 +21,11 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { useGCPStatus } from "@/lib/hooks/useApi"
 import { api } from "@/lib/api"
-import { useQuery, useMutation } from "@tanstack/react-query"
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { cn } from "@/lib/utils"
 import { parseBillingFile, type ParsedResult } from "@/lib/parsers/billing-file"
 import type { BillingEvent, EventsIngestResponse, EventsUploadResponse } from "@/lib/types"
+import { PinPrompt } from "@/components/auth/PinPrompt"
 
 // ---------------------------------------------------------------------------
 // Tab definition
@@ -77,6 +78,24 @@ interface AWSAuthStatus {
   authenticated: boolean
   accountId: string | null
   arn: string | null
+  region: string | null
+  detail: string | null
+}
+
+interface AWSAccount {
+  accountId: string
+  name: string
+  email: string | null
+  status: string | null
+  source: "organizations" | "sts"
+}
+
+interface AWSBillingResponse {
+  accountId: string | null
+  total: number
+  currency: string
+  byService: { service: string; cost: number; pct: number }[]
+  byMonth: { month: string; cost: number }[]
 }
 
 function useAWSStatus() {
@@ -88,20 +107,58 @@ function useAWSStatus() {
   })
 }
 
+function useAWSAccounts(enabled: boolean) {
+  return useQuery<AWSAccount[]>({
+    queryKey: ["aws-accounts"],
+    queryFn: () => api.get("/api/aws/accounts").then((r) => r.data),
+    enabled,
+    staleTime: 60_000,
+    retry: false,
+  })
+}
+
+function useAWSBilling(enabled: boolean, accountId: string | null) {
+  return useQuery<AWSBillingResponse>({
+    queryKey: ["aws-billing", accountId ?? "self"],
+    queryFn: () =>
+      api
+        .get("/api/aws/billing", {
+          params: {
+            months: 3,
+            granularity: "MONTHLY",
+            ...(accountId ? { account_id: accountId } : {}),
+          },
+        })
+        .then((r) => r.data),
+    enabled,
+    staleTime: 60_000,
+    retry: false,
+  })
+}
+
 interface AWSCredentialsPayload {
   accessKeyId: string
   secretAccessKey: string
   region: string
+  pin: string
 }
 
+// Store + activate the AWS credentials in one round-trip. The backend saves
+// them AES-GCM-encrypted (KEK unwrapped with the PIN) and immediately builds
+// a boto3.Session cached in memory for /api/aws/* — no separate unlock step.
 function useConnectAWS() {
-  return useMutation<AWSAuthStatus, Error, AWSCredentialsPayload>({
+  return useMutation<{ provider: string }, Error, AWSCredentialsPayload>({
     mutationFn: (body) =>
       api
-        .post("/api/aws/connect", {
-          access_key_id: body.accessKeyId,
-          secret_access_key: body.secretAccessKey,
-          region: body.region,
+        .put("/api/credentials/aws", {
+          provider: "aws",
+          pin: body.pin,
+          label: `${body.region}`,
+          payload: {
+            access_key_id: body.accessKeyId,
+            secret_access_key: body.secretAccessKey,
+            region: body.region,
+          },
         })
         .then((r) => r.data),
   })

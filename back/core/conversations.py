@@ -1,21 +1,16 @@
 """Per-user conversation persistence in DynamoDB.
 
-The chat route already runs on LangGraph's MemorySaver (in-process warm
-cache). This module layers a durable, per-user history on top: we snapshot
-the transcript after each turn into ``finops_conversations`` and replay it
-when the same thread is picked up from another process (or after a restart).
-
-The stored ``messages`` are lightweight dicts — role + text content only,
-sometimes with a truncated tool preview. We drop internal state (agent
-scratchpad, tool_call ids) on purpose: the goal is UI history, not perfect
-LangGraph checkpointing.
+Stored transcript is intentionally minimal — a list of
+``{"role": "user"|"assistant", "content": str}`` dicts. Tool calls are
+visible in the UI as chips during the live stream; we don't persist them.
+The full Bedrock message shape (toolUse / toolResult blocks) is flattened
+via :func:`agent.graph.extract_plain_transcript` before it reaches us.
 """
 from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Any
 
 from boto3.dynamodb.conditions import Key
 
@@ -25,47 +20,11 @@ from core.logging import get_logger
 logger = get_logger(__name__)
 
 
-_MESSAGES_KEY = "messages"
 _MAX_MESSAGES_STORED = 200  # keep the payload well under DynamoDB's 400KB limit
 
 
 def _now_iso() -> str:
     return datetime.now(tz=timezone.utc).isoformat()
-
-
-def _serialise_message(msg: Any) -> dict[str, Any] | None:
-    """Adapt a langchain BaseMessage to a small JSON-safe dict.
-
-    Returns None for messages we don't want to persist (empty system prompts,
-    tool messages whose content is already reflected in the assistant reply).
-    """
-    from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
-
-    if isinstance(msg, SystemMessage):
-        # System prompt is re-injected server-side; no need to persist.
-        return None
-    if isinstance(msg, HumanMessage):
-        content = msg.content if isinstance(msg.content, str) else str(msg.content)
-        return {"role": "user", "content": content}
-    if isinstance(msg, AIMessage):
-        # AIMessage.content can be str or list of blocks. Flatten to text
-        # (the tool_calls are represented separately in ChatToolCall models
-        # streamed to the client; storing them again here would be redundant).
-        if isinstance(msg.content, str):
-            text = msg.content
-        elif isinstance(msg.content, list):
-            parts: list[str] = []
-            for b in msg.content:
-                if isinstance(b, dict) and b.get("type") == "text":
-                    parts.append(str(b.get("text", "")))
-            text = "".join(parts)
-        else:
-            text = str(msg.content)
-        return {"role": "assistant", "content": text}
-    if isinstance(msg, ToolMessage):
-        # Tool results are visible in the UI as chips; keep only a short note.
-        return None
-    return None
 
 
 def _title_from_first_user_message(messages: list[dict]) -> str:
@@ -77,30 +36,36 @@ def _title_from_first_user_message(messages: list[dict]) -> str:
     return "Nouvelle conversation"
 
 
-def save_conversation(user_id: str, thread_id: str, messages_state: list[Any]) -> None:
-    """Snapshot the messages of a LangGraph state to Dynamo. Never raises —
-    logs and swallows: persistence failing must not break the chat turn.
+def save_conversation(user_id: str, thread_id: str, messages: list[dict]) -> None:
+    """Persist a transcript snapshot. Never raises — logs and swallows so
+    persistence failures never break the chat turn.
+
+    ``messages`` must be a list of ``{"role","content": str}`` dicts. Callers
+    holding Bedrock's block format should first pass them through
+    :func:`agent.graph.extract_plain_transcript`.
     """
     try:
-        serialised: list[dict] = []
-        for m in messages_state:
-            item = _serialise_message(m)
-            if item is not None:
-                serialised.append(item)
-        if not serialised:
+        clean: list[dict] = []
+        for m in messages:
+            role = m.get("role")
+            content = m.get("content")
+            if role not in ("user", "assistant"):
+                continue
+            if not isinstance(content, str) or not content.strip():
+                continue
+            clean.append({"role": role, "content": content})
+        if not clean:
             return
-        if len(serialised) > _MAX_MESSAGES_STORED:
-            # Keep the last N — older turns fall off. Beyond ~200 messages, a
-            # user should start a new conversation anyway.
-            serialised = serialised[-_MAX_MESSAGES_STORED:]
+        if len(clean) > _MAX_MESSAGES_STORED:
+            clean = clean[-_MAX_MESSAGES_STORED:]
 
         conversations_table().put_item(
             Item={
                 "user_id": user_id,
                 "thread_id": thread_id,
-                "title": _title_from_first_user_message(serialised),
-                "message_count": Decimal(len(serialised)),
-                "messages": json.dumps(serialised, ensure_ascii=False),
+                "title": _title_from_first_user_message(clean),
+                "message_count": Decimal(len(clean)),
+                "messages": json.dumps(clean, ensure_ascii=False),
                 "updated_at": _now_iso(),
             }
         )

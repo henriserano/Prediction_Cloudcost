@@ -3,12 +3,15 @@ from __future__ import annotations
 from datetime import date, timedelta
 from typing import Annotated, List, Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Request
 
+from core.aws_session import get_user_boto3_session, get_user_region
 from core.config import get_settings
 from core.errors import AppError, BadRequest
 from core.logging import get_logger
+from core.session import get_current_user_id
 from schemas.aws import (
+    AWSAccount,
     AWSAuthStatus,
     AWSBillingByDay,
     AWSBillingByMonth,
@@ -21,6 +24,28 @@ from schemas.gcp import DateRange
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api/aws", tags=["aws"])
+
+
+def _session_for_request(request: Request):
+    """Return a boto3 Session for the caller.
+
+    Prefers the user's cached in-memory Session (built from their PIN-unlocked
+    AWS credentials). Falls back to the process default credential chain when
+    the user hasn't unlocked yet — useful for anonymous / dev flows.
+    """
+    user_id = get_current_user_id(request)
+    session = get_user_boto3_session(user_id)
+    if session is not None:
+        return session
+    boto3, *_ = _import_boto3()
+    return boto3.session.Session(region_name=get_settings().aws_region)
+
+
+def _region_for_request(request: Request) -> str:
+    """Region resolution matches the session: user override first, else config."""
+    user_id = get_current_user_id(request)
+    user_region = get_user_region(user_id)
+    return user_region or get_settings().aws_region
 
 
 def _import_boto3():
@@ -44,12 +69,19 @@ def _import_boto3():
         )
 
 
-def _sts_get_caller_identity() -> dict:
-    """Call STS GetCallerIdentity. Raises AppError with a clear detail on failure."""
-    boto3, _BotoCoreError, ClientError, NoCredentialsError = _import_boto3()
+def _sts_get_caller_identity(session=None) -> dict:
+    """Call STS GetCallerIdentity. Raises AppError with a clear detail on failure.
+
+    ``session`` is the boto3 Session to use (per-user when available).
+    Falls back to the module-default client if None is passed.
+    """
+    _boto3, _BotoCoreError, ClientError, NoCredentialsError = _import_boto3()
     settings = get_settings()
     try:
-        client = boto3.client("sts", region_name=settings.aws_region)
+        if session is not None:
+            client = session.client("sts", region_name=session.region_name or settings.aws_region)
+        else:
+            client = _boto3.client("sts", region_name=settings.aws_region)
         return client.get_caller_identity()
     except NoCredentialsError:
         raise AppError(
@@ -99,45 +131,126 @@ def _resolve_period(start: Optional[str], end: Optional[str], months_default: in
 # ---------------------------------------------------------------------------
 
 @router.get("/status", response_model=AWSAuthStatus, summary="Check AWS credentials via STS")
-def aws_status() -> AWSAuthStatus:
-    """Report whether boto3 can authenticate with AWS.
+def aws_status(request: Request) -> AWSAuthStatus:
+    """Report whether boto3 can authenticate with AWS for the current user.
 
-    Never raises — returns ``authenticated=False`` with a ``detail`` message
-    so the frontend can render a helpful connect-your-AWS prompt.
+    Uses the user's unlocked session when available (see
+    ``core.aws_session``), otherwise falls back to the server's default
+    credential chain. Never raises — returns ``authenticated=False`` with a
+    ``detail`` message so the frontend can render a helpful connect prompt.
     """
-    settings = get_settings()
+    region = _region_for_request(request)
     try:
-        identity = _sts_get_caller_identity()
+        session = _session_for_request(request)
+        identity = _sts_get_caller_identity(session=session)
         return AWSAuthStatus(
             authenticated=True,
             account_id=identity.get("Account"),
             arn=identity.get("Arn"),
             user_id=identity.get("UserId"),
-            region=settings.aws_region,
+            region=region,
         )
     except AppError as exc:
         return AWSAuthStatus(
             authenticated=False,
-            region=settings.aws_region,
+            region=region,
             detail=exc.message,
         )
     except Exception as exc:
         logger.error("aws_status_error", extra={"error": repr(exc)})
         return AWSAuthStatus(
             authenticated=False,
-            region=settings.aws_region,
+            region=region,
             detail="Unexpected error checking AWS credentials.",
         )
+
+
+# ---------------------------------------------------------------------------
+# Accounts — Organizations API, with STS fallback for single-account setups
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/accounts",
+    response_model=List[AWSAccount],
+    summary="List AWS accounts the current user can see (Organizations + STS fallback)",
+)
+def aws_accounts(request: Request) -> List[AWSAccount]:
+    """Return the AWS accounts visible to the caller.
+
+    Two paths, in priority order:
+
+    1. **Organizations** — the caller is in the org's management account (or
+       a delegated admin) and has ``organizations:ListAccounts``. Every
+       linked account is returned.
+    2. **STS caller identity** — the caller is a standalone IAM user or a
+       non-management account. We return a single entry for the current
+       account. This is the common case for a plain IAM user in a member
+       account.
+    """
+    session = _session_for_request(request)
+    _boto3, _BotoCoreError, ClientError, _NoCredentialsError = _import_boto3()
+
+    # Organizations is a global service exposed only in us-east-1. Always
+    # override the session region for this specific client.
+    try:
+        org_client = session.client("organizations", region_name="us-east-1")
+        paginator = org_client.get_paginator("list_accounts")
+        accounts: list[AWSAccount] = []
+        for page in paginator.paginate():
+            for acc in page.get("Accounts", []):
+                accounts.append(AWSAccount(
+                    account_id=acc.get("Id", ""),
+                    name=acc.get("Name") or acc.get("Id", ""),
+                    email=acc.get("Email"),
+                    status=acc.get("Status"),
+                    source="organizations",
+                ))
+        if accounts:
+            return accounts
+    except ClientError as exc:
+        code = exc.response.get("Error", {}).get("Code", "")
+        # These codes are expected when the caller is NOT in the management
+        # account — quietly fall back to the single-account STS path.
+        if code in {
+            "AWSOrganizationsNotInUseException",
+            "AccessDeniedException",
+            "AccessDenied",
+        }:
+            logger.info(
+                "organizations_fallback_to_sts",
+                extra={"aws_error_code": code},
+            )
+        else:
+            logger.warning(
+                "organizations_unexpected_error",
+                extra={"aws_error_code": code, "error": repr(exc)},
+            )
+    except Exception as exc:
+        logger.warning("organizations_unavailable", extra={"error": repr(exc)})
+
+    # STS fallback: return the current account only.
+    identity = _sts_get_caller_identity(session=session)
+    account_id = identity.get("Account", "")
+    return [AWSAccount(
+        account_id=account_id,
+        name=account_id,
+        status="ACTIVE",
+        source="sts",
+    )]
 
 
 # ---------------------------------------------------------------------------
 # Cost Explorer — real billing data
 # ---------------------------------------------------------------------------
 
-def _ce_client():
-    boto3, _BotoCoreError, _ClientError, _NoCredentialsError = _import_boto3()
+def _ce_client(session=None):
+    """Return a Cost Explorer client on the per-user session (falls back to
+    the module boto3 default when the caller isn't unlocked)."""
+    _boto3, _BotoCoreError, _ClientError, _NoCredentialsError = _import_boto3()
     settings = get_settings()
-    return boto3.client("ce", region_name=settings.aws_cost_explorer_region)
+    if session is not None:
+        return session.client("ce", region_name=settings.aws_cost_explorer_region)
+    return _boto3.client("ce", region_name=settings.aws_cost_explorer_region)
 
 
 def _ce_call(fn, **kwargs):
@@ -173,10 +286,12 @@ def _ce_call(fn, **kwargs):
     summary="Get AWS cost data via Cost Explorer",
 )
 def aws_billing(
+    request: Request,
     start: Annotated[Optional[str], Query(description="YYYY-MM-DD, defaults to ~6 months ago")] = None,
     end: Annotated[Optional[str], Query(description="YYYY-MM-DD (inclusive), defaults to today")] = None,
     months: Annotated[int, Query(ge=1, le=24)] = 6,
     granularity: Annotated[str, Query(description="DAILY | MONTHLY")] = "DAILY",
+    account_id: Annotated[Optional[str], Query(description="Filter Cost Explorer to a single linked account (Organizations only)")] = None,
 ) -> AWSBillingResponse:
     """Fetch aggregated AWS costs grouped by service.
 
@@ -199,18 +314,25 @@ def aws_billing(
 
     start_iso, end_iso = _resolve_period(start, end, months_default=months)
 
-    identity = _sts_get_caller_identity()
-    account_id = identity.get("Account")
+    session = _session_for_request(request)
+    identity = _sts_get_caller_identity(session=session)
+    resolved_account_id = account_id or identity.get("Account")
 
-    client = _ce_client()
+    client = _ce_client(session=session)
 
-    result = _ce_call(
-        client.get_cost_and_usage,
-        TimePeriod={"Start": start_iso, "End": end_iso},
-        Granularity=gran,
-        Metrics=["UnblendedCost"],
-        GroupBy=[{"Type": "DIMENSION", "Key": "SERVICE"}],
-    )
+    ce_kwargs: dict = {
+        "TimePeriod": {"Start": start_iso, "End": end_iso},
+        "Granularity": gran,
+        "Metrics": ["UnblendedCost"],
+        "GroupBy": [{"Type": "DIMENSION", "Key": "SERVICE"}],
+    }
+    if account_id:
+        # Filter to one specific linked account (Organizations payer role).
+        ce_kwargs["Filter"] = {
+            "Dimensions": {"Key": "LINKED_ACCOUNT", "Values": [account_id]}
+        }
+
+    result = _ce_call(client.get_cost_and_usage, **ce_kwargs)
 
     by_service_totals: dict[str, float] = {}
     by_day: list[AWSBillingByDay] = []
@@ -250,7 +372,7 @@ def aws_billing(
     ]
 
     return AWSBillingResponse(
-        account_id=account_id,
+        account_id=resolved_account_id,
         period=DateRange(start=start_iso, end=(date.fromisoformat(end_iso) - timedelta(days=1)).isoformat()),
         total=round(total, 4),
         by_service=by_service,
@@ -268,6 +390,7 @@ def aws_billing(
     summary="List AWS services with costs in the last N months",
 )
 def aws_services(
+    request: Request,
     months: Annotated[int, Query(ge=1, le=12)] = 3,
 ) -> List[AWSService]:
     """Return AWS services observed in Cost Explorer over the last N months.
@@ -276,7 +399,7 @@ def aws_services(
     services that actually incurred cost, sorted by spend descending.
     """
     start_iso, end_iso = _resolve_period(None, None, months_default=months)
-    client = _ce_client()
+    client = _ce_client(session=_session_for_request(request))
 
     result = _ce_call(
         client.get_cost_and_usage,

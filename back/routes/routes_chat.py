@@ -1,15 +1,30 @@
+"""Chat endpoints — thin adapters over :mod:`agent.graph`.
+
+The heavy lifting (Bedrock Converse, tool-use loop, streaming) lives in
+``agent.graph``. This module only:
+
+- authenticates the caller and looks up the persisted transcript for the
+  thread, if any (``core.conversations.load_messages``);
+- shapes the graph events into Server-Sent Events for the streaming path;
+- writes the final transcript back to DynamoDB so a new process picks up
+  the same conversation on cold start.
+"""
 from __future__ import annotations
 
 import json
 import uuid
 from typing import Annotated, AsyncIterator
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 
-from fastapi import Request
-
-from agent.graph import DEFAULT_MODEL, DEFAULT_SYSTEM_PROMPT, get_agent
+from agent.graph import (
+    DEFAULT_MODEL,
+    DEFAULT_SYSTEM_PROMPT,
+    extract_plain_transcript,
+    invoke_chat,
+    stream_chat,
+)
 from core.auth import require_api_key
 from core.config import get_settings
 from core.conversations import (
@@ -27,100 +42,88 @@ logger = get_logger(__name__)
 router = APIRouter(prefix="/api", tags=["chat"])
 
 
-_TOOL_RESULT_PREVIEW_CHARS = 600
-
-
 def _sse(event: str, payload: dict) -> bytes:
     """Format a Server-Sent Event frame. Single-line JSON keeps parsing trivial."""
     return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n".encode("utf-8")
 
 
+def _seed_messages(user_id: str | None, thread_id: str, user_message: str) -> list[dict]:
+    """Build the message list handed to the agent.
+
+    Replays the persisted transcript from Dynamo (if any) so the model has
+    context on cold-start processes, then appends the new user turn.
+    """
+    messages: list[dict] = []
+    if user_id and get_settings().auth_enabled:
+        for m in load_messages(user_id, thread_id):
+            content = m.get("content") or ""
+            if content:
+                messages.append({"role": m["role"], "content": content})
+    messages.append({"role": "user", "content": user_message})
+    return messages
+
+
+# ---------------------------------------------------------------------------
+# Sync chat — one turn, one JSON payload
+# ---------------------------------------------------------------------------
+
 @router.post(
     "/chat",
     response_model=ChatResponse,
     dependencies=[Depends(require_api_key)],
-    summary="Chat with the FinOps agent backed by Bedrock + LangGraph",
+    summary="Chat with the FinOps agent backed by Bedrock",
 )
-def chat(body: ChatRequest) -> ChatResponse:
-    """Run one turn through the LangGraph agent.
+def chat(request: Request, body: ChatRequest) -> ChatResponse:
+    """Run one turn end-to-end and return the reply as a single JSON payload.
 
     - ``thread_id`` continues an existing conversation; omit it to start fresh.
-    - The system prompt is server-controlled (see ``DEFAULT_SYSTEM_PROMPT``)
-      and cannot be overridden by the client — this is a security boundary.
-    - Every tool the agent invoked is echoed back in ``tool_calls`` with a
-      short preview so the frontend can render "the agent looked at X" chips.
-
-    Requires ``AWS_BEARER_TOKEN_BEDROCK`` (or standard AWS credentials) in the
-    server process. See :func:`agent.graph.get_agent` for details.
+    - System prompt is server-controlled (``DEFAULT_SYSTEM_PROMPT``) — no
+      client override.
+    - Tool calls are echoed back so the UI can render chips.
     """
-    from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
-
-    agent = get_agent(DEFAULT_MODEL)
     thread_id = body.thread_id or uuid.uuid4().hex
-    config = {"configurable": {"thread_id": thread_id}}
-
-    # Seed the system message on the first turn only. LangGraph's MemorySaver
-    # already keeps prior turns; passing the system prompt every call would
-    # duplicate it in the transcript.
-    try:
-        existing = agent.get_state(config).values.get("messages", [])
-    except Exception:
-        existing = []
-
-    messages: list = []
-    if not existing:
-        messages.append(SystemMessage(content=DEFAULT_SYSTEM_PROMPT))
-    messages.append(HumanMessage(content=body.message))
+    user_id = get_current_user_id(request)
+    messages = _seed_messages(user_id, thread_id, body.message)
 
     try:
-        result = agent.invoke({"messages": messages}, config=config)
+        result = invoke_chat(messages, system_prompt=DEFAULT_SYSTEM_PROMPT, model_id=DEFAULT_MODEL)
     except AppError:
         raise
     except Exception as exc:
-        logger.error("chat_invoke_failed", extra={"error": repr(exc), "thread_id": thread_id})
+        logger.error(
+            "chat_invoke_failed",
+            extra={"error": repr(exc), "thread_id": thread_id},
+            exc_info=True,
+        )
         raise AppError(
-            f"Agent invocation failed: {exc.__class__.__name__}",
+            f"Agent invocation failed: {exc.__class__.__name__}: {exc}",
             code="AGENT_ERROR",
             status_code=502,
             details={"thread_id": thread_id},
         )
 
-    final = result["messages"][-1]
-    reply = final.content if isinstance(final.content, str) else str(final.content)
-
-    # Reconstruct the ordered tool_calls list from the turn's new messages so
-    # the frontend can display "used tool X → preview Y" chips.
-    tool_calls: list[ChatToolCall] = []
-    new_slice = result["messages"][len(existing):]
-    pending: dict[str, ChatToolCall] = {}
-    for msg in new_slice:
-        if isinstance(msg, AIMessage) and getattr(msg, "tool_calls", None):
-            for tc in msg.tool_calls:
-                pending[tc["id"]] = ChatToolCall(
-                    name=tc["name"],
-                    arguments=dict(tc.get("args") or {}),
-                    result_preview="",
-                )
-        elif isinstance(msg, ToolMessage):
-            call = pending.get(msg.tool_call_id)
-            if call is not None:
-                preview = str(msg.content or "")
-                if len(preview) > _TOOL_RESULT_PREVIEW_CHARS:
-                    preview = preview[:_TOOL_RESULT_PREVIEW_CHARS] + "..."
-                call.result_preview = preview
-                tool_calls.append(call)
-
-    usage_metadata = getattr(final, "usage_metadata", None) or {}
-    total_tokens = usage_metadata.get("total_tokens") if isinstance(usage_metadata, dict) else None
+    if user_id and get_settings().auth_enabled:
+        save_conversation(user_id, thread_id, extract_plain_transcript(result.messages))
 
     return ChatResponse(
         thread_id=thread_id,
-        reply=reply,
-        tool_calls=tool_calls,
-        model=DEFAULT_MODEL,
-        total_tokens=total_tokens,
+        reply=result.reply,
+        tool_calls=[
+            ChatToolCall(
+                name=tc.name,
+                arguments=tc.arguments,
+                result_preview=tc.result_preview,
+            )
+            for tc in result.tool_calls
+        ],
+        model=result.model,
+        total_tokens=result.total_tokens,
     )
 
+
+# ---------------------------------------------------------------------------
+# Streaming chat — SSE
+# ---------------------------------------------------------------------------
 
 @router.post(
     "/chat/stream",
@@ -130,168 +133,83 @@ def chat(body: ChatRequest) -> ChatResponse:
 async def chat_stream(request: Request, body: ChatRequest) -> StreamingResponse:
     """Stream the agent turn as SSE.
 
-    Event types emitted (each ``event: TYPE\\ndata: JSON\\n\\n``):
+    Event types (each frame ``event: TYPE\\ndata: JSON\\n\\n``):
 
-    - ``ready``       → ``{ thread_id }``. Sent first so the client can persist
-      the thread id even if the stream is aborted mid-way.
-    - ``token``       → ``{ text }``. Incremental text delta from the LLM.
-    - ``tool_start``  → ``{ id, name, arguments }``. Agent invoked a tool.
+    - ``ready``       → ``{ thread_id }``. Emitted first so the client can
+      persist the thread id even if the stream is aborted mid-way.
+    - ``token``       → ``{ text }``. Incremental text delta.
+    - ``tool_start``  → ``{ id, name, arguments }``. Agent is invoking a tool.
     - ``tool_end``    → ``{ id, result_preview }``. Tool returned (preview
       capped at ~600 chars).
     - ``done``        → ``{ thread_id, model, total_tokens }``. Stream complete.
     - ``error``       → ``{ message, code? }``. Fatal error during generation.
 
-    Setup failures (agent build, Bedrock config) are turned into an ``error``
-    event on a 200 stream rather than a raw 500, so the chatbot UI can render
-    the human-readable reason in the current message bubble.
+    Setup / Bedrock errors are surfaced as an ``error`` event on a 200 stream
+    rather than a raw 500, so the chatbot UI can render the reason inline.
     """
-    from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
-
     thread_id = body.thread_id or uuid.uuid4().hex
     user_id = get_current_user_id(request)
-    settings = get_settings()
-
-    # Namespace the LangGraph thread by user so two accounts opening the same
-    # ``thread_id`` never cross-talk in the MemorySaver cache.
-    ns_thread_id = f"{user_id or 'anon'}:{thread_id}"
-
-    # Try to build the agent up-front so we can surface setup failures inline.
-    try:
-        agent = get_agent(DEFAULT_MODEL)
-        config = {"configurable": {"thread_id": ns_thread_id}}
-        try:
-            existing = agent.get_state(config).values.get("messages", [])
-        except Exception:
-            existing = []
-
-        messages: list = []
-        if not existing:
-            messages.append(SystemMessage(content=DEFAULT_SYSTEM_PROMPT))
-            # If the user has a persisted history for this thread but the
-            # process cache is cold (fresh worker, restart, LB pin swap),
-            # replay it so the model has full context on the first turn.
-            if user_id and settings.auth_enabled:
-                for m in load_messages(user_id, thread_id):
-                    role = m.get("role")
-                    content = m.get("content", "")
-                    if not content:
-                        continue
-                    if role == "user":
-                        messages.append(HumanMessage(content=content))
-                    elif role == "assistant":
-                        messages.append(AIMessage(content=content))
-        messages.append(HumanMessage(content=body.message))
-        setup_error: tuple[str, str] | None = None
-    except AppError as exc:
-        agent = None
-        config = None
-        messages = []
-        setup_error = (exc.message, exc.code)
-    except Exception as exc:
-        logger.error("chat_stream_setup_failed", extra={"error": repr(exc)}, exc_info=True)
-        agent = None
-        config = None
-        messages = []
-        setup_error = (
-            f"Agent setup failed: {exc.__class__.__name__}: {exc}",
-            "AGENT_ERROR",
-        )
 
     async def event_source() -> AsyncIterator[bytes]:
         yield _sse("ready", {"thread_id": thread_id})
 
-        if setup_error is not None:
-            msg, code = setup_error
-            yield _sse("error", {"message": msg, "code": code})
-            return
-
-        assert agent is not None and config is not None
+        messages = _seed_messages(user_id, thread_id, body.message)
         total_tokens: int | None = None
+        final_messages: list[dict] = messages
+
         try:
-            async for ev in agent.astream_events(
-                {"messages": messages}, config=config, version="v2"
+            async for ev in stream_chat(
+                messages,
+                system_prompt=DEFAULT_SYSTEM_PROMPT,
+                model_id=DEFAULT_MODEL,
             ):
-                kind = ev.get("event")
-                if kind == "on_chat_model_stream":
-                    chunk = ev.get("data", {}).get("chunk")
-                    if chunk is None:
-                        continue
-                    content = getattr(chunk, "content", "")
-                    # Bedrock chunks: content may be a plain string OR a list of
-                    # block dicts ([{"type":"text","text":"..."}, {"type":"tool_use",...}]).
-                    if isinstance(content, str):
-                        if content:
-                            yield _sse("token", {"text": content})
-                    elif isinstance(content, list):
-                        for block in content:
-                            if isinstance(block, dict) and block.get("type") == "text":
-                                text = block.get("text", "")
-                                if text:
-                                    yield _sse("token", {"text": text})
-                    um = getattr(chunk, "usage_metadata", None)
-                    if isinstance(um, dict) and um.get("total_tokens"):
-                        total_tokens = um["total_tokens"]
-
-                elif kind == "on_tool_start":
-                    yield _sse(
-                        "tool_start",
-                        {
-                            "id": ev.get("run_id", ""),
-                            "name": ev.get("name", ""),
-                            "arguments": ev.get("data", {}).get("input", {}) or {},
-                        },
-                    )
-
-                elif kind == "on_tool_end":
-                    output = ev.get("data", {}).get("output")
-                    if hasattr(output, "content"):
-                        preview = str(output.content)
-                    elif output is None:
-                        preview = ""
-                    else:
-                        preview = str(output)
-                    if len(preview) > _TOOL_RESULT_PREVIEW_CHARS:
-                        preview = preview[:_TOOL_RESULT_PREVIEW_CHARS] + "..."
-                    yield _sse(
-                        "tool_end",
-                        {"id": ev.get("run_id", ""), "result_preview": preview},
-                    )
-
-            # Snapshot the up-to-date transcript once the turn is done. We
-            # pull it back from LangGraph's state so both the freshly-streamed
-            # message and any replayed history live in one place.
-            if user_id and settings.auth_enabled and agent is not None and config is not None:
-                try:
-                    final_state = agent.get_state(config).values
-                    save_conversation(user_id, thread_id, final_state.get("messages", []))
-                except Exception as exc:
-                    logger.warning(
-                        "post_stream_persist_failed",
-                        extra={"error": repr(exc), "user_id": user_id, "thread_id": thread_id},
-                    )
-
-            yield _sse(
-                "done",
-                {"thread_id": thread_id, "model": DEFAULT_MODEL, "total_tokens": total_tokens},
-            )
+                kind = ev["type"]
+                if kind == "token":
+                    yield _sse("token", {"text": ev["text"]})
+                elif kind == "tool_start":
+                    yield _sse("tool_start", {
+                        "id": ev["id"],
+                        "name": ev["name"],
+                        "arguments": ev.get("arguments") or {},
+                    })
+                elif kind == "tool_end":
+                    yield _sse("tool_end", {
+                        "id": ev["id"],
+                        "result_preview": ev.get("result_preview", ""),
+                    })
+                elif kind == "done":
+                    total_tokens = ev.get("total_tokens")
+                    final_messages = ev.get("messages", messages)
         except AppError as exc:
             yield _sse("error", {"message": exc.message, "code": exc.code})
+            return
         except Exception as exc:
             logger.error(
                 "chat_stream_failed",
                 extra={"error": repr(exc), "thread_id": thread_id},
                 exc_info=True,
             )
-            # Surface exception detail (AWS message, HTTP body, etc.) so the
-            # chat UI can show something actionable instead of just the class
-            # name. Bounded to 300 chars to avoid dumping huge payloads.
             detail = str(exc)
             if len(detail) > 300:
                 detail = detail[:300] + "..."
-            message = f"Agent stream failed: {exc.__class__.__name__}"
+            msg = f"Agent stream failed: {exc.__class__.__name__}"
             if detail and detail != exc.__class__.__name__:
-                message += f" — {detail}"
-            yield _sse("error", {"message": message, "code": "AGENT_ERROR"})
+                msg += f" — {detail}"
+            yield _sse("error", {"message": msg, "code": "AGENT_ERROR"})
+            return
+
+        # Persist the flattened transcript. Never raises — save_conversation
+        # logs and swallows so a Dynamo hiccup doesn't break the response.
+        if user_id and get_settings().auth_enabled:
+            save_conversation(
+                user_id, thread_id, extract_plain_transcript(final_messages)
+            )
+
+        yield _sse("done", {
+            "thread_id": thread_id,
+            "model": DEFAULT_MODEL,
+            "total_tokens": total_tokens,
+        })
 
     return StreamingResponse(
         event_source(),
@@ -304,25 +222,19 @@ async def chat_stream(request: Request, body: ChatRequest) -> StreamingResponse:
     )
 
 
+# ---------------------------------------------------------------------------
+# Reset — wipe the persisted transcript for a thread
+# ---------------------------------------------------------------------------
+
 @router.delete(
     "/chat/{thread_id}",
     dependencies=[Depends(require_api_key)],
     summary="Reset a conversation thread",
 )
 def reset_chat(thread_id: Annotated[str, ...], request: Request) -> dict:
-    """Delete every checkpoint for a thread so the next turn starts fresh.
-
-    Removes: the LangGraph in-memory state AND the Dynamo snapshot if the
-    caller is authenticated (so history doesn't come back on next process).
-    """
+    """Delete the persisted transcript for this thread. The next turn will
+    start with an empty history."""
     user_id = get_current_user_id(request)
-    ns_thread_id = f"{user_id or 'anon'}:{thread_id}"
-    agent = get_agent(DEFAULT_MODEL)
-    config = {"configurable": {"thread_id": ns_thread_id}}
-    try:
-        agent.update_state(config, {"messages": []})
-    except Exception as exc:
-        logger.warning("chat_reset_failed", extra={"error": repr(exc), "thread_id": thread_id})
     if user_id and get_settings().auth_enabled:
         delete_conversation(user_id, thread_id)
     return {"thread_id": thread_id, "reset": True}
