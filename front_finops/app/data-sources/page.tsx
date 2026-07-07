@@ -739,11 +739,13 @@ const AWS_REGIONS = [
 ]
 
 function AWSTab() {
+  const queryClient = useQueryClient()
   const { data: status, isLoading, refetch, error: statusError } = useAWSStatus()
   const [accessKeyId, setAccessKeyId] = useState("")
   const [secretAccessKey, setSecretAccessKey] = useState("")
   const [region, setRegion] = useState("eu-west-1")
   const [showSecret, setShowSecret] = useState(false)
+  const [pinOpen, setPinOpen] = useState(false)
   const {
     mutate: connect,
     isPending,
@@ -758,15 +760,29 @@ function AWSTab() {
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     if (!accessKeyId || !secretAccessKey || !region) return
-    connect(
-      { accessKeyId, secretAccessKey, region },
-      {
-        onSuccess: () => {
-          setSecretAccessKey("")
-          void refetch()
+    reset()
+    setPinOpen(true)
+  }
+
+  async function handlePinConfirm(pin: string) {
+    return new Promise<void>((resolve, reject) => {
+      connect(
+        { accessKeyId, secretAccessKey, region, pin },
+        {
+          onSuccess: () => {
+            setSecretAccessKey("")
+            setPinOpen(false)
+            void refetch()
+            void queryClient.invalidateQueries({ queryKey: ["aws-accounts"] })
+            void queryClient.invalidateQueries({ queryKey: ["aws-billing"] })
+            resolve()
+          },
+          onError: (err) => {
+            reject(err)
+          },
         },
-      }
-    )
+      )
+    })
   }
 
   return (
@@ -882,7 +898,146 @@ function AWSTab() {
               : "Se connecter à AWS"}
         </Button>
       </form>
+
+      <PinPrompt
+        open={pinOpen}
+        title="Confirme ton PIN pour chiffrer les clés AWS"
+        description="Les clés sont chiffrées AES-GCM avec une clé dérivée de ton PIN. Sans lui, personne (pas même nous) ne peut les déchiffrer."
+        submitLabel="Chiffrer et activer"
+        onCancel={() => setPinOpen(false)}
+        onConfirm={handlePinConfirm}
+      />
+
+      {authenticated && <AWSAccountsPanel />}
     </SectionCard>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Accounts + billing summary — shown once AWS is unlocked for this session
+// ---------------------------------------------------------------------------
+
+function AWSAccountsPanel() {
+  const { data: accounts, isLoading: accountsLoading, error: accountsError } =
+    useAWSAccounts(true)
+  const [selected, setSelected] = useState<string | null>(null)
+  const { data: billing, isLoading: billingLoading, error: billingError } =
+    useAWSBilling(true, selected)
+
+  const total = billing?.total ?? 0
+  const currency = billing?.currency ?? "USD"
+
+  return (
+    <div className="space-y-4 rounded-xl border border-border bg-muted/10 p-4">
+      <div>
+        <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+          Vos comptes AWS
+        </p>
+        {accountsLoading && (
+          <p className="mt-2 text-xs text-muted-foreground">Chargement…</p>
+        )}
+        {accountsError && (
+          <ErrorBanner message="Impossible de lister les comptes. Vérifie que ton user a organizations:ListAccounts, ou que tu as bien débloqué ta session." />
+        )}
+        {accounts && accounts.length > 0 && (
+          <ul className="mt-2 grid gap-1.5 sm:grid-cols-2">
+            {accounts.map((acc) => {
+              const active = selected === acc.accountId
+              return (
+                <li key={acc.accountId}>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setSelected((s) => (s === acc.accountId ? null : acc.accountId))
+                    }
+                    className={cn(
+                      "w-full rounded-lg border px-3 py-2.5 text-left transition-colors",
+                      active
+                        ? "border-[color:var(--accent-coral)] bg-[color:var(--accent-coral)]/5"
+                        : "border-border bg-card hover:border-[color:var(--accent-coral)]/40",
+                    )}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="truncate text-sm font-medium">{acc.name}</p>
+                      <Badge
+                        variant={acc.source === "organizations" ? "success" : "muted"}
+                        size="sm"
+                      >
+                        {acc.source === "organizations" ? "Org" : "Solo"}
+                      </Badge>
+                    </div>
+                    <p className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">
+                      {acc.accountId}
+                    </p>
+                  </button>
+                </li>
+              )
+            })}
+          </ul>
+        )}
+      </div>
+
+      <div>
+        <div className="flex items-center justify-between">
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+            Facturation {selected ? `(compte ${selected})` : "(tous comptes agrégés)"}
+          </p>
+          <p className="text-[10px] text-muted-foreground">3 derniers mois</p>
+        </div>
+        {billingLoading && (
+          <p className="mt-2 text-xs text-muted-foreground">Chargement Cost Explorer…</p>
+        )}
+        {billingError && (
+          <ErrorBanner message="Cost Explorer a refusé la requête. Vérifie la permission ce:GetCostAndUsage sur ton IAM user." />
+        )}
+        {billing && (
+          <div className="mt-2 space-y-3">
+            <div className="rounded-lg border border-border bg-card p-3">
+              <p className="text-[10px] uppercase tracking-widest text-muted-foreground">
+                Total période
+              </p>
+              <p className="mt-0.5 font-heading text-xl font-semibold tabular-nums text-foreground">
+                {total.toLocaleString("fr-FR", {
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2,
+                })}{" "}
+                <span className="text-sm font-normal text-muted-foreground">{currency}</span>
+              </p>
+            </div>
+
+            {billing.byService.length > 0 && (
+              <div className="overflow-hidden rounded-lg border border-border">
+                <table className="w-full text-xs">
+                  <thead className="bg-muted/60 text-muted-foreground">
+                    <tr>
+                      <th className="px-3 py-1.5 text-left font-medium">Service</th>
+                      <th className="px-3 py-1.5 text-right font-medium">Coût</th>
+                      <th className="px-3 py-1.5 text-right font-medium">%</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border">
+                    {billing.byService.slice(0, 10).map((row) => (
+                      <tr key={row.service}>
+                        <td className="truncate px-3 py-1.5">{row.service}</td>
+                        <td className="px-3 py-1.5 text-right tabular-nums font-medium">
+                          {row.cost.toLocaleString("fr-FR", {
+                            minimumFractionDigits: 2,
+                            maximumFractionDigits: 2,
+                          })}
+                        </td>
+                        <td className="px-3 py-1.5 text-right tabular-nums text-muted-foreground">
+                          {row.pct.toFixed(1)}%
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
   )
 }
 
