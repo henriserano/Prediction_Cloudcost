@@ -45,10 +45,15 @@ router = APIRouter(prefix="/api/gcp", tags=["gcp"])
 
 _OAUTH_STATE_TTL = 600  # seconds — states older than this are rejected
 
-# SEC-014: OAuth tokens are bound to a per-browser session ("sid") carried in
-# an httpOnly cookie — never shared under a global "default" key, which would
-# let any anonymous visitor read the connected user's GCP projects/costs/logs.
-_SESSION_COOKIE = "sid"
+# SEC-014: OAuth tokens are bound to a per-browser session cookie — never
+# shared under a global "default" key, which would let any anonymous visitor
+# read the connected user's GCP projects/costs/logs.
+#
+# Name intentionally distinct from settings.session_cookie_name ("sid" — used
+# by the JWT auth layer). Sharing that name silently orphaned the JWT session
+# whenever /api/gcp/auth was hit, and vice-versa. This cookie carries only the
+# GCP-OAuth session identifier and is scoped to the GCP flow.
+_SESSION_COOKIE = "gcp_sid"
 _SESSION_TTL = 7 * 24 * 3600       # seconds — sessions older than this are evicted
 _MAX_SESSIONS = 100                # hard cap; oldest session evicted beyond this
 

@@ -4,6 +4,19 @@ import uuid
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
+# Load .env BEFORE any module that reads os.environ (boto3, ChatBedrockConverse,
+# etc.) is imported. pydantic-settings alone only populates the Settings object,
+# not os.environ, so AWS_BEARER_TOKEN_BEDROCK / AWS_PROFILE would otherwise be
+# invisible to the boto3 default credential chain.
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv()
+except ImportError:
+    # python-dotenv missing: rely on the shell environment. pydantic-settings
+    # still works via its own dotenv reader for the Settings model itself.
+    pass
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse

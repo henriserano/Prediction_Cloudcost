@@ -39,8 +39,9 @@ resource "aws_iam_role" "ecs_task" {
 }
 
 # Minimal task-role permissions: only CloudWatch log writes to the app log group.
-# The application has no S3, DynamoDB, SQS or other AWS service permissions —
-# principle of least privilege is satisfied.
+# The application has no S3, SQS or other AWS service permissions beyond what
+# is required for the chatbot (Bedrock) and the auth/conversation persistence
+# (DynamoDB, added elsewhere). Principle of least privilege is preserved.
 # Allow the app to write structured logs to CloudWatch
 resource "aws_iam_role_policy" "ecs_task_logs" {
   name = "${local.prefix}-task-logs"
@@ -55,6 +56,54 @@ resource "aws_iam_role_policy" "ecs_task_logs" {
         "logs:PutLogEvents"
       ]
       Resource = "${aws_cloudwatch_log_group.app.arn}:*"
+    }]
+  })
+}
+
+# Bedrock invoke permission — scoped to the allow-list from variables.tf so
+# a compromised task cannot pivot to an arbitrary (potentially costly) model.
+# This is the SigV4 path: when set, boto3 signs Bedrock calls with the task
+# role's short-lived credentials and no bearer token is needed.
+resource "aws_iam_role_policy" "ecs_task_bedrock" {
+  name = "${local.prefix}-task-bedrock"
+  role = aws_iam_role.ecs_task.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "bedrock:InvokeModel",
+        "bedrock:InvokeModelWithResponseStream",
+      ]
+      Resource = var.bedrock_allowed_model_arns
+    }]
+  })
+}
+
+# When bedrock_api_key_secret_arn or google_client_secret_arn is set, the ECS
+# EXECUTION role (not the task role) needs permission to fetch the value at
+# container start-up so it can be injected as an env var. Attaching this to
+# the task role would be a mistake — the ECS agent, not the app, does the
+# secretsmanager:GetSecretValue call.
+locals {
+  ecs_execution_secret_arns = compact([
+    var.bedrock_api_key_secret_arn,
+    var.google_client_secret_arn,
+  ])
+}
+
+resource "aws_iam_role_policy" "ecs_execution_secrets" {
+  count = length(local.ecs_execution_secret_arns) > 0 ? 1 : 0
+  name  = "${local.prefix}-execution-secrets"
+  role  = aws_iam_role.ecs_execution.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["secretsmanager:GetSecretValue"]
+      Resource = local.ecs_execution_secret_arns
     }]
   })
 }

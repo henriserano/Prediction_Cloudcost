@@ -23,6 +23,11 @@ output "ecs_service_name" {
   value       = aws_ecs_service.app.name
 }
 
+output "ecs_task_family" {
+  description = "Task-definition family name — pass this (not an ARN) to `ecs update-service --task-definition` so ECS resolves to the latest ACTIVE revision."
+  value       = aws_ecs_task_definition.app.family
+}
+
 output "cloudwatch_log_group" {
   description = "CloudWatch log group for ECS task output"
   value       = aws_cloudwatch_log_group.app.name

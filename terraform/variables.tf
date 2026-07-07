@@ -104,9 +104,15 @@ variable "google_client_id" {
 }
 
 variable "google_client_secret" {
-  description = "Google OAuth2 client secret"
+  description = "Google OAuth2 client secret. DEPRECATED for production — set google_client_secret_arn instead and let ECS resolve it from Secrets Manager at startup. Leaving this in plain tfvars persists the secret in terraform.tfstate."
   type        = string
   sensitive   = true
+  default     = ""
+}
+
+variable "google_client_secret_arn" {
+  description = "ARN of a Secrets Manager secret storing GOOGLE_CLIENT_SECRET. When set, ECS resolves it at startup and injects it as an env var; leave the plain google_client_secret empty in that case."
+  type        = string
   default     = ""
 }
 
@@ -133,9 +139,15 @@ variable "bedrock_region" {
 }
 
 variable "bedrock_model_id" {
-  description = "Bedrock foundation model ID or inference profile ID (e.g. 'anthropic.claude-sonnet-4-6' or 'eu.anthropic.claude-sonnet-4-6' for cross-region EU inference)."
+  description = "Bedrock foundation model ID or inference profile ID. Must match what the LangGraph agent expects (see back/agent/graph.py DEFAULT_MODEL). EU inference profile is required in eu-west-3 / eu-central-1."
   type        = string
-  default     = "eu.anthropic.claude-sonnet-4-6"
+  default     = "eu.anthropic.claude-sonnet-4-5-20250929-v1:0"
+}
+
+variable "bedrock_api_key_secret_arn" {
+  description = "ARN of a Secrets Manager secret storing the AWS_BEARER_TOKEN_BEDROCK. Leave empty to use the ECS task role (SigV4) instead — recommended path. When set, the value is injected as the AWS_BEARER_TOKEN_BEDROCK env var via the ECS `secrets` block."
+  type        = string
+  default     = ""
 }
 
 variable "bedrock_guardrail_id" {

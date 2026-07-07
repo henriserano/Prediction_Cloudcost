@@ -96,21 +96,21 @@ echo "  ECS  : $CLUSTER / $SERVICE"
 echo "  URL  : $API_URL"
 
 # ── Step 5 — Force new ECS deployment ─────────────────────────────────────────
-echo "[5/6] Triggering rolling deployment..."
-TASK_DEF=$(aws ecs describe-services \
-  --cluster "$CLUSTER" \
-  --services "$SERVICE" \
-  --region "$REGION" \
-  --query 'services[0].taskDefinition' \
-  --output text)
+# Terraform's ignore_changes = [task_definition] means the ECS service is not
+# pinned to the revision Terraform just registered. Passing the service's
+# current taskDefinition ARN back to update-service would redeploy the OLD
+# revision. Pass the family name only — ECS resolves it to the latest ACTIVE
+# revision, which is the one we just wrote in step 4.
+TASK_FAMILY=$(terraform output -raw ecs_task_family 2>/dev/null || echo "${APP_NAME}-${ENV}-task")
 
+echo "[5/6] Triggering rolling deployment (task-def family: $TASK_FAMILY)..."
 aws ecs update-service \
   --cluster "$CLUSTER" \
   --service "$SERVICE" \
-  --task-definition "$TASK_DEF" \
+  --task-definition "$TASK_FAMILY" \
   --force-new-deployment \
   --region "$REGION" \
-  --output json | jq -r '.service.deployments[0] | "  deployment: \(.id)  status: \(.status)"'
+  --output json | jq -r '.service.deployments[0] | "  deployment: \(.id)  status: \(.status)  task-def: \(.taskDefinition)"'
 
 # ── Step 6 — Wait for stability ───────────────────────────────────────────────
 echo "[6/6] Waiting for service to stabilise (up to 5 min)..."

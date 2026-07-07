@@ -12,7 +12,6 @@ function backendBaseUrl(): string {
 interface ChatStreamBody {
   message: string
   thread_id?: string
-  system_prompt?: string
 }
 
 export async function POST(request: Request): Promise<Response> {
@@ -41,6 +40,8 @@ export async function POST(request: Request): Promise<Response> {
   const cookie = request.headers.get("cookie")
   if (cookie) headers["cookie"] = cookie
 
+  // SEC: strict allowlist — never forward client fields like `system_prompt`
+  // that would let a probing client override the agent persona.
   let upstream: Response
   try {
     upstream = await fetch(`${backendBaseUrl()}/api/chat/stream`, {
@@ -49,7 +50,6 @@ export async function POST(request: Request): Promise<Response> {
       body: JSON.stringify({
         message: body.message,
         thread_id: body.thread_id,
-        system_prompt: body.system_prompt,
       }),
       signal: request.signal,
       cache: "no-store",

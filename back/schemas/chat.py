@@ -2,20 +2,21 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ChatRequest(BaseModel):
+    # SEC: system_prompt is intentionally NOT accepted from the client. The
+    # agent persona is server-controlled to prevent trivial guardrail bypass.
+    # extra="forbid" rejects any unknown field with 422 rather than silently
+    # ignoring it, so a probing client gets a clear signal.
+    model_config = ConfigDict(extra="forbid")
+
     message: str = Field(min_length=1, max_length=4000, description="User prompt")
     thread_id: Optional[str] = Field(
         default=None,
         description="Optional conversation identifier. When provided, prior turns "
         "for the same thread are replayed as context. Server generates one when omitted.",
-    )
-    system_prompt: Optional[str] = Field(
-        default=None,
-        max_length=4000,
-        description="Override the default system prompt (advanced use).",
     )
 
 

@@ -182,7 +182,9 @@ def get_stl_decomposition() -> tuple[List[STLPoint], STLStrengths]:
 
 
 def get_anomalies(z_threshold: float = 2.0) -> List[AnomalyPoint]:
-    _cache_key = f"analytics:anomalies:{z_threshold}"
+    # SEC: quantize the float in the cache key so ?z_threshold=2.0000001 and
+    # 2.0000002 collide instead of each spawning a new entry.
+    _cache_key = f"analytics:anomalies:{round(z_threshold, 2):.2f}"
     cached = app_cache.get(_cache_key)
     if cached is not None:
         return cached

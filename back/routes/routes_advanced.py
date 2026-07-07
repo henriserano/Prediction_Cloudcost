@@ -27,6 +27,14 @@ from schemas.advanced import (
 router = APIRouter(prefix="/api/analysis", tags=["advanced-analysis"])
 
 
+# SEC: float query params are quantized before being embedded in a cache key.
+# Without this, ?z_threshold=2.0000001 and ?z_threshold=2.0000002 would create
+# distinct entries; an unauthenticated caller can inflate the cache without
+# bound. 2 decimals is far finer than any meaningful choice for these params.
+def _q(x: float) -> str:
+    return f"{round(x, 2):.2f}"
+
+
 @router.get("/outliers", response_model=OutliersResponse)
 def outliers(
     z_threshold: Annotated[float, Query(ge=1.0, le=5.0)] = 2.0,
@@ -40,7 +48,7 @@ def outliers(
     matrix and appears in the ``mahalanobis`` field when there are at least
     2 services and 10 days of history.
     """
-    cache_key = f"analysis:outliers:{z_threshold}:{iqr_multiplier}"
+    cache_key = f"analysis:outliers:{_q(z_threshold)}:{_q(iqr_multiplier)}"
     cached = app_cache.get(cache_key)
     if cached is not None:
         return cached
@@ -62,7 +70,7 @@ def drift(
     - Population Stability Index (PSI) with a verdict thresholded at 0.1 / 0.25
     - Page-Hinkley online change-point statistic across every day
     """
-    cache_key = f"analysis:drift:{reference_frac}:{psi_bins}"
+    cache_key = f"analysis:drift:{_q(reference_frac)}:{psi_bins}"
     cached = app_cache.get(cache_key)
     if cached is not None:
         return cached

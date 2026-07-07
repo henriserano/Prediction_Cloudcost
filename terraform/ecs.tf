@@ -66,25 +66,45 @@ resource "aws_ecs_task_definition" "app" {
           { name = "DDB_TABLE_USERS", value = aws_dynamodb_table.users.name },
           { name = "DDB_TABLE_CONVERSATIONS", value = aws_dynamodb_table.conversations.name },
           { name = "DDB_TABLE_CREDENTIALS", value = aws_dynamodb_table.credentials.name },
+          # Bedrock config (non-sensitive: region + model ID + tuning).
+          # Credentials come from the ECS task role (SigV4) — no keys here.
+          { name = "BEDROCK_REGION", value = var.bedrock_region },
+          { name = "BEDROCK_MODEL_ID", value = var.bedrock_model_id },
+          { name = "BEDROCK_GUARDRAIL_ID", value = var.bedrock_guardrail_id },
+          { name = "BEDROCK_GUARDRAIL_VERSION", value = var.bedrock_guardrail_version },
+          { name = "BEDROCK_MAX_TOKENS", value = tostring(var.bedrock_max_tokens) },
         ],
         # API key protecting the mutating endpoints — injected only when set.
         var.api_key != "" ? [{ name = "API_KEY", value = var.api_key }] : [],
         # JWT signing key for the session cookie (POC auth).
-        var.session_secret != "" ? [{ name = "SESSION_SECRET", value = var.session_secret }] : []
+        var.session_secret != "" ? [{ name = "SESSION_SECRET", value = var.session_secret }] : [],
+        # Google OAuth (public config — client_id, redirect URI, frontend URL).
+        var.google_client_id != "" ? [{ name = "GOOGLE_CLIENT_ID", value = var.google_client_id }] : [],
+        var.google_redirect_uri != "" ? [{ name = "GOOGLE_REDIRECT_URI", value = var.google_redirect_uri }] : [],
+        var.frontend_url != "" ? [{ name = "FRONTEND_URL", value = var.frontend_url }] : [],
+        # Plain-var fallback for the OAuth client secret. Prefer
+        # google_client_secret_arn (Secrets Manager) — this path leaks the
+        # value into terraform.tfstate and into DescribeTaskDefinition.
+        (var.google_client_secret != "" && var.google_client_secret_arn == "")
+        ? [{ name = "GOOGLE_CLIENT_SECRET", value = var.google_client_secret }] : []
       )
-      # TODO: move API_KEY (and any other sensitive value) to AWS Secrets
-      # Manager — a plain env var is visible in the task definition (ECS
-      # console, DescribeTaskDefinition). See the commented `secrets` block
-      # below for the recommended pattern.
-      # For production: use AWS Secrets Manager instead of plain env vars for
-      # any sensitive values (OAuth secrets, API keys, etc.).
-      # secrets = [
-      #   {
-      #     name      = "GOOGLE_CLIENT_SECRET"
-      #     valueFrom = "arn:aws:secretsmanager:<region>:<account>:secret:finops/google-client-secret"
-      #   }
-      # ]
-      # Grant the ecs_execution role secretsmanager:GetSecretValue on those ARNs.
+
+      # Sensitive values are resolved by the ECS agent at start-up via the
+      # execution role and injected as env vars — never persisted in the task
+      # definition JSON. The `bedrock_api_key_secret_arn` path is optional:
+      # when empty, boto3 falls back to the task role (SigV4), which is the
+      # recommended posture. When set, the AWS_BEARER_TOKEN_BEDROCK path is
+      # honoured by langchain-aws / boto3 transparently.
+      secrets = concat(
+        var.bedrock_api_key_secret_arn != "" ? [{
+          name      = "AWS_BEARER_TOKEN_BEDROCK"
+          valueFrom = var.bedrock_api_key_secret_arn
+        }] : [],
+        var.google_client_secret_arn != "" ? [{
+          name      = "GOOGLE_CLIENT_SECRET"
+          valueFrom = var.google_client_secret_arn
+        }] : []
+      )
 
       logConfiguration = {
         logDriver = "awslogs"

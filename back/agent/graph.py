@@ -29,22 +29,40 @@ DEFAULT_SYSTEM_PROMPT = (
     "'source: parquet_fallback — this is demo data, not live GCP')."
 )
 
-DEFAULT_MODEL = "eu.anthropic.claude-sonnet-4-5-20250929-v1:0"
+DEFAULT_MODEL = os.getenv(
+    "BEDROCK_MODEL_ID", "eu.anthropic.claude-sonnet-4-5-20250929-v1:0"
+)
 
 _agent_lock = threading.Lock()
 _agent_cache: dict[str, object] = {}
 
 
 def _bedrock_ready() -> tuple[bool, Optional[str]]:
-    """Return ``(is_ready, error_message)``. Never raises."""
-    if not os.getenv("AWS_BEARER_TOKEN_BEDROCK"):
-        # boto3 also accepts standard AWS creds; fall back gracefully.
-        if not (os.getenv("AWS_ACCESS_KEY_ID") or os.getenv("AWS_PROFILE")):
-            return False, (
-                "No AWS_BEARER_TOKEN_BEDROCK (short-term Bedrock key) and no "
-                "standard AWS credentials in the environment."
-            )
-    return True, None
+    """Return ``(is_ready, error_message)``. Never raises.
+
+    Three accepted credential paths, in priority order:
+      1. AWS_BEARER_TOKEN_BEDROCK — short-term Bedrock API key.
+      2. Standard AWS credentials (env vars or AWS_PROFILE).
+      3. ECS/EKS container credentials endpoint — auto-detected by boto3
+         when the task runs under an IAM task role. This is the path used
+         on Fargate.
+    """
+    if os.getenv("AWS_BEARER_TOKEN_BEDROCK"):
+        return True, None
+    if os.getenv("AWS_ACCESS_KEY_ID") or os.getenv("AWS_PROFILE"):
+        return True, None
+    # On ECS/EKS, boto3 fetches temp credentials from this well-known URI
+    # exposed by the container agent. Presence of this env var is a reliable
+    # signal that a task role is attached.
+    if os.getenv("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI") or os.getenv(
+        "AWS_CONTAINER_CREDENTIALS_FULL_URI"
+    ):
+        return True, None
+    return False, (
+        "No Bedrock credentials found. Expected either "
+        "AWS_BEARER_TOKEN_BEDROCK, standard AWS credentials, or an ECS/EKS "
+        "task role."
+    )
 
 
 def _build_agent(model_id: str):
@@ -73,13 +91,34 @@ def _build_agent(model_id: str):
 
     tools = get_all_langchain_tools()
 
-    region = os.getenv("AWS_REGION", "eu-west-1")
-    llm = ChatBedrockConverse(
-        model=model_id,
-        region_name=region,
-        temperature=0.1,
-        max_tokens=2048,
-    ).bind_tools(tools)
+    # BEDROCK_REGION overrides AWS_REGION because the target model may live in
+    # a region distinct from the rest of the infra (e.g. Claude in eu-west-3
+    # while ECS runs in eu-west-1).
+    region = os.getenv("BEDROCK_REGION") or os.getenv("AWS_REGION", "eu-west-1")
+    try:
+        max_tokens = int(os.getenv("BEDROCK_MAX_TOKENS", "2048"))
+    except ValueError:
+        max_tokens = 2048
+
+    llm_kwargs: dict = {
+        "model": model_id,
+        "region_name": region,
+        "temperature": 0.1,
+        "max_tokens": max_tokens,
+    }
+    # Guardrails are opt-in; when configured, langchain-aws forwards them to
+    # every InvokeModel call. Missing IDs are a config error (silently
+    # dropping guardrails would give a false sense of PII protection), but we
+    # only enforce presence of both fields together.
+    guardrail_id = os.getenv("BEDROCK_GUARDRAIL_ID", "")
+    guardrail_version = os.getenv("BEDROCK_GUARDRAIL_VERSION", "DRAFT")
+    if guardrail_id:
+        llm_kwargs["guardrails"] = {
+            "guardrailIdentifier": guardrail_id,
+            "guardrailVersion": guardrail_version,
+        }
+
+    llm = ChatBedrockConverse(**llm_kwargs).bind_tools(tools)
 
     # NOTE: annotations kept untyped on purpose — MessagesState is imported in
     # this function's local scope only, so a forward-ref annotation would fail

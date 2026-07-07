@@ -45,8 +45,8 @@ def chat(body: ChatRequest) -> ChatResponse:
     """Run one turn through the LangGraph agent.
 
     - ``thread_id`` continues an existing conversation; omit it to start fresh.
-    - ``system_prompt`` overrides the default analyst persona for the whole
-      thread (kept in the checkpointed state).
+    - The system prompt is server-controlled (see ``DEFAULT_SYSTEM_PROMPT``)
+      and cannot be overridden by the client — this is a security boundary.
     - Every tool the agent invoked is echoed back in ``tool_calls`` with a
       short preview so the frontend can render "the agent looked at X" chips.
 
@@ -69,7 +69,7 @@ def chat(body: ChatRequest) -> ChatResponse:
 
     messages: list = []
     if not existing:
-        messages.append(SystemMessage(content=body.system_prompt or DEFAULT_SYSTEM_PROMPT))
+        messages.append(SystemMessage(content=DEFAULT_SYSTEM_PROMPT))
     messages.append(HumanMessage(content=body.message))
 
     try:
@@ -166,9 +166,7 @@ async def chat_stream(request: Request, body: ChatRequest) -> StreamingResponse:
 
         messages: list = []
         if not existing:
-            messages.append(
-                SystemMessage(content=body.system_prompt or DEFAULT_SYSTEM_PROMPT)
-            )
+            messages.append(SystemMessage(content=DEFAULT_SYSTEM_PROMPT))
             # If the user has a persisted history for this thread but the
             # process cache is cold (fresh worker, restart, LB pin swap),
             # replay it so the model has full context on the first turn.
