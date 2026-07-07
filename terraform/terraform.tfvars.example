@@ -60,9 +60,13 @@ bedrock_guardrail_id      = ""
 bedrock_guardrail_version = "DRAFT"
 
 # Least-privilege IAM: narrow this list to the exact model ARNs you invoke.
-# The default allows the whole anthropic.claude-* family across all regions.
+# Calling an inference profile (eu.anthropic.claude-*) requires BOTH the
+# profile ARN AND the underlying foundation model ARNs — Bedrock's authz
+# walks through both hops.
 bedrock_allowed_model_arns = [
   "arn:aws:bedrock:*::foundation-model/anthropic.claude-*",
+  "arn:aws:bedrock:*:*:inference-profile/*anthropic.claude-*",
+  "arn:aws:bedrock:*:*:application-inference-profile/*",
 ]
 
 # Default max output tokens for InvokeModel. Exposed as env var so tuning

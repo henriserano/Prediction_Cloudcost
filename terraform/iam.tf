@@ -64,20 +64,36 @@ resource "aws_iam_role_policy" "ecs_task_logs" {
 # a compromised task cannot pivot to an arbitrary (potentially costly) model.
 # This is the SigV4 path: when set, boto3 signs Bedrock calls with the task
 # role's short-lived credentials and no bearer token is needed.
+#
+# The AWS Marketplace read-only statement is required when calling Anthropic
+# models through cross-region inference profiles: Bedrock's authorizer walks
+# through Marketplace to resolve the model's entitlement, and refuses the
+# call if the caller cannot read subscriptions. Subscribe is intentionally
+# NOT granted — subscriptions must be created out-of-band (console) by an
+# account admin, not silently by a running task.
 resource "aws_iam_role_policy" "ecs_task_bedrock" {
   name = "${local.prefix}-task-bedrock"
   role = aws_iam_role.ecs_task.id
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
-      Effect = "Allow"
-      Action = [
-        "bedrock:InvokeModel",
-        "bedrock:InvokeModelWithResponseStream",
-      ]
-      Resource = var.bedrock_allowed_model_arns
-    }]
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "bedrock:InvokeModel",
+          "bedrock:InvokeModelWithResponseStream",
+        ]
+        Resource = var.bedrock_allowed_model_arns
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "aws-marketplace:ViewSubscriptions",
+        ]
+        Resource = "*"
+      },
+    ]
   })
 }
 

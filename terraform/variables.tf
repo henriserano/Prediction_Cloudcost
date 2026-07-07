@@ -163,10 +163,26 @@ variable "bedrock_guardrail_version" {
 }
 
 variable "bedrock_allowed_model_arns" {
-  description = "List of Bedrock foundation-model ARNs the task role is allowed to invoke. Least privilege — narrow this to the exact model(s) you use. Wildcards in the model portion are allowed."
+  description = <<-EOT
+    Bedrock ARNs the task role is allowed to invoke. Least privilege — narrow to
+    the exact model(s)/profiles you use.
+
+    Calling an inference profile (e.g. eu.anthropic.claude-sonnet-4-5-*) requires
+    IAM permission on BOTH the profile ARN AND the underlying foundation models
+    it routes to, because Bedrock's authorization walks through both hops.
+
+    ARN forms accepted:
+      - Foundation model:  arn:aws:bedrock:<region>::foundation-model/<id>
+      - Inference profile: arn:aws:bedrock:<region>:<account>:inference-profile/<id>
+  EOT
   type        = list(string)
   default = [
+    # Foundation models — no account ID in the ARN by AWS design.
     "arn:aws:bedrock:*::foundation-model/anthropic.claude-*",
+    # Cross-region inference profiles (EU + US + any). Account ID is required
+    # here; wildcard on region lets a single policy work across eu-west-1/3.
+    "arn:aws:bedrock:*:*:inference-profile/*anthropic.claude-*",
+    "arn:aws:bedrock:*:*:application-inference-profile/*",
   ]
 }
 
