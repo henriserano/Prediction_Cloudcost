@@ -163,8 +163,8 @@ async def test_gcp_status_isolated_between_sessions():
     routes_gcp._store_session_token("sid-aaa", {"access_token": "tok", "email": "a@example.com"})
 
     async with _client() as client:
-        as_a = (await client.get("/api/gcp/status", headers={"Cookie": "sid=sid-aaa"})).json()
-        as_b = (await client.get("/api/gcp/status", headers={"Cookie": "sid=sid-bbb"})).json()
+        as_a = (await client.get("/api/gcp/status", headers={"Cookie": "gcp_sid=sid-aaa"})).json()
+        as_b = (await client.get("/api/gcp/status", headers={"Cookie": "gcp_sid=sid-bbb"})).json()
         anon = (await client.get("/api/gcp/status")).json()
 
     assert as_a["authenticated"] is True
@@ -181,7 +181,7 @@ async def test_gcp_authenticated_endpoints_401_for_other_session():
 
     async with _client() as client:
         response = await client.get(
-            "/api/gcp/billing-accounts", headers={"Cookie": "sid=sid-bbb"}
+            "/api/gcp/billing-accounts", headers={"Cookie": "gcp_sid=sid-bbb"}
         )
     assert response.status_code == 401
     assert response.json()["error"]["code"] == "UNAUTHORIZED"
@@ -195,7 +195,7 @@ async def test_gcp_logout_only_clears_requester_session():
     routes_gcp._store_session_token("sid-bbb", {"access_token": "tok-b"})
 
     async with _client() as client:
-        response = await client.get("/api/gcp/logout", headers={"Cookie": "sid=sid-aaa"})
+        response = await client.get("/api/gcp/logout", headers={"Cookie": "gcp_sid=sid-aaa"})
     assert response.status_code == 200
 
     with routes_gcp._state_lock:
