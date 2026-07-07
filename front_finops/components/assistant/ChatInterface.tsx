@@ -656,14 +656,20 @@ function MarkdownBody({ text }: { text: string }) {
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
-          p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
-          ul: ({ children }) => (
+          p: ({ children }: React.ComponentProps<"p">) => (
+            <p className="mb-2 last:mb-0">{children}</p>
+          ),
+          ul: ({ children }: React.ComponentProps<"ul">) => (
             <ul className="my-2 list-disc space-y-1 pl-5">{children}</ul>
           ),
-          ol: ({ children }) => (
+          ol: ({ children }: React.ComponentProps<"ol">) => (
             <ol className="my-2 list-decimal space-y-1 pl-5">{children}</ol>
           ),
-          code: ({ children, className, ...props }) => {
+          code: ({
+            children,
+            className,
+            ...props
+          }: React.ComponentProps<"code">) => {
             const isBlock = /language-/.test(className ?? "")
             if (isBlock) {
               return (
@@ -684,19 +690,19 @@ function MarkdownBody({ text }: { text: string }) {
               </code>
             )
           },
-          table: ({ children }) => (
+          table: ({ children }: React.ComponentProps<"table">) => (
             <div className="my-2 overflow-x-auto">
               <table className="min-w-full border-collapse text-xs">
                 {children}
               </table>
             </div>
           ),
-          th: ({ children }) => (
+          th: ({ children }: React.ComponentProps<"th">) => (
             <th className="border border-border bg-muted px-2 py-1 text-left font-semibold">
               {children}
             </th>
           ),
-          td: ({ children }) => (
+          td: ({ children }: React.ComponentProps<"td">) => (
             <td className="border border-border px-2 py-1">{children}</td>
           ),
         }}
