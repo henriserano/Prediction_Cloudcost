@@ -6,12 +6,24 @@ export interface DailyPoint {
   ciHigh: number
 }
 
+export type ServiceCategory =
+  | "compute"
+  | "database"
+  | "storage"
+  | "analytics"
+  | "ai_ml"
+  | "network"
+  | "security"
+  | "observability"
+  | "other"
+
 export interface ServiceShare {
   service: string
   cost: number
   pct: number
   cv: number
   cumPct: number
+  category: ServiceCategory
 }
 
 export interface AnomalyPoint {

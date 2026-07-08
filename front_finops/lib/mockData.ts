@@ -59,14 +59,14 @@ export const DAILY_DATA: DailyPoint[] = RAW_COSTS.map((cost, i) => ({
 }))
 
 export const SERVICE_SHARES: ServiceShare[] = [
-  { service: "Cloud SQL", cost: 1124.8, pct: 33.1, cv: 4.2, cumPct: 33.1 },
-  { service: "BigQuery", cost: 646.3, pct: 19.0, cv: 111.3, cumPct: 52.1 },
-  { service: "Claude Sonnet 4.6", cost: 476.2, pct: 14.0, cv: 52.8, cumPct: 66.1 },
-  { service: "Cloud Spanner", cost: 408.1, pct: 12.0, cv: 2.1, cumPct: 78.1 },
-  { service: "Cloud Run", cost: 340.1, pct: 10.0, cv: 89.4, cumPct: 88.1 },
-  { service: "Vertex AI", cost: 306.1, pct: 9.0, cv: 67.2, cumPct: 97.1 },
-  { service: "Cloud Storage", cost: 68.0, pct: 2.0, cv: 18.5, cumPct: 99.1 },
-  { service: "Autres", cost: 30.6, pct: 0.9, cv: 45.3, cumPct: 100 },
+  { service: "Cloud SQL", cost: 1124.8, pct: 33.1, cv: 4.2, cumPct: 33.1, category: "database" },
+  { service: "BigQuery", cost: 646.3, pct: 19.0, cv: 111.3, cumPct: 52.1, category: "analytics" },
+  { service: "Claude Sonnet 4.6", cost: 476.2, pct: 14.0, cv: 52.8, cumPct: 66.1, category: "ai_ml" },
+  { service: "Cloud Spanner", cost: 408.1, pct: 12.0, cv: 2.1, cumPct: 78.1, category: "database" },
+  { service: "Cloud Run", cost: 340.1, pct: 10.0, cv: 89.4, cumPct: 88.1, category: "compute" },
+  { service: "Vertex AI", cost: 306.1, pct: 9.0, cv: 67.2, cumPct: 97.1, category: "ai_ml" },
+  { service: "Cloud Storage", cost: 68.0, pct: 2.0, cv: 18.5, cumPct: 99.1, category: "storage" },
+  { service: "Autres", cost: 30.6, pct: 0.9, cv: 45.3, cumPct: 100, category: "other" },
 ]
 
 const anomalyDates = new Set(["2026-02-16", "2026-03-10", "2026-03-11", "2026-06-02"])

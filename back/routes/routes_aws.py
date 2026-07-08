@@ -5,6 +5,7 @@ from typing import Annotated, List, Optional
 
 from fastapi import APIRouter, Query, Request
 
+from analysis.service_taxonomy import categorize
 from core.aws_session import get_user_boto3_session, get_user_region
 from core.config import get_settings
 from core.errors import AppError, BadRequest
@@ -365,6 +366,7 @@ def aws_billing(
             service=svc,
             cost=round(cost, 4),
             pct=round(cost / total * 100, 2) if total > 0 else 0.0,
+            category=categorize(svc),
         )
         for svc, cost in sorted(by_service_totals.items(), key=lambda kv: kv[1], reverse=True)
     ]

@@ -78,6 +78,11 @@ class AWSBillingByService(BaseModel):
     service: str
     cost: float
     pct: float
+    category: str = Field(
+        default="other",
+        description="Coarse-grained bucket (compute, database, storage, analytics, "
+        "ai_ml, network, security, observability, other). See analysis/service_taxonomy.",
+    )
 
 
 class AWSBillingByMonth(BaseModel):

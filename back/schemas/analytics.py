@@ -17,6 +17,12 @@ class ServiceShare(BaseModel):
     pct: float
     cv: float
     cum_pct: float
+    category: str = Field(
+        default="other",
+        description="Coarse-grained bucket: compute | database | storage | "
+        "analytics | ai_ml | network | security | observability | other. See "
+        "analysis/service_taxonomy.py.",
+    )
 
 
 class AnomalyPoint(BaseModel):

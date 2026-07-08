@@ -8,6 +8,7 @@ import pandas as pd
 from data.loader import load_daily_costs, load_daily_per_service
 from schemas.analytics import KPIData, ServiceShare
 from core.cache import app_cache
+from analysis.service_taxonomy import categorize
 
 
 def _service_cols(df: pd.DataFrame) -> List[str]:
@@ -47,6 +48,7 @@ def get_service_shares() -> List[ServiceShare]:
                 pct=round(pct, 2),
                 cv=round(cvs[svc], 2),
                 cum_pct=round(cum, 2),
+                category=categorize(svc),
             )
         )
     app_cache.set("analytics:services", result)

@@ -32,6 +32,9 @@ const CHART_COLORS = [
 const COLOR_CORAL = "oklch(0.66 0.185 28)"
 const COLOR_MUTED = "oklch(0.65 0.02 250)"
 
+import type { ServiceCategory } from "@/lib/types"
+import { CATEGORY_META, CATEGORY_ORDER } from "@/lib/service-taxonomy"
+
 type Source = "local" | "gcp"
 
 interface UnifiedRow {
@@ -40,6 +43,83 @@ interface UnifiedRow {
   pct: number
   cumPct: number
   cv: number | null // null when source doesn't provide daily volatility
+  category: ServiceCategory
+}
+
+/** Guess a category client-side when the backend doesn't provide one
+ *  (currently: GCP billing endpoint). Substring, case-insensitive. */
+function guessCategory(service: string): ServiceCategory {
+  const s = service.toLowerCase()
+  const rules: [string, ServiceCategory][] = [
+    ["vertex ai", "ai_ml"], ["bedrock", "ai_ml"], ["claude", "ai_ml"], ["gemini", "ai_ml"],
+    ["gpt", "ai_ml"], ["automl", "ai_ml"],
+    ["bigquery", "analytics"], ["looker", "analytics"], ["dataflow", "analytics"], ["dataproc", "analytics"],
+    ["pubsub", "analytics"], ["pub/sub", "analytics"],
+    ["cloud sql", "database"], ["firestore", "database"], ["spanner", "database"], ["bigtable", "database"],
+    ["memorystore", "database"],
+    ["cloud storage", "storage"], ["filestore", "storage"], ["persistent disk", "storage"],
+    ["cloud cdn", "network"], ["cloud dns", "network"], ["load balancing", "network"], ["vpc", "network"],
+    ["cloud run", "compute"], ["cloud functions", "compute"], ["app engine", "compute"],
+    ["compute engine", "compute"], ["kubernetes", "compute"], ["cloud build", "compute"],
+    ["kms", "security"], ["secret manager", "security"], ["iam", "security"], ["cloud armor", "security"],
+    ["cloud logging", "observability"], ["cloud monitoring", "observability"], ["cloud trace", "observability"],
+  ]
+  for (const [k, cat] of rules) if (s.includes(k)) return cat
+  return "other"
+}
+
+function CategoryBadge({ category }: { category: ServiceCategory }) {
+  const meta = CATEGORY_META[category]
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] font-medium",
+        meta.bgClass,
+        meta.textClass,
+      )}
+      title={meta.label}
+    >
+      <span className={cn("inline-block h-1.5 w-1.5 rounded-full", meta.dotClass)} aria-hidden />
+      {meta.label}
+    </span>
+  )
+}
+
+function CategoryLegend({ rows }: { rows: UnifiedRow[] }) {
+  const totals = new Map<ServiceCategory, number>()
+  for (const r of rows) {
+    totals.set(r.category, (totals.get(r.category) ?? 0) + r.cost)
+  }
+  const grand = rows.reduce((s, r) => s + r.cost, 0)
+  const active = CATEGORY_ORDER.filter((c) => (totals.get(c) ?? 0) > 0)
+  if (active.length === 0) return null
+  return (
+    <div className="flex flex-wrap gap-1.5 rounded-lg border border-border bg-muted/30 px-3 py-2.5">
+      <span className="mr-1 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+        Catégories
+      </span>
+      {active.map((cat) => {
+        const meta = CATEGORY_META[cat]
+        const cost = totals.get(cat) ?? 0
+        const pct = grand > 0 ? (cost / grand) * 100 : 0
+        return (
+          <span
+            key={cat}
+            className={cn(
+              "inline-flex items-center gap-1.5 rounded-md border px-2 py-0.5 text-[11px]",
+              meta.bgClass,
+              meta.textClass,
+            )}
+            title={`${meta.label}: ${cost.toLocaleString("fr-FR", { maximumFractionDigits: 0 })} (${pct.toFixed(1)}%)`}
+          >
+            <span className={cn("h-1.5 w-1.5 rounded-full", meta.dotClass)} aria-hidden />
+            <span className="font-medium">{meta.label}</span>
+            <span className="tabular-nums opacity-75">{pct.toFixed(1)}%</span>
+          </span>
+        )
+      })}
+    </div>
+  )
 }
 
 function CVBadge({ cv }: { cv: number | null }) {
@@ -166,6 +246,7 @@ export default function ServicesPage() {
         pct: s.pct,
         cumPct: s.cumPct,
         cv: s.cv,
+        category: s.category ?? guessCategory(s.service),
       }))
     }
     if (!gcpBilling) return []
@@ -179,6 +260,7 @@ export default function ServicesPage() {
         pct: s.pct,
         cumPct: acc,
         cv: null,
+        category: guessCategory(s.service),
       }
     })
   }, [effectiveSource, localServices, gcpBilling])
@@ -363,44 +445,51 @@ export default function ServicesPage() {
           {(isLoading || rows.length === 0) ? (
             <Skeleton className="h-[200px]" />
           ) : (
-            <div className="overflow-x-auto -mx-1">
-              <table className="w-full text-sm min-w-[520px]">
-                <thead>
-                  <tr className="border-b border-border text-muted-foreground text-xs">
-                    <th className="pb-2.5 text-left font-medium pl-1">Service</th>
-                    <th className="pb-2.5 text-right font-medium">Coût total</th>
-                    <th className="pb-2.5 text-right font-medium">Part</th>
-                    <th className="pb-2.5 text-right font-medium">Cumul</th>
-                    <th className="pb-2.5 text-right font-medium">CV</th>
-                    <th className="pb-2.5 text-center font-medium pr-1">Profil</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border">
-                  {rows.map((s, i) => (
-                    <tr key={s.service} className="hover:bg-muted/40 transition-colors">
-                      <td className="py-2.5 pr-3 pl-1">
-                        <div className="flex items-center gap-2.5">
-                          <span
-                            aria-hidden
-                            className="inline-block h-2.5 w-2.5 rounded-full shrink-0"
-                            style={{ backgroundColor: CHART_COLORS[i % CHART_COLORS.length] }}
-                          />
-                          <span className="text-sm">{s.service}</span>
-                        </div>
-                      </td>
-                      <td className="py-2.5 text-right tabular-nums font-semibold">
-                        {s.cost.toLocaleString("fr-FR", { maximumFractionDigits: 0 })} €
-                      </td>
-                      <td className="py-2.5 text-right tabular-nums">{s.pct.toFixed(1)}%</td>
-                      <td className="py-2.5 text-right tabular-nums text-muted-foreground">{s.cumPct.toFixed(1)}%</td>
-                      <td className="py-2.5 text-right tabular-nums">
-                        {s.cv == null ? <span className="text-muted-foreground">—</span> : `${s.cv.toFixed(1)}%`}
-                      </td>
-                      <td className="py-2.5 text-center pr-1"><CVBadge cv={s.cv} /></td>
+            <div className="space-y-3">
+              <CategoryLegend rows={rows} />
+              <div className="overflow-x-auto -mx-1">
+                <table className="w-full text-sm min-w-[620px]">
+                  <thead>
+                    <tr className="border-b border-border text-muted-foreground text-xs">
+                      <th className="pb-2.5 text-left font-medium pl-1">Service</th>
+                      <th className="pb-2.5 text-left font-medium">Catégorie</th>
+                      <th className="pb-2.5 text-right font-medium">Coût total</th>
+                      <th className="pb-2.5 text-right font-medium">Part</th>
+                      <th className="pb-2.5 text-right font-medium">Cumul</th>
+                      <th className="pb-2.5 text-right font-medium">CV</th>
+                      <th className="pb-2.5 text-center font-medium pr-1">Profil</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody className="divide-y divide-border">
+                    {rows.map((s, i) => (
+                      <tr key={s.service} className="hover:bg-muted/40 transition-colors">
+                        <td className="py-2.5 pr-3 pl-1">
+                          <div className="flex items-center gap-2.5">
+                            <span
+                              aria-hidden
+                              className="inline-block h-2.5 w-2.5 rounded-full shrink-0"
+                              style={{ backgroundColor: CHART_COLORS[i % CHART_COLORS.length] }}
+                            />
+                            <span className="text-sm">{s.service}</span>
+                          </div>
+                        </td>
+                        <td className="py-2.5 pr-3">
+                          <CategoryBadge category={s.category} />
+                        </td>
+                        <td className="py-2.5 text-right tabular-nums font-semibold">
+                          {s.cost.toLocaleString("fr-FR", { maximumFractionDigits: 0 })} €
+                        </td>
+                        <td className="py-2.5 text-right tabular-nums">{s.pct.toFixed(1)}%</td>
+                        <td className="py-2.5 text-right tabular-nums text-muted-foreground">{s.cumPct.toFixed(1)}%</td>
+                        <td className="py-2.5 text-right tabular-nums">
+                          {s.cv == null ? <span className="text-muted-foreground">—</span> : `${s.cv.toFixed(1)}%`}
+                        </td>
+                        <td className="py-2.5 text-center pr-1"><CVBadge cv={s.cv} /></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           )}
         </SectionCard>
@@ -412,7 +501,9 @@ export default function ServicesPage() {
           {(isLoading || rows.length === 0) ? (
             Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-24" />)
           ) : (
-            rows.map((s, i) => (
+            <>
+              <CategoryLegend rows={rows} />
+              {rows.map((s, i) => (
               <SectionCard key={s.service} accent="none">
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex items-center gap-2 min-w-0">
@@ -423,7 +514,10 @@ export default function ServicesPage() {
                     />
                     <span className="text-sm font-medium truncate">{s.service}</span>
                   </div>
-                  <CVBadge cv={s.cv} />
+                  <div className="flex items-center gap-1.5">
+                    <CategoryBadge category={s.category} />
+                    <CVBadge cv={s.cv} />
+                  </div>
                 </div>
                 <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
                   <div>
@@ -444,7 +538,8 @@ export default function ServicesPage() {
                   </div>
                 </div>
               </SectionCard>
-            ))
+            ))}
+            </>
           )}
         </div>
       )}
