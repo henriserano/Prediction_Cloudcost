@@ -9,6 +9,33 @@ from schemas.gcp import DateRange
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
+class AWSSyncRequest(BaseModel):
+    """Ingest AWS Cost Explorer data into the FinOps store."""
+
+    account_id: Optional[str] = Field(
+        default=None,
+        description="Filter to a specific linked account (Organizations only). "
+        "None = the whole payer account.",
+    )
+    months: int = Field(default=6, ge=1, le=24)
+    replace: bool = Field(
+        default=True,
+        description="True = wipe the current store and load AWS data as the sole "
+        "source. False = append (useful to merge multiple accounts).",
+    )
+
+
+class AWSSyncResponse(BaseModel):
+    ingested: int
+    account_id: Optional[str]
+    period_start: str
+    period_end: str
+    services_count: int
+    total_cost: float
+    currency: str
+    replaced: bool
+
+
 class AWSAccount(BaseModel):
     """One AWS account visible to the caller.
 

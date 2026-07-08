@@ -32,11 +32,13 @@ api_key = ""
 session_secret = ""
 
 # Google OAuth2 — register at https://console.cloud.google.com/apis/credentials
-# The redirect URI must be HTTPS (OAuth over plain HTTP exposes the auth code).
+# The redirect URI must be HTTPS. Point it at your Vercel deployment (the
+# Next.js rewrite forwards /api/gcp/callback to the backend transparently)
+# so Google, Vercel and users all share a single canonical domain.
 google_client_id     = ""
 google_client_secret = ""
-google_redirect_uri  = "https://<your-alb-dns>/api/gcp/callback"
-frontend_url         = "https://<your-vercel-url>"
+google_redirect_uri  = "https://finopsgcp.vercel.app/api/gcp/callback"
+frontend_url         = "https://finopsgcp.vercel.app"
 
 # ── AWS Bedrock ───────────────────────────────────────────────────────────────
 # All Bedrock values below are NON-SENSITIVE (region, model IDs). Bedrock

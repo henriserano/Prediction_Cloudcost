@@ -37,6 +37,7 @@ from routes.routes_tools import router as tools_router
 from routes.routes_auth import router as auth_router
 from routes.routes_conversations import router as conversations_router
 from routes.routes_credentials import router as credentials_router
+from routes.routes_simulation import router as simulation_router
 
 logger = get_logger(__name__)
 
@@ -160,3 +161,4 @@ app.include_router(tools_router)
 app.include_router(auth_router)
 app.include_router(conversations_router)
 app.include_router(credentials_router)
+app.include_router(simulation_router)

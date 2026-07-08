@@ -298,29 +298,35 @@ def gcp_callback(
     error: Annotated[Optional[str], Query()] = None,
 ) -> RedirectResponse:
     settings = get_settings()
-    frontend_url = settings.frontend_url or _get_env("FRONTEND_URL", "hhttps://finopsgcp.vercel.app/")
+    # Normalise: strip trailing slash so ``f"{frontend_url}/..."`` never
+    # produces ``//path``. Falls back to the Vercel deployment URL when
+    # nothing is configured — matches the operator's canonical entry point.
+    frontend_url = (
+        settings.frontend_url
+        or _get_env("FRONTEND_URL", "https://finopsgcp.vercel.app")
+    ).rstrip("/")
 
     if error:
         # Allowlist permitted OAuth error codes to prevent log injection and
         # reflected XSS via the ?error= parameter (SEC-002).
         safe_error = error if error in _ALLOWED_OAUTH_ERRORS else "oauth_error"
-        redirect_url = f"{frontend_url}/gcp-connect?error={urllib.parse.quote(safe_error)}"
+        redirect_url = f"{frontend_url}/dashboard?gcp_error={urllib.parse.quote(safe_error)}"
         return RedirectResponse(url=redirect_url, status_code=302)
 
     if not code:
-        redirect_url = f"{frontend_url}/gcp-connect?error=missing_code"
+        redirect_url = f"{frontend_url}/dashboard?gcp_error=missing_code"
         return RedirectResponse(url=redirect_url, status_code=302)
 
     # SEC-015: pop-then-check atomically under the lock (single-use state).
     with _state_lock:
         state_entry = _oauth_states.pop(state, None) if state else None
     if state_entry is None:
-        redirect_url = f"{frontend_url}/gcp-connect?error=invalid_state"
+        redirect_url = f"{frontend_url}/dashboard?gcp_error=invalid_state"
         return RedirectResponse(url=redirect_url, status_code=302)
 
     # Reject states that have exceeded the TTL (SEC-003).
     if time.time() - state_entry["created_at"] > _OAUTH_STATE_TTL:
-        redirect_url = f"{frontend_url}/gcp-connect?error=state_expired"
+        redirect_url = f"{frontend_url}/dashboard?gcp_error=state_expired"
         return RedirectResponse(url=redirect_url, status_code=302)
 
     # SEC-014: the session the token will be bound to.
@@ -351,7 +357,7 @@ def gcp_callback(
         # contain the client_secret, proxy credentials, or TLS details.
         # Log the actual error server-side with a correlation ID instead.
         logger.error("token_exchange_failed", extra={"error": repr(exc)})
-        redirect_url = f"{frontend_url}/gcp-connect?error=token_exchange_failed"
+        redirect_url = f"{frontend_url}/dashboard?gcp_error=token_exchange_failed"
         return RedirectResponse(url=redirect_url, status_code=302)
 
     # Fetch user email
@@ -370,7 +376,7 @@ def gcp_callback(
     # SEC-014: store the token under the requester's session, never globally.
     _store_session_token(sid, token_data)
 
-    redirect_url = f"{frontend_url}/gcp-connect?connected=1"
+    redirect_url = f"{frontend_url}/dashboard?gcp=connected"
     response = RedirectResponse(url=redirect_url, status_code=302)
     # Re-issue the cookie so the session survives even if the browser dropped
     # it between /auth and the callback (harmless when already present).

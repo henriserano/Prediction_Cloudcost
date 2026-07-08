@@ -14,11 +14,14 @@ import {
   Sparkles,
   LogOut,
   User as UserIcon,
+  Database,
 } from "lucide-react"
+import { useQuery } from "@tanstack/react-query"
 import { cn } from "@/lib/utils"
 import { useSidebar } from "@/lib/context/sidebar-context"
 import { useModelBenchmarks } from "@/lib/hooks/useApi"
 import { useAuth } from "@/lib/context/auth-context"
+import { api } from "@/lib/api"
 import { SiaLogo } from "@/components/ui/logo"
 
 interface NavItem {
@@ -47,6 +50,29 @@ export default function Sidebar() {
   const { data: benchmarks } = useModelBenchmarks()
   const bestModel = benchmarks?.find((m) => m.winner)?.model ?? "AutoETS"
   const { user, logout } = useAuth()
+  const { data: dataStatus } = useQuery<{
+    source: string
+    rowsDaily: number
+    servicesCount: number
+    periodStart: string | null
+    periodEnd: string | null
+  }>({
+    queryKey: ["data-status"],
+    queryFn: () => api.get("/api/data/status").then((r) => r.data),
+    // Poll every 30s so the badge picks up an AWS sync triggered from another
+    // tab; the panel that triggers it also does an explicit invalidate.
+    refetchInterval: 30_000,
+    staleTime: 15_000,
+  })
+
+  const sourceLabel = (() => {
+    if (!dataStatus) return "…"
+    if (dataStatus.source === "events") return "Live"
+    if (dataStatus.source === "parquet_fallback") return "Démo"
+    if (dataStatus.source === "empty") return "Vide"
+    return dataStatus.source
+  })()
+  const sourceActive = dataStatus?.source === "events"
 
   const isActive = (href: string) => path === href || path.startsWith(href + "/")
 
@@ -142,13 +168,37 @@ export default function Sidebar() {
           <div className="rounded-lg bg-white/5 px-3 py-2.5 backdrop-blur-sm ring-1 ring-white/5">
             <div className="flex items-center justify-between gap-2 mb-1">
               <p className="text-[10px] text-sidebar-foreground/50 uppercase tracking-widest font-semibold">
+                Source données
+              </p>
+              <Database
+                className={cn(
+                  "h-3 w-3",
+                  sourceActive
+                    ? "text-emerald-400"
+                    : "text-sidebar-foreground/40",
+                )}
+                aria-hidden
+              />
+            </div>
+            <p className="text-xs text-white font-semibold truncate">{sourceLabel}</p>
+            <p className="text-[10px] text-sidebar-foreground/40 mt-0.5">
+              {dataStatus?.periodStart && dataStatus?.periodEnd
+                ? `${dataStatus.periodStart} → ${dataStatus.periodEnd}`
+                : `${dataStatus?.rowsDaily ?? 0} points · ${dataStatus?.servicesCount ?? 0} services`}
+            </p>
+          </div>
+          <div className="rounded-lg bg-white/5 px-3 py-2.5 backdrop-blur-sm ring-1 ring-white/5">
+            <div className="flex items-center justify-between gap-2 mb-1">
+              <p className="text-[10px] text-sidebar-foreground/50 uppercase tracking-widest font-semibold">
                 Modèle actif
               </p>
               <Sparkles className="h-3 w-3 text-[color:var(--accent-coral)]" aria-hidden />
             </div>
             <p className="text-xs text-white font-semibold truncate">{bestModel}</p>
             <p className="text-[10px] text-sidebar-foreground/40 mt-0.5">
-              Jan – Juin 2026
+              {dataStatus?.periodStart && dataStatus?.periodEnd
+                ? `${dataStatus.periodStart} – ${dataStatus.periodEnd}`
+                : "Jan – Juin 2026"}
             </p>
           </div>
 

@@ -18,8 +18,10 @@ from schemas.aws import (
     AWSBillingByService,
     AWSBillingResponse,
     AWSService,
+    AWSSyncRequest,
+    AWSSyncResponse,
 )
-from schemas.gcp import DateRange
+from schemas.gcp import BillingEvent, DateRange, EventsIngestRequest
 
 logger = get_logger(__name__)
 
@@ -425,3 +427,104 @@ def aws_services(
         for svc, cost in sorted(totals.items(), key=lambda kv: kv[1], reverse=True)
     ]
     return services
+
+
+# ---------------------------------------------------------------------------
+# Sync — copy AWS Cost Explorer data into the FinOps events store
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/sync",
+    response_model=AWSSyncResponse,
+    summary="Ingest AWS Cost Explorer data into the FinOps model — daily granularity",
+)
+def aws_sync(request: Request, body: AWSSyncRequest) -> AWSSyncResponse:
+    """Pull the user's AWS billing and drop it into the shared events store.
+
+    After this call, every downstream endpoint (KPIs, forecast, services,
+    anomalies, drift, …) serves AWS data — that's the whole point. Combine
+    with a ``queryClient.invalidateQueries()`` on the frontend so the entire
+    UI re-hydrates.
+
+    Range: last ``months`` months, daily granularity. Single Cost Explorer
+    call (~$0.01 billed by AWS).
+    """
+    session = _session_for_request(request)
+    identity = _sts_get_caller_identity(session=session)
+    resolved_account_id = body.account_id or identity.get("Account")
+
+    start_iso, end_iso = _resolve_period(None, None, months_default=body.months)
+    client = _ce_client(session=session)
+
+    ce_kwargs: dict = {
+        "TimePeriod": {"Start": start_iso, "End": end_iso},
+        "Granularity": "DAILY",
+        "Metrics": ["UnblendedCost"],
+        "GroupBy": [{"Type": "DIMENSION", "Key": "SERVICE"}],
+    }
+    if body.account_id:
+        ce_kwargs["Filter"] = {
+            "Dimensions": {"Key": "LINKED_ACCOUNT", "Values": [body.account_id]}
+        }
+    result = _ce_call(client.get_cost_and_usage, **ce_kwargs)
+
+    events: list[BillingEvent] = []
+    services: set[str] = set()
+    total = 0.0
+    currency = "USD"
+    for chunk in result.get("ResultsByTime", []):
+        day = chunk.get("TimePeriod", {}).get("Start", "")
+        if not day:
+            continue
+        for grp in chunk.get("Groups", []):
+            svc = (grp.get("Keys") or ["Unknown"])[0]
+            metric = grp.get("Metrics", {}).get("UnblendedCost", {})
+            amount = float(metric.get("Amount", 0.0) or 0.0)
+            currency = metric.get("Unit", currency) or currency
+            if amount <= 0:
+                # Skip zero-cost rows — they inflate row count without value
+                # and Pydantic's ``cost >= 0`` still lets legitimate free-tier
+                # days through (they're just not stored explicitly).
+                continue
+            services.add(svc)
+            total += amount
+            events.append(BillingEvent(
+                date=day,
+                service=svc,
+                cost=round(amount, 4),
+                description=f"AWS · {resolved_account_id or 'unknown-account'}",
+            ))
+
+    if not events:
+        raise BadRequest(
+            "Cost Explorer returned no billed data for this period. Verify "
+            "the account has activity and Cost Explorer is enabled.",
+            details={
+                "start": start_iso,
+                "end": end_iso,
+                "account_id": resolved_account_id,
+            },
+        )
+
+    from routes.routes_events import ingest_events
+
+    resp = ingest_events(EventsIngestRequest(events=events, replace=body.replace))
+    logger.info(
+        "aws_sync_ingested",
+        extra={
+            "account_id": resolved_account_id,
+            "ingested": resp.ingested,
+            "replaced": body.replace,
+            "services_count": len(services),
+        },
+    )
+    return AWSSyncResponse(
+        ingested=resp.ingested,
+        account_id=resolved_account_id,
+        period_start=start_iso,
+        period_end=(date.fromisoformat(end_iso) - timedelta(days=1)).isoformat(),
+        services_count=len(services),
+        total_cost=round(total, 2),
+        currency=currency,
+        replaced=body.replace,
+    )

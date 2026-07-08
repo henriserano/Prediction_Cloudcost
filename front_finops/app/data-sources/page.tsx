@@ -14,6 +14,9 @@ import {
   Loader2,
   ChevronDown,
   ChevronRight,
+  Sparkles,
+  Wrench,
+  ShieldAlert,
 } from "lucide-react"
 import PageShell from "@/components/layout/PageShell"
 import { SectionCard } from "@/components/ui/section-card"
@@ -32,9 +35,10 @@ import { PinPrompt } from "@/components/auth/PinPrompt"
 // ---------------------------------------------------------------------------
 
 const TABS = [
-  { id: "file", label: "Fichier",             icon: FileSpreadsheet, hint: "CSV / Excel" },
-  { id: "gcp",  label: "Google Cloud",        icon: CloudIcon,       hint: "OAuth" },
-  { id: "aws",  label: "Amazon Web Services", icon: CloudIcon,       hint: "IAM" },
+  { id: "file",       label: "Fichier",             icon: FileSpreadsheet, hint: "CSV / Excel" },
+  { id: "gcp",        label: "Google Cloud",        icon: CloudIcon,       hint: "OAuth" },
+  { id: "aws",        label: "Amazon Web Services", icon: CloudIcon,       hint: "IAM" },
+  { id: "simulation", label: "Cadrage agentique",   icon: Sparkles,        hint: "POC · pricing" },
 ] as const
 
 type TabId = (typeof TABS)[number]["id"]
@@ -96,6 +100,34 @@ interface AWSBillingResponse {
   currency: string
   byService: { service: string; cost: number; pct: number }[]
   byMonth: { month: string; cost: number }[]
+}
+
+interface AWSSyncResponse {
+  ingested: number
+  accountId: string | null
+  periodStart: string
+  periodEnd: string
+  servicesCount: number
+  totalCost: number
+  currency: string
+  replaced: boolean
+}
+
+function useAWSSync() {
+  return useMutation<
+    AWSSyncResponse,
+    Error,
+    { accountId: string | null; months: number; replace: boolean }
+  >({
+    mutationFn: (body) =>
+      api
+        .post("/api/aws/sync", {
+          account_id: body.accountId,
+          months: body.months,
+          replace: body.replace,
+        })
+        .then((r) => r.data),
+  })
 }
 
 function useAWSStatus() {
@@ -918,14 +950,39 @@ function AWSTab() {
 // ---------------------------------------------------------------------------
 
 function AWSAccountsPanel() {
+  const queryClient = useQueryClient()
   const { data: accounts, isLoading: accountsLoading, error: accountsError } =
     useAWSAccounts(true)
   const [selected, setSelected] = useState<string | null>(null)
   const { data: billing, isLoading: billingLoading, error: billingError } =
     useAWSBilling(true, selected)
+  const {
+    mutate: sync,
+    isPending: syncing,
+    isSuccess: synced,
+    data: syncData,
+    error: syncError,
+    reset: resetSync,
+  } = useAWSSync()
 
   const total = billing?.total ?? 0
   const currency = billing?.currency ?? "USD"
+
+  function handleUseAsSource(accountId: string | null) {
+    resetSync()
+    sync(
+      { accountId, months: 6, replace: true },
+      {
+        onSuccess: () => {
+          // Nuke every cached query so Dashboard, Forecast, Services,
+          // Analytics, Diagnostics and Assistant all refetch from the freshly
+          // AWS-populated events store. Passing no predicate = invalidate
+          // everything under this QueryClient.
+          void queryClient.invalidateQueries()
+        },
+      },
+    )
+  }
 
   return (
     <div className="space-y-4 rounded-xl border border-border bg-muted/10 p-4">
@@ -945,35 +1002,65 @@ function AWSAccountsPanel() {
               const active = selected === acc.accountId
               return (
                 <li key={acc.accountId}>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setSelected((s) => (s === acc.accountId ? null : acc.accountId))
-                    }
+                  <div
                     className={cn(
-                      "w-full rounded-lg border px-3 py-2.5 text-left transition-colors",
+                      "flex items-stretch rounded-lg border transition-colors overflow-hidden",
                       active
                         ? "border-[color:var(--accent-coral)] bg-[color:var(--accent-coral)]/5"
                         : "border-border bg-card hover:border-[color:var(--accent-coral)]/40",
                     )}
                   >
-                    <div className="flex items-center justify-between gap-2">
-                      <p className="truncate text-sm font-medium">{acc.name}</p>
-                      <Badge
-                        variant={acc.source === "organizations" ? "success" : "muted"}
-                        size="sm"
-                      >
-                        {acc.source === "organizations" ? "Org" : "Solo"}
-                      </Badge>
-                    </div>
-                    <p className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">
-                      {acc.accountId}
-                    </p>
-                  </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setSelected((s) => (s === acc.accountId ? null : acc.accountId))
+                      }
+                      className="flex-1 px-3 py-2.5 text-left"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="truncate text-sm font-medium">{acc.name}</p>
+                        <Badge
+                          variant={acc.source === "organizations" ? "success" : "muted"}
+                          size="sm"
+                        >
+                          {acc.source === "organizations" ? "Org" : "Solo"}
+                        </Badge>
+                      </div>
+                      <p className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">
+                        {acc.accountId}
+                      </p>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleUseAsSource(acc.accountId)}
+                      disabled={syncing}
+                      className={cn(
+                        "shrink-0 border-l border-border px-3 text-[11px] font-medium transition-colors",
+                        "hover:bg-[color:var(--accent-coral)]/10 hover:text-[color:var(--accent-coral)]",
+                        "disabled:pointer-events-none disabled:opacity-50",
+                      )}
+                      title="Ingérer 6 mois de Cost Explorer et alimenter tout le dashboard"
+                    >
+                      {syncing ? "Sync…" : "Utiliser"}
+                    </button>
+                  </div>
                 </li>
               )
             })}
           </ul>
+        )}
+
+        {(synced || syncError) && (
+          <div className="mt-3">
+            {synced && syncData && (
+              <SuccessBanner
+                message={`${syncData.ingested.toLocaleString("fr-FR")} événements AWS ingérés · ${syncData.servicesCount} services · période ${syncData.periodStart} → ${syncData.periodEnd}. Tout le dashboard bascule sur ces données.`}
+              />
+            )}
+            {syncError && (
+              <ErrorBanner message="La synchronisation Cost Explorer a échoué. Vérifie la permission ce:GetCostAndUsage et que Cost Explorer est activé (délai 24h après activation)." />
+            )}
+          </div>
         )}
       </div>
 
@@ -1042,6 +1129,510 @@ function AWSAccountsPanel() {
 }
 
 // ---------------------------------------------------------------------------
+// Tab 4 — Agentic scoping simulator
+// ---------------------------------------------------------------------------
+
+interface LLMEntry {
+  id: string
+  label: string
+  vendor: string
+  provider: string
+  inputPerMillion: number
+  outputPerMillion: number
+  contextWindow: number
+  notes?: string
+}
+interface ToolEntry { id: string; label: string; unitCost: number; description: string }
+interface DeploymentEntry { id: string; label: string; base_infra_usd?: number }
+
+interface ReferenceCatalog {
+  llms: LLMEntry[]
+  tools: ToolEntry[]
+  deploymentTargets: DeploymentEntry[]
+}
+
+interface SimResult {
+  cost: {
+    llmInput: number
+    llmOutput: number
+    tools: number
+    infrastructure: number
+    totalMonthly: number
+    currency: string
+  }
+  baseline: {
+    monthlyAvg: number
+    periodStart: string | null
+    periodEnd: string | null
+    topService: string | null
+    source: string
+  }
+  projectedMonthlyEvents: { date: string; service: string; cost: number; description: string }[]
+  deltaVsBaselinePct: number
+  architecture: { component: string; reason: string }[]
+  risks: { severity: string; category: string; title: string; detail: string }[]
+  analysisAxes: string[]
+}
+
+interface SimInputs {
+  projectName: string
+  monthlyActiveUsers: number
+  interactionsPerUserPerMonth: number
+  agentsCount: number
+  avgTurnsPerInteraction: number
+  llmId: string
+  toolIds: string[]
+  avgInputTokensPerTurn: number
+  avgOutputTokensPerTurn: number
+  deployment: string
+  hasGuardrails: boolean
+  hasCaching: boolean
+}
+
+function toSnake(inputs: SimInputs) {
+  return {
+    project_name: inputs.projectName,
+    monthly_active_users: inputs.monthlyActiveUsers,
+    interactions_per_user_per_month: inputs.interactionsPerUserPerMonth,
+    agents_count: inputs.agentsCount,
+    avg_turns_per_interaction: inputs.avgTurnsPerInteraction,
+    llm_id: inputs.llmId,
+    tool_ids: inputs.toolIds,
+    avg_input_tokens_per_turn: inputs.avgInputTokensPerTurn,
+    avg_output_tokens_per_turn: inputs.avgOutputTokensPerTurn,
+    deployment: inputs.deployment,
+    has_guardrails: inputs.hasGuardrails,
+    has_caching: inputs.hasCaching,
+  }
+}
+
+function useSimReference() {
+  return useQuery<ReferenceCatalog>({
+    queryKey: ["sim-reference"],
+    queryFn: () => api.get("/api/simulation/reference").then((r) => r.data),
+    staleTime: Infinity,
+  })
+}
+
+function useSimEstimate() {
+  return useMutation<SimResult, Error, SimInputs>({
+    mutationFn: (inputs) =>
+      api.post("/api/simulation/estimate", toSnake(inputs)).then((r) => r.data),
+  })
+}
+
+function useSimPush() {
+  return useMutation<
+    { ingested: number; projectName: string; periodStart: string; periodEnd: string },
+    Error,
+    { events: SimResult["projectedMonthlyEvents"]; projectName: string }
+  >({
+    mutationFn: ({ events, projectName }) =>
+      api
+        .post("/api/simulation/push", {
+          events: events.map((e) => ({
+            date: e.date,
+            service: e.service,
+            cost: e.cost,
+            description: e.description,
+          })),
+          project_name: projectName,
+        })
+        .then((r) => r.data),
+  })
+}
+
+const SEVERITY_STYLES: Record<string, { badge: "muted" | "warning" | "destructive" | "default"; ring: string }> = {
+  info:     { badge: "muted",       ring: "border-border" },
+  low:      { badge: "muted",       ring: "border-border" },
+  medium:   { badge: "warning",     ring: "border-[color:var(--warning)]/40" },
+  high:     { badge: "destructive", ring: "border-destructive/40" },
+  critical: { badge: "destructive", ring: "border-destructive/60" },
+}
+
+function SimulationTab() {
+  const { data: catalog } = useSimReference()
+  const { mutate: estimate, data: result, isPending: estimating, error: estimateError } = useSimEstimate()
+  const { mutate: push, isPending: pushing, isSuccess: pushed, data: pushData, error: pushError, reset: resetPush } = useSimPush()
+
+  const [inputs, setInputs] = useState<SimInputs>({
+    projectName: "POC agent",
+    monthlyActiveUsers: 500,
+    interactionsPerUserPerMonth: 10,
+    agentsCount: 2,
+    avgTurnsPerInteraction: 3,
+    llmId: "claude-sonnet-4-6",
+    toolIds: ["rag_retrieval"],
+    avgInputTokensPerTurn: 2000,
+    avgOutputTokensPerTurn: 400,
+    deployment: "bedrock",
+    hasGuardrails: false,
+    hasCaching: false,
+  })
+
+  function update<K extends keyof SimInputs>(key: K, value: SimInputs[K]) {
+    setInputs((s) => ({ ...s, [key]: value }))
+    resetPush()
+  }
+
+  function toggleTool(id: string) {
+    setInputs((s) => ({
+      ...s,
+      toolIds: s.toolIds.includes(id) ? s.toolIds.filter((t) => t !== id) : [...s.toolIds, id],
+    }))
+    resetPush()
+  }
+
+  function handleEstimate() {
+    if (!catalog) return
+    estimate(inputs)
+  }
+
+  function handlePush() {
+    if (!result) return
+    push({ events: result.projectedMonthlyEvents, projectName: inputs.projectName })
+  }
+
+  return (
+    <SectionCard
+      title="Cadrage d'un projet agentique"
+      description="Réponds aux questions de scoping et compare la projection au baseline FinOps. Le résultat peut être poussé dans le modèle pour alimenter la prévision."
+      accent="coral"
+      contentClassName="space-y-5"
+    >
+      {/* --- Form: scoping questions ------------------------------------ */}
+      <div className="grid gap-4 md:grid-cols-2">
+        <div className="space-y-1.5">
+          <label className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+            Nom du projet
+          </label>
+          <input
+            type="text"
+            value={inputs.projectName}
+            onChange={(e) => update("projectName", e.target.value)}
+            className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm"
+          />
+        </div>
+
+        <div className="space-y-1.5">
+          <label className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+            Modèle LLM
+          </label>
+          <select
+            value={inputs.llmId}
+            onChange={(e) => update("llmId", e.target.value)}
+            className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm"
+          >
+            {catalog?.llms.map((l) => (
+              <option key={l.id} value={l.id}>
+                {l.label} — {l.vendor} · ${l.inputPerMillion}/${l.outputPerMillion} par 1M
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <NumberField
+          label="Utilisateurs actifs / mois"
+          value={inputs.monthlyActiveUsers}
+          onChange={(v) => update("monthlyActiveUsers", v)}
+          min={1}
+          max={10_000_000}
+          step={100}
+        />
+        <NumberField
+          label="Interactions / user / mois"
+          value={inputs.interactionsPerUserPerMonth}
+          onChange={(v) => update("interactionsPerUserPerMonth", v)}
+          min={1}
+          max={100_000}
+          step={1}
+        />
+        <NumberField
+          label="Nombre d'agents spécialisés"
+          value={inputs.agentsCount}
+          onChange={(v) => update("agentsCount", v)}
+          min={1}
+          max={100}
+          step={1}
+        />
+        <NumberField
+          label="Tours moyens / interaction"
+          value={inputs.avgTurnsPerInteraction}
+          onChange={(v) => update("avgTurnsPerInteraction", v)}
+          min={1}
+          max={50}
+          step={0.5}
+          decimals={1}
+        />
+        <NumberField
+          label="Input tokens / tour (contexte moyen)"
+          value={inputs.avgInputTokensPerTurn}
+          onChange={(v) => update("avgInputTokensPerTurn", v)}
+          min={100}
+          max={200_000}
+          step={100}
+        />
+        <NumberField
+          label="Output tokens / tour"
+          value={inputs.avgOutputTokensPerTurn}
+          onChange={(v) => update("avgOutputTokensPerTurn", v)}
+          min={10}
+          max={100_000}
+          step={50}
+        />
+
+        <div className="space-y-1.5">
+          <label className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+            Cible de déploiement
+          </label>
+          <select
+            value={inputs.deployment}
+            onChange={(e) => update("deployment", e.target.value)}
+            className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm"
+          >
+            {catalog?.deploymentTargets.map((d) => (
+              <option key={d.id} value={d.id}>{d.label}</option>
+            ))}
+          </select>
+        </div>
+
+        <div className="flex gap-4 items-end">
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={inputs.hasGuardrails}
+              onChange={(e) => update("hasGuardrails", e.target.checked)}
+              className="h-4 w-4 rounded border-border accent-[color:var(--accent-coral)]"
+            />
+            <span>Guardrails PII / prompt-injection</span>
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={inputs.hasCaching}
+              onChange={(e) => update("hasCaching", e.target.checked)}
+              className="h-4 w-4 rounded border-border accent-[color:var(--accent-coral)]"
+            />
+            <span>Prompt caching (Bedrock/OpenAI)</span>
+          </label>
+        </div>
+      </div>
+
+      {/* Tools */}
+      <div className="space-y-1.5">
+        <label className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+          Tools activés
+        </label>
+        <div className="flex flex-wrap gap-2">
+          {catalog?.tools.map((t) => {
+            const active = inputs.toolIds.includes(t.id)
+            return (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => toggleTool(t.id)}
+                className={cn(
+                  "rounded-lg border px-3 py-1.5 text-xs transition-colors",
+                  active
+                    ? "border-[color:var(--accent-coral)] bg-[color:var(--accent-coral)]/10 text-foreground"
+                    : "border-border bg-card text-muted-foreground hover:border-[color:var(--accent-coral)]/40",
+                )}
+                title={t.description}
+              >
+                <span className="font-medium">{t.label}</span>
+                <span className="ml-2 text-[10px] opacity-70">${t.unitCost}/call</span>
+              </button>
+            )
+          })}
+        </div>
+      </div>
+
+      <Button onClick={handleEstimate} disabled={estimating || !catalog}>
+        {estimating ? "Estimation…" : "Lancer l'estimation"}
+      </Button>
+      {estimateError && <ErrorBanner message="L'estimation a échoué. Vérifie que le backend est démarré." />}
+
+      {/* --- Result ----------------------------------------------------- */}
+      {result && (
+        <div className="space-y-4">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <StatCard
+              label="Coût mensuel projeté"
+              value={`$${result.cost.totalMonthly.toLocaleString("fr-FR", { maximumFractionDigits: 0 })}`}
+              hint={`sur 12 mois: $${(result.cost.totalMonthly * 12).toLocaleString("fr-FR", { maximumFractionDigits: 0 })}`}
+              accent
+            />
+            <StatCard
+              label="Baseline actuel"
+              value={
+                result.baseline.source === "ingested_data"
+                  ? `$${result.baseline.monthlyAvg.toLocaleString("fr-FR", { maximumFractionDigits: 0 })}`
+                  : "—"
+              }
+              hint={result.baseline.source === "ingested_data" ? "Moyenne mensuelle" : "Pas de données ingérées"}
+            />
+            <StatCard
+              label="Impact sur la facture"
+              value={
+                result.baseline.monthlyAvg > 0
+                  ? `${result.deltaVsBaselinePct > 0 ? "+" : ""}${result.deltaVsBaselinePct.toFixed(1)}%`
+                  : "N/A"
+              }
+              hint={result.baseline.monthlyAvg > 0 ? "vs baseline" : "—"}
+            />
+            <StatCard
+              label="Répartition"
+              value={`LLM ${((result.cost.llmInput + result.cost.llmOutput) / Math.max(result.cost.totalMonthly, 0.01) * 100).toFixed(0)}%`}
+              hint={`Tools ${(result.cost.tools / Math.max(result.cost.totalMonthly, 0.01) * 100).toFixed(0)}% · Infra ${(result.cost.infrastructure / Math.max(result.cost.totalMonthly, 0.01) * 100).toFixed(0)}%`}
+            />
+          </div>
+
+          <div className="grid gap-4 lg:grid-cols-2">
+            <div className="rounded-xl border border-border bg-card p-4 space-y-3">
+              <p className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                <Wrench className="h-3.5 w-3.5" aria-hidden />
+                Architecture cible ({result.architecture.length} composants)
+              </p>
+              <ul className="space-y-2">
+                {result.architecture.map((a, i) => (
+                  <li key={i} className="rounded-lg border border-border bg-muted/20 p-2.5">
+                    <p className="text-sm font-medium">{a.component}</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">{a.reason}</p>
+                  </li>
+                ))}
+              </ul>
+            </div>
+
+            <div className="rounded-xl border border-border bg-card p-4 space-y-3">
+              <p className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                <ShieldAlert className="h-3.5 w-3.5" aria-hidden />
+                Risques identifiés ({result.risks.length})
+              </p>
+              <ul className="space-y-2">
+                {result.risks.map((r, i) => {
+                  const style = SEVERITY_STYLES[r.severity] ?? SEVERITY_STYLES.info
+                  return (
+                    <li
+                      key={i}
+                      className={cn("rounded-lg border p-2.5", style.ring, "bg-muted/10")}
+                    >
+                      <div className="flex items-center gap-2">
+                        <Badge variant={style.badge} size="sm">{r.severity}</Badge>
+                        <span className="text-sm font-medium">{r.title}</span>
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-1">{r.detail}</p>
+                    </li>
+                  )
+                })}
+              </ul>
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-border bg-card p-4">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+              Axes d&apos;analyse à explorer
+            </p>
+            <ul className="space-y-1 text-sm">
+              {result.analysisAxes.map((a, i) => (
+                <li key={i} className="flex gap-2">
+                  <span className="text-[color:var(--accent-coral)]">•</span>
+                  <span>{a}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          {/* Push to FinOps */}
+          <div className="rounded-xl border border-[color:var(--accent-coral)]/30 bg-[color:var(--accent-coral)]/5 p-4 space-y-3">
+            <div>
+              <p className="text-sm font-semibold text-foreground">Injecter la projection dans le modèle FinOps</p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Ajoute {result.projectedMonthlyEvents.length} événements (12 mois × {new Set(result.projectedMonthlyEvents.map((e) => e.service)).size} composants) au store actuel (mode append).
+              </p>
+            </div>
+            {pushed && pushData && (
+              <SuccessBanner message={`${pushData.ingested.toLocaleString("fr-FR")} événements ingérés. Période mise à jour: ${pushData.periodStart} → ${pushData.periodEnd}.`} />
+            )}
+            {pushError && <ErrorBanner message="Push refusé. Vérifie l'API key sur /api/events." />}
+            <Button onClick={handlePush} disabled={pushing || pushed}>
+              {pushing ? "Injection…" : pushed ? "Injecté" : "Pousser vers le modèle FinOps"}
+            </Button>
+          </div>
+        </div>
+      )}
+    </SectionCard>
+  )
+}
+
+function NumberField({
+  label,
+  value,
+  onChange,
+  min,
+  max,
+  step,
+  decimals,
+}: {
+  label: string
+  value: number
+  onChange: (v: number) => void
+  min?: number
+  max?: number
+  step?: number
+  decimals?: number
+}) {
+  return (
+    <div className="space-y-1.5">
+      <label className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+        {label}
+      </label>
+      <input
+        type="number"
+        value={value}
+        min={min}
+        max={max}
+        step={step}
+        onChange={(e) => {
+          const n = decimals ? parseFloat(e.target.value) : parseInt(e.target.value, 10)
+          if (!Number.isNaN(n)) onChange(n)
+        }}
+        className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm tabular-nums font-mono"
+      />
+    </div>
+  )
+}
+
+function StatCard({
+  label,
+  value,
+  hint,
+  accent,
+}: {
+  label: string
+  value: string
+  hint: string
+  accent?: boolean
+}) {
+  return (
+    <div
+      className={cn(
+        "rounded-xl border p-3.5",
+        accent ? "border-[color:var(--accent-coral)]/40 bg-[color:var(--accent-coral)]/5" : "border-border bg-card",
+      )}
+    >
+      <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-semibold">
+        {label}
+      </p>
+      <p className="mt-0.5 font-heading text-lg font-semibold tabular-nums text-foreground">
+        {value}
+      </p>
+      <p className="text-[11px] text-muted-foreground mt-0.5">{hint}</p>
+    </div>
+  )
+}
+
+
+// ---------------------------------------------------------------------------
 // Main page
 // ---------------------------------------------------------------------------
 
@@ -1098,6 +1689,7 @@ export default function DataSourcesPage() {
       {tab === "file" && <FileTab />}
       {tab === "gcp" && <GCPTab />}
       {tab === "aws" && <AWSTab />}
+      {tab === "simulation" && <SimulationTab />}
     </PageShell>
   )
 }

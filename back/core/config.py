@@ -44,11 +44,16 @@ class Settings(BaseSettings):
     # REFUSES to start when this is empty — see the startup checks in main.py.
     api_key: str = Field(default="")
 
-    # Google OAuth2
+    # Google OAuth2. Defaults point at the Vercel deployment so a fresh boot
+    # against the real domain works out-of-the-box; override in ``back/.env``
+    # for local dev (``FRONTEND_URL=http://localhost:3000`` /
+    # ``GOOGLE_REDIRECT_URI=http://localhost:8080/api/gcp/callback``).
     google_client_id: str = Field(default="")
     google_client_secret: str = Field(default="")
-    google_redirect_uri: str = Field(default="http://localhost:8080/api/gcp/callback")
-    frontend_url: str = Field(default="http://localhost:3000")
+    google_redirect_uri: str = Field(
+        default="https://finopsgcp.vercel.app/api/gcp/callback"
+    )
+    frontend_url: str = Field(default="https://finopsgcp.vercel.app")
 
     # GCP BigQuery Billing Export (optional). When both are set, /api/gcp/billing
     # reads real cost data from the standard billing export instead of falling
