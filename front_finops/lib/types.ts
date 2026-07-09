@@ -276,6 +276,8 @@ export interface GCPProject { projectId: string; name: string; projectNumber: st
 export interface GCPBillingByService { service: string; cost: number; pct: number }
 export interface GCPBillingByMonth { month: string; cost: number }
 export interface GCPBillingResponse { projectId: string; period: { start: string; end: string }; total: number; byService: GCPBillingByService[]; byMonth: GCPBillingByMonth[]; currency: string }
+// POST /api/gcp/sync — pulls BigQuery Billing Export into the events store
+export interface GCPSyncResponse { projectId: string; ingestedRows: number; period: { start: string; end: string }; totalCost: number; currency: string; source: string; servicesSeen: number }
 export interface GCPLogEntry { timestamp: string; severity: string; resourceType: string; service: string; message: string; labels: Record<string, string> }
 export interface GCPServiceInfo { serviceId: string; name: string; enabled: boolean; category: string }
 export interface BillingEvent { date: string; service: string; cost: number; description?: string }

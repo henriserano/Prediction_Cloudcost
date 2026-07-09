@@ -20,6 +20,7 @@ import type {
   GCPBillingResponse,
   GCPLogEntry,
   GCPServiceInfo,
+  GCPSyncResponse,
   EventsIngestRequest,
   EventsIngestResponse,
   EventsUploadResponse,
@@ -210,6 +211,21 @@ export function useIngestEvents() {
   return useMutation<EventsIngestResponse, Error, EventsIngestRequest>({
     mutationFn: (body: EventsIngestRequest) =>
       api.post("/api/events", body).then((r) => r.data),
+  })
+}
+
+// Pulls the BigQuery Billing Export into the shared events store. On success,
+// the whole dashboard (KPI, daily, services, forecast, analytics, diagnostics)
+// must be invalidated so every page reflects the freshly ingested GCP data —
+// the backend already clears app_cache + data.loader cache, but TanStack Query
+// keeps its own client-side cache, hence the mandatory invalidateQueries() at
+// the call site (same pattern as useAWSSync).
+export function useGCPSync() {
+  return useMutation<GCPSyncResponse, Error, { projectId: string; months?: number }>({
+    mutationFn: ({ projectId, months = 6 }) =>
+      api
+        .post("/api/gcp/sync", null, { params: { project_id: projectId, months } })
+        .then((r) => r.data),
   })
 }
 

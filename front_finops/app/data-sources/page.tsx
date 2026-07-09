@@ -22,12 +22,17 @@ import PageShell from "@/components/layout/PageShell"
 import { SectionCard } from "@/components/ui/section-card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { useGCPStatus } from "@/lib/hooks/useApi"
+import { useGCPStatus, useGCPProjects, useGCPSync, useIngestEvents } from "@/lib/hooks/useApi"
 import { api } from "@/lib/api"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { cn } from "@/lib/utils"
 import { parseBillingFile, type ParsedResult } from "@/lib/parsers/billing-file"
-import type { BillingEvent, EventsIngestResponse, EventsUploadResponse } from "@/lib/types"
+import type {
+  BillingEvent,
+  EventsIngestResponse,
+  EventsUploadResponse,
+  GCPBillingResponse,
+} from "@/lib/types"
 import { PinPrompt } from "@/components/auth/PinPrompt"
 
 // ---------------------------------------------------------------------------
@@ -262,6 +267,7 @@ function useSubmitBatch() {
 }
 
 function FileTab() {
+  const queryClient = useQueryClient()
   const [entries, setEntries] = useState<FileEntry[]>([])
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [dragActive, setDragActive] = useState(false)
@@ -372,7 +378,18 @@ function FileTab() {
 
   function handleSubmit() {
     if (!canSubmit) return
-    ingest({ csvEvents: aggregate.csvEvents, excelFiles: aggregate.excelFiles, replace })
+    ingest(
+      { csvEvents: aggregate.csvEvents, excelFiles: aggregate.excelFiles, replace },
+      {
+        // Same idea as the AWS "Utiliser" flow: nuke every cached query so the
+        // Dashboard, Forecast, Services, Analytics, Diagnostics and Assistant
+        // all refetch against the freshly ingested events store. Passing no
+        // predicate = invalidate everything under this QueryClient.
+        onSuccess: () => {
+          void queryClient.invalidateQueries()
+        },
+      },
+    )
   }
 
   return (
@@ -636,7 +653,7 @@ function FileTab() {
       {/* Global banners */}
       {isSuccess && data && (
         <SuccessBanner
-          message={`${data.ingested.toLocaleString("fr-FR")} événement${data.ingested > 1 ? "s" : ""} importé${data.ingested > 1 ? "s" : ""} · période ${data.dateRange.start} → ${data.dateRange.end}.`}
+          message={`${data.ingested.toLocaleString("fr-FR")} événement${data.ingested > 1 ? "s" : ""} importé${data.ingested > 1 ? "s" : ""} · période ${data.dateRange.start} → ${data.dateRange.end}. Toutes les pages sont à jour.`}
         />
       )}
       {error && (
@@ -735,29 +752,198 @@ function GCPTab() {
         </p>
       </div>
 
-      <div className="grid grid-cols-3 gap-2 text-xs">
-        <div className="rounded-lg border border-border bg-card px-3 py-2.5 text-center">
-          <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Facturation</p>
-          <p className="text-foreground font-medium text-xs">Coût par service</p>
-        </div>
-        <div className="rounded-lg border border-border bg-card px-3 py-2.5 text-center">
-          <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Journaux</p>
-          <p className="text-foreground font-medium text-xs">Audit trail</p>
-        </div>
-        <div className="rounded-lg border border-border bg-card px-3 py-2.5 text-center">
-          <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Services</p>
-          <p className="text-foreground font-medium text-xs">APIs activées</p>
-        </div>
-      </div>
+      {!authenticated && (
+        <>
+          <div className="grid grid-cols-3 gap-2 text-xs">
+            <div className="rounded-lg border border-border bg-card px-3 py-2.5 text-center">
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Facturation</p>
+              <p className="text-foreground font-medium text-xs">Coût par service</p>
+            </div>
+            <div className="rounded-lg border border-border bg-card px-3 py-2.5 text-center">
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Journaux</p>
+              <p className="text-foreground font-medium text-xs">Audit trail</p>
+            </div>
+            <div className="rounded-lg border border-border bg-card px-3 py-2.5 text-center">
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Services</p>
+              <p className="text-foreground font-medium text-xs">APIs activées</p>
+            </div>
+          </div>
 
-      <Link href="/gcp-connect" className="inline-flex">
-        <Button className="gap-2">
-          {authenticated ? "Gérer la connexion GCP" : "Se connecter à Google Cloud"}
-          <ArrowUpRight className="h-3.5 w-3.5" />
-        </Button>
-      </Link>
+          <Link href="/gcp-connect" className="inline-flex">
+            <Button className="gap-2">
+              Se connecter à Google Cloud
+              <ArrowUpRight className="h-3.5 w-3.5" />
+            </Button>
+          </Link>
+        </>
+      )}
+
+      {authenticated && <GCPProjectsPanel />}
     </SectionCard>
   )
+}
+
+// Mirror of AWSAccountsPanel for GCP. Once OAuth is complete, list projects and
+// let the user pick one to feed the FinOps model. "Utiliser" runs the two-tier
+// flow (BigQuery Billing Export first, aggregated /billing → /api/events
+// fallback) then invalidates every cached query so the whole dashboard
+// refetches — same visible behaviour as the AWS "Utiliser" button.
+function GCPProjectsPanel() {
+  const queryClient = useQueryClient()
+  const { data: projects, isLoading, error } = useGCPProjects()
+  const { mutateAsync: syncGCP, isPending: syncing, reset: resetSync } = useGCPSync()
+  const { mutateAsync: ingest, isPending: ingesting, reset: resetIngest } = useIngestEvents()
+  const [activeProject, setActiveProject] = useState<string | null>(null)
+  const [feedback, setFeedback] = useState<{
+    status: "idle" | "success" | "error"
+    message: string
+    mode: "sync" | "ingest" | null
+  }>({ status: "idle", message: "", mode: null })
+
+  async function handleUseProject(projectId: string) {
+    setActiveProject(projectId)
+    setFeedback({ status: "idle", message: "", mode: null })
+    resetSync()
+    resetIngest()
+
+    try {
+      const res = await syncGCP({ projectId, months: 6 })
+      void queryClient.invalidateQueries()
+      setFeedback({
+        status: "success",
+        mode: "sync",
+        message: `${res.ingestedRows.toLocaleString("fr-FR")} lignes ingérées depuis BigQuery pour ${projectId} · ${res.servicesSeen} services · période ${res.period.start} → ${res.period.end}. Toutes les pages sont à jour.`,
+      })
+      return
+    } catch (err) {
+      const status = extractStatus(err)
+      if (status !== 500 && status !== 404) {
+        setFeedback({
+          status: "error",
+          mode: "sync",
+          message: extractMessage(err) ?? "Sync BigQuery refusé.",
+        })
+        setActiveProject(null)
+        return
+      }
+    }
+
+    // Fallback: reconstruct events from the /billing aggregate for this project.
+    try {
+      const billing = await api
+        .get<GCPBillingResponse>("/api/gcp/billing", { params: { project_id: projectId, months: 6 } })
+        .then((r) => r.data)
+      const events = billing.byMonth.flatMap((monthRow) =>
+        billing.byService.map((svc) => ({
+          date: monthRow.month + "-01",
+          service: svc.service,
+          cost: parseFloat(((monthRow.cost * svc.pct) / 100).toFixed(4)),
+          description: `Import GCP ${billing.projectId}`,
+        })),
+      )
+      if (events.length === 0) {
+        setFeedback({
+          status: "error",
+          mode: "ingest",
+          message: "Aucune donnée de facturation disponible pour ce projet.",
+        })
+        setActiveProject(null)
+        return
+      }
+      const res = await ingest({ events, replace: true })
+      void queryClient.invalidateQueries()
+      setFeedback({
+        status: "success",
+        mode: "ingest",
+        message: `${res.ingested.toLocaleString("fr-FR")} événements agrégés injectés (BigQuery Export non configuré) · période ${res.dateRange.start} → ${res.dateRange.end}. Toutes les pages sont à jour.`,
+      })
+    } catch (err) {
+      setFeedback({
+        status: "error",
+        mode: "ingest",
+        message: extractMessage(err) ?? "Import GCP refusé.",
+      })
+      setActiveProject(null)
+    }
+  }
+
+  const busy = syncing || ingesting
+
+  return (
+    <div className="space-y-4 rounded-xl border border-border bg-muted/10 p-4">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+          Vos projets Google Cloud
+        </p>
+        <Link href="/gcp-connect" className="text-[11px] text-muted-foreground hover:text-foreground transition-colors underline-offset-2 hover:underline">
+          Ouvrir GCP Connect
+        </Link>
+      </div>
+
+      {isLoading && <p className="text-xs text-muted-foreground">Chargement…</p>}
+      {error && (
+        <ErrorBanner message="Impossible de lister les projets. Vérifie que ton token OAuth n'a pas expiré." />
+      )}
+
+      {projects && projects.length === 0 && (
+        <WarnBanner message="Aucun projet accessible avec ce compte Google." />
+      )}
+
+      {projects && projects.length > 0 && (
+        <ul className="grid gap-1.5 sm:grid-cols-2">
+          {projects.map((p) => {
+            const isActive = activeProject === p.projectId && busy
+            return (
+              <li key={p.projectId}>
+                <div className="flex items-stretch rounded-lg border border-border bg-card hover:border-[color:var(--brand)]/40 overflow-hidden transition-colors">
+                  <div className="flex-1 px-3 py-2.5 min-w-0">
+                    <p className="truncate text-sm font-medium">{p.name || p.projectId}</p>
+                    <p className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">
+                      {p.projectId}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleUseProject(p.projectId)}
+                    disabled={busy}
+                    className={cn(
+                      "shrink-0 border-l border-border px-3 text-[11px] font-medium transition-colors",
+                      "hover:bg-[color:var(--brand)]/10 hover:text-[color:var(--brand)]",
+                      "disabled:pointer-events-none disabled:opacity-50",
+                    )}
+                    title="Ingérer 6 mois de facturation GCP et alimenter tout le dashboard"
+                  >
+                    {isActive ? (syncing ? "Sync…" : "Injection…") : "Utiliser"}
+                  </button>
+                </div>
+              </li>
+            )
+          })}
+        </ul>
+      )}
+
+      {feedback.status === "success" && <SuccessBanner message={feedback.message} />}
+      {feedback.status === "error" && <ErrorBanner message={feedback.message} />}
+    </div>
+  )
+}
+
+function extractStatus(err: unknown): number | null {
+  if (err && typeof err === "object" && "response" in err) {
+    const r = (err as { response?: { status?: number } }).response
+    return r?.status ?? null
+  }
+  return null
+}
+
+function extractMessage(err: unknown): string | null {
+  if (err && typeof err === "object" && "response" in err) {
+    const data = (err as { response?: { data?: { error?: { message?: string }; detail?: string } } })
+      .response?.data
+    return data?.error?.message ?? data?.detail ?? null
+  }
+  if (err instanceof Error) return err.message
+  return null
 }
 
 // ---------------------------------------------------------------------------

@@ -6,6 +6,7 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell,
 } from "recharts"
 import { CheckCircle2, XCircle, AlertTriangle, ChevronDown } from "lucide-react"
+import { useQueryClient } from "@tanstack/react-query"
 import PageShell from "@/components/layout/PageShell"
 import { SectionCard } from "@/components/ui/section-card"
 import { Button } from "@/components/ui/button"
@@ -19,6 +20,7 @@ import {
   useGCPBilling,
   useGCPLogs,
   useGCPServices,
+  useGCPSync,
   useIngestEvents,
 } from "@/lib/hooks/useApi"
 import { useSelectedGCPProject } from "@/lib/hooks/useSelectedGCPProject"
@@ -187,21 +189,94 @@ function AuthStatusCard({
 // ---------------------------------------------------------------------------
 
 function BillingSection({ projectId }: { projectId: string }) {
+  const queryClient = useQueryClient()
   const { data: billing, isLoading, error } = useGCPBilling(projectId, 6)
-  const { mutate: ingest, isPending: ingesting, isSuccess: ingestSuccess, error: ingestError } = useIngestEvents()
+  const {
+    mutateAsync: syncGCP,
+    isPending: syncing,
+    data: syncData,
+    reset: resetSync,
+  } = useGCPSync()
+  const {
+    mutateAsync: ingest,
+    isPending: ingesting,
+    reset: resetIngest,
+  } = useIngestEvents()
+  const [importState, setImportState] = useState<{
+    status: "idle" | "success" | "error"
+    message: string
+    mode: "sync" | "ingest" | null
+  }>({ status: "idle", message: "", mode: null })
 
-  function handleImport() {
+  const isBusy = syncing || ingesting
+
+  // Two-tier ingest so the flow mirrors AWS "Utiliser":
+  // 1) Try /api/gcp/sync — real per-day rows from the BigQuery Billing Export.
+  //    Requires GCP_BILLING_EXPORT_* env vars on the backend; returns 500
+  //    (CONFIGURATION_ERROR) when they're missing, 404 when the export has no
+  //    rows for the project.
+  // 2) On config/no-data errors, fall back to POST /api/events with month×service
+  //    events reconstructed from the /billing aggregate — same content the user
+  //    already sees on this page.
+  // In both success paths the entire QueryClient cache is invalidated so KPI,
+  // Daily, Services, Forecast, Analytics and Diagnostics all refetch and every
+  // page reflects the freshly connected GCP data.
+  async function handleImport() {
     if (!billing) return
-    const events = billing.byMonth.flatMap((monthRow: GCPBillingByMonth) =>
-      billing.byService.map((svc: GCPBillingByService) => ({
-        date: monthRow.month + "-01",
-        service: svc.service,
-        cost: parseFloat(((monthRow.cost * svc.pct) / 100).toFixed(4)),
-        description: `Import GCP ${billing.projectId}`,
-      }))
-    )
-    ingest({ events, replace: false })
+    resetSync()
+    resetIngest()
+    setImportState({ status: "idle", message: "", mode: null })
+
+    try {
+      const res = await syncGCP({ projectId, months: 6 })
+      void queryClient.invalidateQueries()
+      setImportState({
+        status: "success",
+        mode: "sync",
+        message: `${res.ingestedRows.toLocaleString("fr-FR")} lignes ingérées depuis BigQuery · ${res.servicesSeen} services · période ${res.period.start} → ${res.period.end}. Toutes les pages sont à jour.`,
+      })
+      return
+    } catch (err) {
+      const status = extractStatus(err)
+      // 500 (missing env) or 404 (empty export) → fall back to the aggregate ingest.
+      // Every other error is fatal.
+      if (status !== 500 && status !== 404) {
+        setImportState({
+          status: "error",
+          mode: "sync",
+          message: extractMessage(err) ?? "Sync BigQuery refusé.",
+        })
+        return
+      }
+    }
+
+    try {
+      const events = billing.byMonth.flatMap((monthRow: GCPBillingByMonth) =>
+        billing.byService.map((svc: GCPBillingByService) => ({
+          date: monthRow.month + "-01",
+          service: svc.service,
+          cost: parseFloat(((monthRow.cost * svc.pct) / 100).toFixed(4)),
+          description: `Import GCP ${billing.projectId}`,
+        }))
+      )
+      const res = await ingest({ events, replace: true })
+      void queryClient.invalidateQueries()
+      setImportState({
+        status: "success",
+        mode: "ingest",
+        message: `${res.ingested.toLocaleString("fr-FR")} événements agrégés injectés (BigQuery Export non configuré) · période ${res.dateRange.start} → ${res.dateRange.end}. Toutes les pages sont à jour.`,
+      })
+    } catch (err) {
+      setImportState({
+        status: "error",
+        mode: "ingest",
+        message: extractMessage(err) ?? "Import GCP refusé.",
+      })
+    }
   }
+
+  const importSuccess = importState.status === "success"
+  const importError = importState.status === "error"
 
   if (isLoading) {
     return (
@@ -302,18 +377,47 @@ function BillingSection({ projectId }: { projectId: string }) {
 
       {/* Import CTA */}
       <div className="border-t border-border pt-4 space-y-3">
-        {ingestSuccess && <SuccessBanner message="Données importées avec succès dans l'analyse FinOps." />}
-        {ingestError && <ErrorBanner message="Erreur lors de l'import. Veuillez réessayer." />}
+        {importSuccess && <SuccessBanner message={importState.message} />}
+        {importError && <ErrorBanner message={importState.message} />}
         <Button
           onClick={handleImport}
-          disabled={ingesting || ingestSuccess}
+          disabled={isBusy || importSuccess}
           className="w-full sm:w-auto"
         >
-          {ingesting ? "Import en cours…" : ingestSuccess ? "Importé" : "Importer dans l'analyse"}
+          {syncing
+            ? "Sync BigQuery…"
+            : ingesting
+              ? "Injection…"
+              : importSuccess
+                ? "Importé"
+                : "Utiliser ce projet comme source"}
         </Button>
+        {syncData && importSuccess && importState.mode === "sync" && (
+          <p className="text-[11px] text-muted-foreground">
+            Source&nbsp;: {syncData.source} · devise {syncData.currency}
+          </p>
+        )}
       </div>
     </SectionCard>
   )
+}
+
+function extractStatus(err: unknown): number | null {
+  if (err && typeof err === "object" && "response" in err) {
+    const r = (err as { response?: { status?: number } }).response
+    return r?.status ?? null
+  }
+  return null
+}
+
+function extractMessage(err: unknown): string | null {
+  if (err && typeof err === "object" && "response" in err) {
+    const data = (err as { response?: { data?: { error?: { message?: string }; detail?: string } } })
+      .response?.data
+    return data?.error?.message ?? data?.detail ?? null
+  }
+  if (err instanceof Error) return err.message
+  return null
 }
 
 // ---------------------------------------------------------------------------
