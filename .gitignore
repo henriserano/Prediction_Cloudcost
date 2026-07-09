@@ -101,3 +101,5 @@ Cloud Run Revision - *.csv
 
 # ── Dépendances externes explicitement exclues ─────────────────────────────────
 Time-Series-Library/
+Time-Series-Library/
+./Time-Series-Library
