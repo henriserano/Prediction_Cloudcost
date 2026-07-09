@@ -86,6 +86,6 @@ def push(body: SimulationPushRequest) -> SimulationPushResponse:
     return SimulationPushResponse(
         ingested=resp.ingested,
         project_name=body.project_name,
-        period_start=resp.dateRange.start,
-        period_end=resp.dateRange.end,
+        period_start=resp.date_range.start,
+        period_end=resp.date_range.end,
     )

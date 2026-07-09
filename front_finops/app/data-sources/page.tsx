@@ -1437,6 +1437,7 @@ const SEVERITY_STYLES: Record<string, { badge: "muted" | "warning" | "destructiv
 }
 
 function SimulationTab() {
+  const queryClient = useQueryClient()
   const { data: catalog } = useSimReference()
   const { mutate: estimate, data: result, isPending: estimating, error: estimateError } = useSimEstimate()
   const { mutate: push, isPending: pushing, isSuccess: pushed, data: pushData, error: pushError, reset: resetPush } = useSimPush()
@@ -1476,7 +1477,17 @@ function SimulationTab() {
 
   function handlePush() {
     if (!result) return
-    push({ events: result.projectedMonthlyEvents, projectName: inputs.projectName })
+    push(
+      { events: result.projectedMonthlyEvents, projectName: inputs.projectName },
+      {
+        // The pushed events land in the same in-memory store as /api/events, so
+        // invalidate everything (KPI, daily, services, forecast, analytics,
+        // diagnostics) to make the projection visible across the app.
+        onSuccess: () => {
+          void queryClient.invalidateQueries()
+        },
+      },
+    )
   }
 
   return (
@@ -1737,9 +1748,13 @@ function SimulationTab() {
               </p>
             </div>
             {pushed && pushData && (
-              <SuccessBanner message={`${pushData.ingested.toLocaleString("fr-FR")} événements ingérés. Période mise à jour: ${pushData.periodStart} → ${pushData.periodEnd}.`} />
+              <SuccessBanner message={`${pushData.ingested.toLocaleString("fr-FR")} événements ingérés. Période mise à jour: ${pushData.periodStart} → ${pushData.periodEnd}. Toutes les pages sont à jour.`} />
             )}
-            {pushError && <ErrorBanner message="Push refusé. Vérifie l'API key sur /api/events." />}
+            {pushError && (
+              <ErrorBanner
+                message={extractMessage(pushError) ?? "Push refusé par le backend."}
+              />
+            )}
             <Button onClick={handlePush} disabled={pushing || pushed}>
               {pushing ? "Injection…" : pushed ? "Injecté" : "Pousser vers le modèle FinOps"}
             </Button>
