@@ -228,7 +228,10 @@ def test_get_forecast_raises_not_enough_data_on_empty_series(monkeypatch):
 
     with pytest.raises(AppError) as exc_info:
         engine.get_forecast(30, "ETS")
-    assert exc_info.value.status_code == 422
+    # NotEnoughData now returns 400 with a machine-readable code — 422 was
+    # reserved for FastAPI's own schema-validation failures, mixing the two
+    # made it impossible for the front to dispatch on the reason.
+    assert exc_info.value.status_code == 400
     assert exc_info.value.code == "NOT_ENOUGH_DATA"
 
 
@@ -240,7 +243,8 @@ def test_descriptive_stats_raises_on_empty_series(monkeypatch):
 
     with pytest.raises(AppError) as exc_info:
         ts.get_descriptive_stats()
-    assert exc_info.value.status_code == 422
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.code == "NOT_ENOUGH_DATA"
 
 
 def test_stl_raises_on_short_series(monkeypatch):
@@ -254,18 +258,20 @@ def test_stl_raises_on_short_series(monkeypatch):
 
     with pytest.raises(AppError) as exc_info:
         ts.get_stl_decomposition()
-    assert exc_info.value.status_code == 422
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.code == "NOT_ENOUGH_DATA"
 
 
 @pytest.mark.asyncio
-async def test_stats_route_returns_422_not_500_on_empty_series(monkeypatch):
+async def test_stats_route_returns_400_not_500_on_empty_series(monkeypatch):
     import analysis.timeseries as ts
 
     monkeypatch.setattr(ts, "load_daily_costs", lambda: pd.DataFrame(columns=["ds", "y"]))
 
     async with _client() as client:
         response = await client.get("/api/stats")
-    assert response.status_code == 422
+    # 400 + NOT_ENOUGH_DATA code — see NotEnoughData docstring in core/errors.py.
+    assert response.status_code == 400
     assert response.json()["error"]["code"] == "NOT_ENOUGH_DATA"
 
 

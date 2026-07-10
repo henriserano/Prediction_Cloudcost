@@ -3,7 +3,9 @@
 // as a no-op when ANALYZE is unset so normal builds pay zero cost. Used to
 // audit heavy deps (recharts, react-markdown, @anthropic-ai/sdk) before code-
 // splitting decisions.
-const withBundleAnalyzer = require("@next/bundle-analyzer")({
+import bundleAnalyzer from "@next/bundle-analyzer"
+
+const withBundleAnalyzer = bundleAnalyzer({
   enabled: process.env.ANALYZE === "true",
 })
 
@@ -69,4 +71,4 @@ const nextConfig = {
   },
 }
 
-module.exports = withBundleAnalyzer(nextConfig)
+export default withBundleAnalyzer(nextConfig)

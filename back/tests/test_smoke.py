@@ -353,9 +353,12 @@ async def test_chat_route_reports_missing_bedrock_credentials(monkeypatch):
     for var in ("AWS_BEARER_TOKEN_BEDROCK", "AWS_ACCESS_KEY_ID", "AWS_PROFILE"):
         monkeypatch.delenv(var, raising=False)
 
-    # Reset the memoised agent so the guard runs fresh.
+    # Reset the memoised bedrock client so the credentials guard is exercised
+    # (the guard reads env vars fresh on every call, but clearing the client
+    # cache also protects against a stale boto3.Session lingering from an
+    # earlier test that had credentials set).
     import agent.graph as graph
-    graph._agent_cache.clear()
+    graph._client.cache_clear()
 
     async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.post(

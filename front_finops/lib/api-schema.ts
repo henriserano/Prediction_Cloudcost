@@ -116,7 +116,6 @@ export function parseApi<S extends z.ZodTypeAny>(
   if (process.env.NODE_ENV !== "production") {
     throw new Error(message)
   }
-  // eslint-disable-next-line no-console
   console.warn(message, { data })
   return data as z.infer<S>
 }

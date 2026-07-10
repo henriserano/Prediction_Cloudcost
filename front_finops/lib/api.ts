@@ -69,7 +69,6 @@ function transformKeys(obj: unknown, parentKey?: string): unknown {
           process.env.NODE_ENV !== "production" &&
           looksLikeDataRecord(v)
         ) {
-          // eslint-disable-next-line no-console
           console.warn(
             `[api] Response field "${k}" looks like a data-record (its keys ` +
               `contain characters not used in API field names). If keys are ` +

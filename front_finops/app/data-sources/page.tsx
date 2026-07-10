@@ -15,8 +15,6 @@ import {
   ChevronDown,
   ChevronRight,
   Sparkles,
-  Wrench,
-  ShieldAlert,
 } from "lucide-react"
 import PageShell from "@/components/layout/PageShell"
 import { SectionCard } from "@/components/ui/section-card"
