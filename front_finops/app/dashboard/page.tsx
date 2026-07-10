@@ -15,6 +15,7 @@ import { SectionCard } from "@/components/ui/section-card"
 import { EmptyState } from "@/components/ui/empty-state"
 import { QueryError } from "@/components/ui/query-error"
 import { useKPI, useDaily, useServices, useAnomalies } from "@/lib/hooks/useApi"
+import { formatCurrency } from "@/lib/utils"
 import type { DailyPoint } from "@/lib/types"
 
 /**
@@ -105,14 +106,14 @@ export default function DashboardPage() {
             <>
               <KpiCard
                 label="Dépense totale"
-                value={`${kpi.totalSpend.toLocaleString("fr-FR", { maximumFractionDigits: 0 })} €`}
+                value={formatCurrency(kpi.totalSpend)}
                 sub="Sur la période analysée"
                 icon={Wallet}
                 tone="default"
               />
               <KpiCard
                 label="Moyenne quotidienne"
-                value={`${kpi.dailyAvg.toFixed(0)} €`}
+                value={formatCurrency(kpi.dailyAvg)}
                 sub="par jour"
                 icon={TrendingUp}
                 tone="green"
@@ -120,7 +121,7 @@ export default function DashboardPage() {
               />
               <KpiCard
                 label="Prévision 30 j"
-                value={`${(kpi.forecastNext30 / 1000).toFixed(1)}k €`}
+                value={formatCurrency(kpi.forecastNext30)}
                 sub="Modèle champion · 14 j lissés"
                 icon={Activity}
                 tone="success"

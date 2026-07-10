@@ -18,7 +18,7 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
 
   if (loading) {
     return (
-      <div className="flex min-h-dvh items-center justify-center bg-background">
+      <div className="flex-1 flex min-h-dvh w-full items-center justify-center bg-background">
         <div className="text-sm text-muted-foreground">Chargement…</div>
       </div>
     )
@@ -56,8 +56,8 @@ function LoginScreen({
   }
 
   return (
-    <div className="flex min-h-dvh items-center justify-center bg-background px-4">
-      <div className="w-full max-w-md space-y-6 rounded-2xl border border-border bg-card p-8 shadow-sm">
+    <div className="flex-1 flex min-h-dvh w-full items-center justify-center bg-background px-4 py-6 sm:px-6">
+      <div className="w-full max-w-md space-y-6 rounded-2xl bg-card p-6 shadow-[var(--shadow-sia-card)] sm:p-8">
         <div className="space-y-2 text-center">
           <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br from-[color:var(--accent-green)]/25 to-[color:var(--brand)]/15 ring-1 ring-[color:var(--accent-green)]/30">
             <LogIn className="h-5 w-5 text-[color:var(--accent-green)]" />
@@ -126,8 +126,9 @@ function LoginScreen({
           <div className="flex items-start gap-2 rounded-md border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-[11px] text-amber-700 dark:text-amber-400">
             <ShieldAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />
             <span>
-              POC — un PIN 6 chiffres n&apos;est pas une authentification robuste.
-              Ne stocke pas de vraies données production.
+              POC — la connexion vaut inscription. Entre n&apos;importe quel nom
+              et un PIN à 6 chiffres, c&apos;est bon : ton compte de démo est
+              créé au premier envoi.
             </span>
           </div>
 

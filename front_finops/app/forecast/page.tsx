@@ -14,7 +14,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { QueryError } from "@/components/ui/query-error"
 import { useForecast, useForecastSummary, useModelBenchmarks } from "@/lib/hooks/useApi"
 import type { ModelBenchmark } from "@/lib/types"
-import { cn } from "@/lib/utils"
+import { cn, formatCurrency } from "@/lib/utils"
 
 const MEDAL: Record<number, string> = { 1: "🥇", 2: "🥈", 3: "🥉" }
 
@@ -223,8 +223,8 @@ export default function ForecastPage() {
           <>
             <KpiCard
               label={`Prévision · ${horizon} jours`}
-              value={`${forecastTotal.toLocaleString("fr-FR", { maximumFractionDigits: 0 })} €`}
-              sub={`~${num(summary.dailyAvgForecast, 0)} €/j en moyenne`}
+              value={formatCurrency(forecastTotal)}
+              sub={`~${formatCurrency(summary.dailyAvgForecast)}/j en moyenne`}
               icon={TrendingUp}
               tone="green"
             />
