@@ -306,8 +306,17 @@ def compute_distribution() -> DistributionResponse:
             normality_tests=[], qq_points=[],
         )
 
-    skew = float(stats.skew(y, bias=False))
-    kurt = float(stats.kurtosis(y, bias=False))  # excess kurtosis
+    # Constant / near-constant series (very common right after a simulation
+    # push where every day of a month carries the same amount) makes scipy
+    # spam RuntimeWarning: "catastrophic cancellation" and return NaN. Skew
+    # and excess kurtosis are 0 by definition on a strictly constant signal —
+    # short-circuit so we don't leak NaN downstream nor pollute the logs.
+    if float(np.std(y, ddof=1)) < 1e-12:
+        skew = 0.0
+        kurt = 0.0
+    else:
+        skew = float(stats.skew(y, bias=False))
+        kurt = float(stats.kurtosis(y, bias=False))  # excess kurtosis
 
     # Box-Cox needs strictly positive values
     boxcox_lambda: Optional[float] = None
@@ -512,6 +521,19 @@ def compute_dim_reduction(n_components: int = 5, run_tsne: bool = True) -> DimRe
     # Rows = days, columns = services. We reduce over the services axis to
     # find which services drive variance in total spend.
     X = svc[cols].to_numpy(dtype=float)
+
+    # StandardScaler happily divides by zero on constant columns (typical
+    # right after a simulation push where each service is a flat value).
+    # Detect that up-front and return an empty PCA response so downstream
+    # /api/analysis/dim-reduction stays green instead of pushing NaNs into
+    # explained_variance_ratio_ (which then sklearn divides by zero on).
+    col_variances = np.var(X, axis=0, ddof=1)
+    if not np.any(col_variances > 1e-12):
+        return DimReductionResponse(
+            n_services=len(cols), n_days=len(svc),
+            pca_components=[], total_variance_explained=0.0, tsne_2d=[],
+        )
+
     X_scaled = StandardScaler().fit_transform(X)
 
     n_components = min(n_components, X.shape[1], X.shape[0])

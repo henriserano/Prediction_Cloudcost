@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import List
 
 import numpy as np
@@ -192,6 +193,25 @@ def get_anomalies(z_threshold: float = 2.0) -> List[AnomalyPoint]:
     arr = s.values.astype(float)
     _require_min_points(len(arr), 2, "anomaly detection")
     mean_, std_ = float(np.mean(arr)), float(np.std(arr, ddof=1))
+
+    # Guard against a degenerate std (identical values across the series, which
+    # happens right after a simulation push that emits N identical monthly
+    # events for the same service). Without this the z-score computation
+    # crashes the /api/anomalies endpoint with a ZeroDivisionError. When
+    # everything is equal, nothing is anomalous by definition — return all
+    # z-scores at 0 and is_anomaly = False.
+    if std_ <= 0 or not math.isfinite(std_):
+        result = [
+            AnomalyPoint(
+                date=idx.strftime("%Y-%m-%d"),
+                cost=round(float(val), 4),
+                zscore=0.0,
+                is_anomaly=False,
+            )
+            for idx, val in s.items()
+        ]
+        app_cache.set(_cache_key, result)
+        return result
 
     result = [
         AnomalyPoint(
