@@ -15,7 +15,7 @@ import { SectionCard } from "@/components/ui/section-card"
 import { EmptyState } from "@/components/ui/empty-state"
 import { QueryError } from "@/components/ui/query-error"
 import { useKPI, useDaily, useServices, useAnomalies } from "@/lib/hooks/useApi"
-import { formatCurrency } from "@/lib/utils"
+import { formatCurrency, truncateLabel } from "@/lib/utils"
 import type { DailyPoint } from "@/lib/types"
 
 /**
@@ -334,11 +334,19 @@ export default function DashboardPage() {
           {(servicesLoading || !services) ? (
             <Skeleton className="h-[200px]" />
           ) : (
-            <ResponsiveContainer width="100%" height={200}>
+            <ResponsiveContainer width="100%" height={240}>
               <BarChart data={services.slice(0, 6)} layout="vertical" margin={{ left: 4, right: 20 }}>
                 <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="oklch(0 0 0 / 0.06)" />
                 <XAxis type="number" tick={{ fontSize: 10, fill: COLOR_MUTED }} tickLine={false} axisLine={false} unit="%" />
-                <YAxis type="category" dataKey="service" tick={{ fontSize: 10, fill: COLOR_MUTED }} tickLine={false} axisLine={false} width={90} />
+                <YAxis
+                  type="category"
+                  dataKey="service"
+                  tick={{ fontSize: 10, fill: COLOR_MUTED }}
+                  tickLine={false}
+                  axisLine={false}
+                  width={140}
+                  tickFormatter={(v: string) => truncateLabel(v, 18)}
+                />
                 <Tooltip
                   cursor={{ fill: "oklch(0 0 0 / 0.03)" }}
                   contentStyle={{

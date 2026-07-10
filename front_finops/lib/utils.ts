@@ -6,6 +6,16 @@ export function cn(...inputs: ClassValue[]) {
 }
 
 /**
+ * Truncate a long identifier (typically a cloud service name like
+ * "Amazon Elastic Container Service") to a display-friendly length.
+ * Full name is preserved in the underlying data, so tooltips still show it.
+ */
+export function truncateLabel(value: string, max = 18): string {
+  if (typeof value !== "string") return String(value)
+  return value.length > max ? value.slice(0, max - 1).trimEnd() + "…" : value
+}
+
+/**
  * Adaptive currency formatter (French locale).
  * Picks precision + compact notation based on magnitude so a small forecast
  * doesn't render as "0.1k €" and a huge one doesn't render as "1 234 567 €".

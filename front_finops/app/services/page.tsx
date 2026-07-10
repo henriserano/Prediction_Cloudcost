@@ -16,7 +16,7 @@ import { EmptyState } from "@/components/ui/empty-state"
 import { Button } from "@/components/ui/button"
 import { useServices, useGCPStatus, useGCPBilling } from "@/lib/hooks/useApi"
 import { useSelectedGCPProject } from "@/lib/hooks/useSelectedGCPProject"
-import { cn } from "@/lib/utils"
+import { cn, truncateLabel } from "@/lib/utils"
 
 // Sia chart palette — black, green, sky-deep, blush-deep, gold
 const CHART_COLORS = [
@@ -377,17 +377,20 @@ export default function ServicesPage() {
           {(isLoading || rows.length === 0) ? (
             <Skeleton className="h-[300px]" />
           ) : (
-            <ResponsiveContainer width="100%" height={300}>
-              <ComposedChart data={rows} margin={{ left: -18, right: 32, top: 8 }}>
+            <ResponsiveContainer width="100%" height={340}>
+              <ComposedChart data={rows} margin={{ left: -18, right: 32, top: 8, bottom: 8 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="oklch(0 0 0 / 0.06)" />
                 <XAxis
                   dataKey="service"
-                  tick={{ fontSize: 9, fill: COLOR_MUTED }}
+                  tick={{ fontSize: 10, fill: COLOR_MUTED }}
                   tickLine={false}
                   axisLine={false}
-                  angle={-20}
+                  angle={-35}
                   textAnchor="end"
-                  height={60}
+                  height={110}
+                  interval={0}
+                  tickMargin={8}
+                  tickFormatter={(v: string) => truncateLabel(v, 20)}
                 />
                 <YAxis yAxisId="left" tick={{ fontSize: 10, fill: COLOR_MUTED }} tickLine={false} axisLine={false} unit=" €" width={56} />
                 <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10, fill: COLOR_MUTED }} tickLine={false} axisLine={false} unit="%" domain={[0, 100]} width={38} />

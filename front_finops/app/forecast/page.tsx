@@ -5,7 +5,7 @@ import {
   ComposedChart, Line, Area, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, Legend, ReferenceLine,
 } from "recharts"
-import { Trophy, Clock, Target, TrendingUp, Award } from "lucide-react"
+import { Trophy, Clock, Target, TrendingUp, Award, Medal } from "lucide-react"
 import PageShell from "@/components/layout/PageShell"
 import { SectionCard } from "@/components/ui/section-card"
 import { KpiCard } from "@/components/ui/kpi-card"
@@ -16,8 +16,6 @@ import { useForecast, useForecastSummary, useModelBenchmarks } from "@/lib/hooks
 import type { ModelBenchmark } from "@/lib/types"
 import { cn, formatCurrency } from "@/lib/utils"
 
-const MEDAL: Record<number, string> = { 1: "🥇", 2: "🥈", 3: "🥉" }
-
 const HORIZONS: { label: string; value: number }[] = [
   { label: "30 j", value: 30 },
   { label: "60 j", value: 60 },
@@ -25,12 +23,36 @@ const HORIZONS: { label: string; value: number }[] = [
   { label: "180 j", value: 180 },
 ]
 
-const FAMILY_VARIANT: Record<string, "default" | "green" | "success" | "warning" | "muted"> = {
-  "Exp. Smoothing": "default",
-  "Theta":          "green",
-  "ARIMA":          "muted",
-  "Holt-Winters":   "success",
-  "Seasonal Naive": "warning",
+/**
+ * Rank indicator — Lucide `Medal` icon tinted gold/silver/bronze for the
+ * podium, plain "#N" for the rest. Replaces the old emoji medals that
+ * rendered inconsistently across systems.
+ */
+function RankBadge({ rank, className }: { rank: number; className?: string }) {
+  const tone =
+    rank === 1 ? "text-amber-500"
+    : rank === 2 ? "text-slate-400"
+    : rank === 3 ? "text-amber-700"
+    : null
+  if (tone) {
+    return (
+      <Medal
+        className={cn("h-4 w-4 shrink-0", tone, className)}
+        aria-label={`Rang ${rank}`}
+      />
+    )
+  }
+  return (
+    <span
+      className={cn(
+        "inline-block min-w-[18px] text-center text-[11px] font-semibold tabular-nums text-muted-foreground",
+        className,
+      )}
+      aria-label={`Rang ${rank}`}
+    >
+      #{rank}
+    </span>
+  )
 }
 
 const COLOR_GREEN = "oklch(0.68 0.15 160)"
@@ -95,28 +117,25 @@ function ModelPicker({
     <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
       {benchmarks.map((m) => {
         const active = m.model === selected
-        const variant = FAMILY_VARIANT[m.family] ?? "muted"
         return (
           <button
             key={m.model}
             onClick={() => onChange(m.model)}
             aria-pressed={active}
             className={cn(
-              "group relative flex flex-col items-start gap-1 rounded-xl border p-3 text-left",
+              "group relative flex flex-col items-start gap-1.5 rounded-xl border p-3 text-left",
               "transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--accent-green)]/50",
               active
                 ? "border-[color:var(--accent-green)] bg-[color:var(--accent-green)]/6 shadow-sm"
-                : "border-border bg-card hover:border-[color:var(--accent-green)]/40 hover:bg-muted/40"
+                : "border-border bg-card hover:border-[color:var(--accent-green)]/40 hover:bg-muted/40",
             )}
           >
             <div className="flex items-center gap-1.5 w-full">
-              <span className="text-sm leading-none" aria-hidden>
-                {MEDAL[m.rank] ?? `#${m.rank}`}
-              </span>
+              <RankBadge rank={m.rank} />
               <span
                 className={cn(
                   "text-xs font-semibold leading-none truncate flex-1",
-                  active ? "text-foreground" : "text-foreground/85"
+                  active ? "text-foreground" : "text-foreground/85",
                 )}
               >
                 {m.model}
@@ -128,7 +147,9 @@ function ModelPicker({
                 />
               )}
             </div>
-            <Badge variant={variant} size="sm">{m.family}</Badge>
+            <Badge variant="outline" size="sm" className="normal-case tracking-normal">
+              {m.family}
+            </Badge>
             <span className="text-[10px] text-muted-foreground tabular-nums font-medium">
               MAE {num(m.mae)} €
             </span>
@@ -335,7 +356,6 @@ export default function ForecastPage() {
                 <tbody className="divide-y divide-border">
                   {benchmarks.map((m) => {
                     const isSelected = m.model === selectedModel
-                    const variant = FAMILY_VARIANT[m.family] ?? "muted"
                     return (
                       <tr
                         key={m.model}
@@ -354,10 +374,10 @@ export default function ForecastPage() {
                             ? "bg-[color:var(--accent-green)]/6 font-semibold"
                             : m.winner
                             ? "bg-[color:var(--accent-gold)]/6 hover:bg-muted/60"
-                            : "hover:bg-muted/40"
+                            : "hover:bg-muted/40",
                         )}
                       >
-                        <td className="py-2.5 pr-2 pl-1">{MEDAL[m.rank] ?? m.rank}</td>
+                        <td className="py-2.5 pr-2 pl-1"><RankBadge rank={m.rank} /></td>
                         <td className="py-2.5 pr-3">
                           <div className="flex items-center gap-1.5">
                             {m.winner && (
@@ -370,7 +390,7 @@ export default function ForecastPage() {
                           </div>
                         </td>
                         <td className="py-2.5 pr-3 hidden sm:table-cell">
-                          <Badge variant={variant} size="sm">{m.family}</Badge>
+                          <Badge variant="outline" size="sm" className="normal-case tracking-normal">{m.family}</Badge>
                         </td>
                         <td className="py-2.5 text-right tabular-nums">{num(m.mae)} €</td>
                         <td className="py-2.5 text-right tabular-nums hidden sm:table-cell">{num(m.rmse)} €</td>
