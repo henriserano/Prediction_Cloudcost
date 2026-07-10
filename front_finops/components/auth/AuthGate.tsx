@@ -59,8 +59,8 @@ function LoginScreen({
     <div className="flex min-h-dvh items-center justify-center bg-background px-4">
       <div className="w-full max-w-md space-y-6 rounded-2xl border border-border bg-card p-8 shadow-sm">
         <div className="space-y-2 text-center">
-          <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br from-[color:var(--accent-coral)]/25 to-[color:var(--brand)]/15 ring-1 ring-[color:var(--accent-coral)]/30">
-            <LogIn className="h-5 w-5 text-[color:var(--accent-coral)]" />
+          <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br from-[color:var(--accent-green)]/25 to-[color:var(--brand)]/15 ring-1 ring-[color:var(--accent-green)]/30">
+            <LogIn className="h-5 w-5 text-[color:var(--accent-green)]" />
           </div>
           <h1 className="font-heading text-xl font-semibold tracking-tight">
             Assistant FinOps Sia

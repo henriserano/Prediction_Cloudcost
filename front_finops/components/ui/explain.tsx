@@ -18,14 +18,14 @@ interface ExplainProps {
 const TRIGGER_TONE: Record<Tone, string> = {
   info: "text-brand-foreground/60 hover:text-[color:var(--brand)] hover:bg-brand/10",
   success: "text-[color:var(--success)]/70 hover:text-[color:var(--success)] hover:bg-[color:var(--success)]/10",
-  warning: "text-[color:var(--accent-coral)]/70 hover:text-[color:var(--accent-coral)] hover:bg-[color:var(--accent-coral)]/10",
+  warning: "text-[color:var(--accent-green)]/70 hover:text-[color:var(--accent-green)] hover:bg-[color:var(--accent-green)]/10",
   destructive: "text-destructive/70 hover:text-destructive hover:bg-destructive/10",
 }
 
 const HEADER_TONE: Record<Tone, string> = {
   info: "text-[color:var(--brand)]",
   success: "text-[color:var(--success)]",
-  warning: "text-[color:var(--accent-coral)]",
+  warning: "text-[color:var(--accent-green)]",
   destructive: "text-destructive",
 }
 
@@ -156,7 +156,7 @@ export function Explain({
         aria-expanded={open}
         className={cn(
           "inline-flex h-4 w-4 items-center justify-center rounded-full transition-all align-middle shrink-0",
-          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--accent-coral)]/40",
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--accent-green)]/40",
           TRIGGER_TONE[tone],
           triggerClassName
         )}
@@ -212,7 +212,7 @@ export function Verdict({
   const bg: Record<Tone, string> = {
     info: "bg-brand/8 border-brand/15 text-foreground",
     success: "bg-[color:var(--success)]/10 border-[color:var(--success)]/20 text-[color:var(--success)]",
-    warning: "bg-[color:var(--accent-coral)]/8 border-[color:var(--accent-coral)]/20 text-[color:var(--accent-coral)]",
+    warning: "bg-[color:var(--accent-green)]/8 border-[color:var(--accent-green)]/20 text-[color:var(--accent-green)]",
     destructive: "bg-destructive/8 border-destructive/20 text-destructive",
   }
   return (

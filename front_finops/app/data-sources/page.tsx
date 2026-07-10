@@ -424,12 +424,12 @@ function FileTab() {
         className={cn(
           "flex flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed px-6 py-10 text-center cursor-pointer transition-all",
           dragActive
-            ? "border-[color:var(--accent-coral)] bg-[color:var(--accent-coral)]/5 scale-[1.005]"
-            : "border-border bg-muted/20 hover:border-[color:var(--accent-coral)]/50 hover:bg-muted/30"
+            ? "border-[color:var(--accent-green)] bg-[color:var(--accent-green)]/5 scale-[1.005]"
+            : "border-border bg-muted/20 hover:border-[color:var(--accent-green)]/50 hover:bg-muted/30"
         )}
       >
         <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-card border border-border shadow-sm">
-          <UploadCloud className="h-6 w-6 text-[color:var(--accent-coral)]" aria-hidden />
+          <UploadCloud className="h-6 w-6 text-[color:var(--accent-green)]" aria-hidden />
         </div>
         <div>
           <p className="text-sm font-semibold text-foreground">
@@ -641,7 +641,7 @@ function FileTab() {
             type="checkbox"
             checked={replace}
             onChange={(e) => setReplace(e.target.checked)}
-            className="h-4 w-4 rounded border-border accent-[color:var(--accent-coral)]"
+            className="h-4 w-4 rounded border-border accent-[color:var(--accent-green)]"
           />
           <span className="text-muted-foreground">
             Remplacer les données existantes{" "}
@@ -1007,14 +1007,14 @@ function AWSTab() {
     <SectionCard
       title="Connexion Amazon Web Services"
       description="Fournissez une clé IAM en lecture seule pour récupérer votre facturation AWS"
-      accent="coral"
+      accent="green"
       contentClassName="space-y-4"
     >
       <div className="rounded-xl border border-border bg-muted/20 p-4">
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <div className="flex items-center gap-3 min-w-0">
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-card border border-border">
-              <CloudIcon className="h-4 w-4 text-[color:var(--accent-coral)]" aria-hidden />
+              <CloudIcon className="h-4 w-4 text-[color:var(--accent-green)]" aria-hidden />
             </div>
             <div className="min-w-0">
               <p className="text-sm font-semibold">Amazon Web Services</p>
@@ -1049,7 +1049,7 @@ function AWSTab() {
             value={accessKeyId}
             onChange={(e) => { setAccessKeyId(e.target.value); reset() }}
             placeholder="AKIA…"
-            className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-[color:var(--accent-coral)]/40 focus:border-[color:var(--accent-coral)]/50 transition-shadow"
+            className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-[color:var(--accent-green)]/40 focus:border-[color:var(--accent-green)]/50 transition-shadow"
           />
         </div>
 
@@ -1065,7 +1065,7 @@ function AWSTab() {
               value={secretAccessKey}
               onChange={(e) => { setSecretAccessKey(e.target.value); reset() }}
               placeholder="••••••••••••••••••••••••"
-              className="w-full rounded-lg border border-border bg-card px-3 py-2 pr-20 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-[color:var(--accent-coral)]/40 focus:border-[color:var(--accent-coral)]/50 transition-shadow"
+              className="w-full rounded-lg border border-border bg-card px-3 py-2 pr-20 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-[color:var(--accent-green)]/40 focus:border-[color:var(--accent-green)]/50 transition-shadow"
             />
             <button
               type="button"
@@ -1085,7 +1085,7 @@ function AWSTab() {
             id="aws-region"
             value={region}
             onChange={(e) => setRegion(e.target.value)}
-            className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[color:var(--accent-coral)]/40 focus:border-[color:var(--accent-coral)]/50 transition-shadow"
+            className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[color:var(--accent-green)]/40 focus:border-[color:var(--accent-green)]/50 transition-shadow"
           >
             {AWS_REGIONS.map((r) => (
               <option key={r} value={r}>{r}</option>
@@ -1192,8 +1192,8 @@ function AWSAccountsPanel() {
                     className={cn(
                       "flex items-stretch rounded-lg border transition-colors overflow-hidden",
                       active
-                        ? "border-[color:var(--accent-coral)] bg-[color:var(--accent-coral)]/5"
-                        : "border-border bg-card hover:border-[color:var(--accent-coral)]/40",
+                        ? "border-[color:var(--accent-green)] bg-[color:var(--accent-green)]/5"
+                        : "border-border bg-card hover:border-[color:var(--accent-green)]/40",
                     )}
                   >
                     <button
@@ -1222,7 +1222,7 @@ function AWSAccountsPanel() {
                       disabled={syncing}
                       className={cn(
                         "shrink-0 border-l border-border px-3 text-[11px] font-medium transition-colors",
-                        "hover:bg-[color:var(--accent-coral)]/10 hover:text-[color:var(--accent-coral)]",
+                        "hover:bg-[color:var(--accent-green)]/10 hover:text-[color:var(--accent-green)]",
                         "disabled:pointer-events-none disabled:opacity-50",
                       )}
                       title="Ingérer 6 mois de Cost Explorer et alimenter tout le dashboard"
@@ -1494,7 +1494,7 @@ function SimulationTab() {
     <SectionCard
       title="Cadrage d'un projet agentique"
       description="Réponds aux questions de scoping et compare la projection au baseline FinOps. Le résultat peut être poussé dans le modèle pour alimenter la prévision."
-      accent="coral"
+      accent="green"
       contentClassName="space-y-5"
     >
       {/* --- Form: scoping questions ------------------------------------ */}
@@ -1599,7 +1599,7 @@ function SimulationTab() {
               type="checkbox"
               checked={inputs.hasGuardrails}
               onChange={(e) => update("hasGuardrails", e.target.checked)}
-              className="h-4 w-4 rounded border-border accent-[color:var(--accent-coral)]"
+              className="h-4 w-4 rounded border-border accent-[color:var(--accent-green)]"
             />
             <span>Guardrails PII / prompt-injection</span>
           </label>
@@ -1608,7 +1608,7 @@ function SimulationTab() {
               type="checkbox"
               checked={inputs.hasCaching}
               onChange={(e) => update("hasCaching", e.target.checked)}
-              className="h-4 w-4 rounded border-border accent-[color:var(--accent-coral)]"
+              className="h-4 w-4 rounded border-border accent-[color:var(--accent-green)]"
             />
             <span>Prompt caching (Bedrock/OpenAI)</span>
           </label>
@@ -1631,8 +1631,8 @@ function SimulationTab() {
                 className={cn(
                   "rounded-lg border px-3 py-1.5 text-xs transition-colors",
                   active
-                    ? "border-[color:var(--accent-coral)] bg-[color:var(--accent-coral)]/10 text-foreground"
-                    : "border-border bg-card text-muted-foreground hover:border-[color:var(--accent-coral)]/40",
+                    ? "border-[color:var(--accent-green)] bg-[color:var(--accent-green)]/10 text-foreground"
+                    : "border-border bg-card text-muted-foreground hover:border-[color:var(--accent-green)]/40",
                 )}
                 title={t.description}
               >
@@ -1732,7 +1732,7 @@ function SimulationTab() {
             <ul className="space-y-1 text-sm">
               {result.analysisAxes.map((a, i) => (
                 <li key={i} className="flex gap-2">
-                  <span className="text-[color:var(--accent-coral)]">•</span>
+                  <span className="text-[color:var(--accent-green)]">•</span>
                   <span>{a}</span>
                 </li>
               ))}
@@ -1740,7 +1740,7 @@ function SimulationTab() {
           </div>
 
           {/* Push to FinOps */}
-          <div className="rounded-xl border border-[color:var(--accent-coral)]/30 bg-[color:var(--accent-coral)]/5 p-4 space-y-3">
+          <div className="rounded-xl border border-[color:var(--accent-green)]/30 bg-[color:var(--accent-green)]/5 p-4 space-y-3">
             <div>
               <p className="text-sm font-semibold text-foreground">Injecter la projection dans le modèle FinOps</p>
               <p className="text-xs text-muted-foreground mt-0.5">
@@ -1818,7 +1818,7 @@ function StatCard({
     <div
       className={cn(
         "rounded-xl border p-3.5",
-        accent ? "border-[color:var(--accent-coral)]/40 bg-[color:var(--accent-coral)]/5" : "border-border bg-card",
+        accent ? "border-[color:var(--accent-green)]/40 bg-[color:var(--accent-green)]/5" : "border-border bg-card",
       )}
     >
       <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-semibold">
@@ -1869,7 +1869,7 @@ export default function DataSourcesPage() {
               <Icon
                 className={cn(
                   "h-3.5 w-3.5",
-                  active ? "text-[color:var(--accent-coral)]" : "text-muted-foreground"
+                  active ? "text-[color:var(--accent-green)]" : "text-muted-foreground"
                 )}
                 aria-hidden
               />

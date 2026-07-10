@@ -8,7 +8,7 @@ interface KpiCardProps {
   value: React.ReactNode
   sub?: React.ReactNode
   icon?: React.ElementType
-  tone?: "default" | "coral" | "destructive" | "success"
+  tone?: "default" | "green" | "destructive" | "success"
   delta?: { value: number; suffix?: string; direction?: "up" | "down" }
   info?: React.ReactNode
   className?: string
@@ -19,9 +19,9 @@ const TONE = {
     icon: "bg-brand/8 text-brand [color:var(--brand)]",
     accent: "from-[color:var(--brand)] to-transparent",
   },
-  coral: {
-    icon: "bg-[color:var(--accent-coral)]/12 text-[color:var(--accent-coral)]",
-    accent: "from-[color:var(--accent-coral)] to-transparent",
+  green: {
+    icon: "bg-[color:var(--accent-green)]/12 text-[color:var(--accent-green)]",
+    accent: "from-[color:var(--accent-green)] to-transparent",
   },
   destructive: {
     icon: "bg-destructive/10 text-destructive",

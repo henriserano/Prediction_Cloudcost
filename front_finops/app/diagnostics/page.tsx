@@ -65,7 +65,7 @@ export default function DiagnosticsPage() {
                 <Icon
                   className={cn(
                     "h-3.5 w-3.5",
-                    active ? "text-[color:var(--accent-coral)]" : "text-muted-foreground"
+                    active ? "text-[color:var(--accent-green)]" : "text-muted-foreground"
                   )}
                   aria-hidden
                 />

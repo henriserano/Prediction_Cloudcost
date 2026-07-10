@@ -11,7 +11,7 @@ import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
 import { EmptyState } from "@/components/ui/empty-state"
 import { useDistribution } from "@/lib/hooks/useApi"
-import { COLOR_CORAL, COLOR_MUTED, chartTooltipStyle, num, fmtP } from "./shared"
+import { COLOR_GREEN, COLOR_MUTED, chartTooltipStyle, num, fmtP } from "./shared"
 import { Explain, Verdict } from "@/components/ui/explain"
 
 const TEST_LABEL: Record<string, string> = {
@@ -60,7 +60,7 @@ export default function DistributionTab() {
           value={num(data.skewness, 3)}
           sub={Math.abs(data.skewness) < 0.5 ? "Distribution ~symétrique" : data.skewness > 0 ? "Queue à droite" : "Queue à gauche"}
           icon={ArrowLeftRight}
-          tone={Math.abs(data.skewness) < 0.5 ? "success" : "coral"}
+          tone={Math.abs(data.skewness) < 0.5 ? "success" : "green"}
           info={
             <Explain
               title="Skewness (asymétrie)"
@@ -87,7 +87,7 @@ export default function DistributionTab() {
           value={num(data.kurtosis, 3)}
           sub={Math.abs(data.kurtosis) < 1 ? "≈ normale" : data.kurtosis > 0 ? "Leptokurtique (queues épaisses)" : "Platykurtique (queues fines)"}
           icon={Gauge}
-          tone={Math.abs(data.kurtosis) < 1 ? "success" : "coral"}
+          tone={Math.abs(data.kurtosis) < 1 ? "success" : "green"}
           info={
             <Explain
               title="Excess kurtosis"
@@ -252,7 +252,7 @@ export default function DistributionTab() {
               stroke={COLOR_MUTED}
               strokeDasharray="4 2"
             />
-            <Scatter data={qqData} fill={COLOR_CORAL} />
+            <Scatter data={qqData} fill={COLOR_GREEN} />
           </ScatterChart>
         </ResponsiveContainer>
       </SectionCard>

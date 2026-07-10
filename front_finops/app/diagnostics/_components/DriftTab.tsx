@@ -13,7 +13,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { EmptyState } from "@/components/ui/empty-state"
 import { useDrift } from "@/lib/hooks/useApi"
 import {
-  COLOR_BRAND, COLOR_CORAL, COLOR_MUTED, COLOR_DEST,
+  COLOR_BRAND, COLOR_GREEN, COLOR_MUTED, COLOR_DEST,
   chartTooltipStyle, num, fmtP,
 } from "./shared"
 import { Explain, Verdict } from "@/components/ui/explain"
@@ -86,7 +86,7 @@ export default function DriftTab() {
           icon={Activity}
           tone={
             data.psi.verdict === "stable" ? "success"
-              : data.psi.verdict === "moderate" ? "coral"
+              : data.psi.verdict === "moderate" ? "green"
               : "destructive"
           }
           info={
@@ -125,7 +125,7 @@ export default function DriftTab() {
           value={data.nChangepointsDetected}
           sub={`${data.nChangepointsDetected === 0 ? "aucun" : "changepoint" + (data.nChangepointsDetected > 1 ? "s" : "")} détecté${data.nChangepointsDetected > 1 ? "s" : ""}`}
           icon={Waves}
-          tone={data.nChangepointsDetected === 0 ? "success" : "coral"}
+          tone={data.nChangepointsDetected === 0 ? "success" : "green"}
           info={
             <Explain
               title="Page-Hinkley (online change detection)"
@@ -215,7 +215,7 @@ export default function DriftTab() {
               }}
             />
             <Bar yAxisId="left" dataKey="reference" name="reference" fill={COLOR_BRAND} radius={[4, 4, 0, 0]} />
-            <Bar yAxisId="left" dataKey="current" name="current" fill={COLOR_CORAL} radius={[4, 4, 0, 0]} />
+            <Bar yAxisId="left" dataKey="current" name="current" fill={COLOR_GREEN} radius={[4, 4, 0, 0]} />
             <Line
               yAxisId="right"
               type="monotone"
@@ -233,7 +233,7 @@ export default function DriftTab() {
             Référence
           </span>
           <span className="flex items-center gap-1.5">
-            <span aria-hidden className="inline-block h-2.5 w-2.5 rounded" style={{ backgroundColor: COLOR_CORAL }} />
+            <span aria-hidden className="inline-block h-2.5 w-2.5 rounded" style={{ backgroundColor: COLOR_GREEN }} />
             Courant
           </span>
           <span className="flex items-center gap-1.5">
@@ -246,7 +246,7 @@ export default function DriftTab() {
       {/* Page-Hinkley */}
       <SectionCard
         title="Détection Page-Hinkley (online)"
-        description="Statistique PH cumulative · changepoints marqués en corail"
+        description="Statistique PH cumulative · changepoints marqués en vert"
       >
         <ResponsiveContainer width="100%" height={280}>
           <ComposedChart data={data.pageHinkley} margin={{ left: -18, right: 8, top: 8 }}>
@@ -266,7 +266,7 @@ export default function DriftTab() {
               labelFormatter={(l) => `Date · ${l}`}
             />
             {changepoints.map((d) => (
-              <ReferenceLine key={d} x={d} stroke={COLOR_CORAL} strokeDasharray="4 2" />
+              <ReferenceLine key={d} x={d} stroke={COLOR_GREEN} strokeDasharray="4 2" />
             ))}
             <Line type="monotone" dataKey="phStat" stroke={COLOR_BRAND} strokeWidth={1.5} dot={false} name="phStat" />
           </ComposedChart>
@@ -275,7 +275,7 @@ export default function DriftTab() {
           <div className="mt-3 flex flex-wrap gap-1.5">
             <span className="text-[11px] text-muted-foreground mr-1">Changepoints :</span>
             {changepoints.map((d) => (
-              <Badge key={d} variant="coral" size="sm">{d}</Badge>
+              <Badge key={d} variant="green" size="sm">{d}</Badge>
             ))}
           </div>
         )}

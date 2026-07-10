@@ -13,7 +13,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { EmptyState } from "@/components/ui/empty-state"
 import { useOutliers } from "@/lib/hooks/useApi"
 import { cn } from "@/lib/utils"
-import { CHART_COLORS, COLOR_CORAL, COLOR_MUTED, chartTooltipStyle, num } from "./shared"
+import { CHART_COLORS, COLOR_GREEN, COLOR_MUTED, chartTooltipStyle, num } from "./shared"
 import { Explain, Verdict } from "@/components/ui/explain"
 
 const METHOD_LABEL: Record<string, string> = {
@@ -134,7 +134,7 @@ export default function OutliersTab() {
             value={s.flaggedCount}
             sub={`${s.flaggedPct.toFixed(1)}% flaggé${s.flaggedCount > 1 ? "s" : ""}${s.threshold != null ? ` · seuil ${s.threshold}` : ""}`}
             icon={s.flaggedCount === 0 ? ShieldCheck : AlertTriangle}
-            tone={s.flaggedCount === 0 ? "success" : "coral"}
+            tone={s.flaggedCount === 0 ? "success" : "green"}
             info={
               <Explain
                 title={METHOD_LABEL[s.method] ?? s.method}
@@ -207,7 +207,7 @@ export default function OutliersTab() {
               Chaque méthode a ses forces et ses angles morts. Le <strong>consensus</strong> compte combien de détecteurs (sur 5) sont d&apos;accord pour flagger une date donnée.
             </p>
             <p>
-              Une date flaggée par <strong>3 méthodes ou plus</strong> est une anomalie de forte confiance (barre corail). Flaggée par 1-2 méthodes seulement (barre ambre) : à investiguer, potentiellement un faux positif d&apos;un détecteur trop sensible.
+              Une date flaggée par <strong>3 méthodes ou plus</strong> est une anomalie de forte confiance (barre vert). Flaggée par 1-2 méthodes seulement (barre ambre) : à investiguer, potentiellement un faux positif d&apos;un détecteur trop sensible.
             </p>
           </Explain>
         }
@@ -244,7 +244,7 @@ export default function OutliersTab() {
                       ? "oklch(0.90 0.010 250)"
                       : r.consensus <= 2
                         ? "oklch(0.75 0.15 78)"
-                        : COLOR_CORAL
+                        : COLOR_GREEN
                   }
                 />
               ))}
@@ -361,7 +361,7 @@ export default function OutliersTab() {
               }}
               labelFormatter={(l) => `Date · ${l}`}
             />
-            <Line type="monotone" dataKey="distance" stroke={COLOR_CORAL} strokeWidth={1.5} dot={false} name="distance" />
+            <Line type="monotone" dataKey="distance" stroke={COLOR_GREEN} strokeWidth={1.5} dot={false} name="distance" />
             <Scatter
               dataKey="distance"
               data={data.mahalanobis.filter((m) => m.isOutlier).map((m) => ({
@@ -402,7 +402,7 @@ function ThresholdSlider({
         step={step}
         value={value}
         onChange={(e) => onChange(parseFloat(e.target.value))}
-        className="w-full accent-[color:var(--accent-coral)]"
+        className="w-full accent-[color:var(--accent-green)]"
         aria-label={label}
       />
     </div>

@@ -7,7 +7,7 @@ import { SectionCard } from "@/components/ui/section-card"
 import { Skeleton } from "@/components/ui/skeleton"
 import { EmptyState } from "@/components/ui/empty-state"
 import { useScaling } from "@/lib/hooks/useApi"
-import { COLOR_BRAND, COLOR_CORAL, COLOR_TEAL, COLOR_MUTED, chartTooltipStyle, num } from "./shared"
+import { COLOR_BRAND, COLOR_GREEN, COLOR_TEAL, COLOR_MUTED, chartTooltipStyle, num } from "./shared"
 import { Explain } from "@/components/ui/explain"
 
 interface ScalerDefinition {
@@ -29,7 +29,7 @@ const SCALERS: ScalerDefinition[] = [
   {
     key: "minmax",
     label: "Min-Max Scaler",
-    color: COLOR_CORAL,
+    color: COLOR_GREEN,
     description: "Ramène toutes les valeurs dans [0, 1]",
     formula: "(x − min) / (max − min)",
   },
@@ -157,14 +157,14 @@ export default function ScalingTab() {
       </SectionCard>
 
       {/* Guidance card */}
-      <SectionCard title="Quand utiliser quel scaler ?" description="Recommandation basée sur les diagnostics des autres onglets" accent="coral">
+      <SectionCard title="Quand utiliser quel scaler ?" description="Recommandation basée sur les diagnostics des autres onglets" accent="green">
         <ul className="space-y-2 text-sm text-foreground/85">
           <li className="flex gap-2">
             <span aria-hidden className="mt-1 inline-block h-1.5 w-1.5 rounded-full shrink-0" style={{ backgroundColor: COLOR_BRAND }} />
             <span><strong>Standard</strong> · pour les modèles paramétriques qui supposent des données centrées-réduites (régression linéaire, PCA, SVM à noyau gaussien).</span>
           </li>
           <li className="flex gap-2">
-            <span aria-hidden className="mt-1 inline-block h-1.5 w-1.5 rounded-full shrink-0" style={{ backgroundColor: COLOR_CORAL }} />
+            <span aria-hidden className="mt-1 inline-block h-1.5 w-1.5 rounded-full shrink-0" style={{ backgroundColor: COLOR_GREEN }} />
             <span><strong>Min-Max</strong> · pour les algorithmes sensibles aux bornes fixes (réseaux de neurones avec activations bornées, KNN sans standardisation).</span>
           </li>
           <li className="flex gap-2">

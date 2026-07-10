@@ -18,18 +18,19 @@ import { useServices, useGCPStatus, useGCPBilling } from "@/lib/hooks/useApi"
 import { useSelectedGCPProject } from "@/lib/hooks/useSelectedGCPProject"
 import { cn } from "@/lib/utils"
 
+// Sia chart palette — black, green, sky-deep, blush-deep, gold
 const CHART_COLORS = [
-  "oklch(0.22 0.055 258)",
-  "oklch(0.66 0.185 28)",
-  "oklch(0.60 0.11 195)",
-  "oklch(0.52 0.19 295)",
+  "oklch(0.14 0 0)",
+  "oklch(0.68 0.15 160)",
+  "oklch(0.65 0.13 240)",
+  "oklch(0.72 0.14 15)",
   "oklch(0.75 0.15 78)",
   "oklch(0.62 0.14 155)",
   "oklch(0.48 0.02 250)",
-  "oklch(0.42 0.15 320)",
+  "oklch(0.60 0.11 195)",
 ]
 
-const COLOR_CORAL = "oklch(0.66 0.185 28)"
+const COLOR_GREEN = "oklch(0.68 0.15 160)"
 const COLOR_MUTED = "oklch(0.65 0.02 250)"
 
 import type { ServiceCategory } from "@/lib/types"
@@ -161,7 +162,7 @@ function SourcePicker({
         )}
       >
         <HardDrive
-          className={cn("h-3.5 w-3.5", source === "local" ? "text-[color:var(--accent-coral)]" : "text-muted-foreground")}
+          className={cn("h-3.5 w-3.5", source === "local" ? "text-[color:var(--accent-green)]" : "text-muted-foreground")}
           aria-hidden
         />
         <span>Local</span>
@@ -187,7 +188,7 @@ function SourcePicker({
         )}
       >
         <Cloud
-          className={cn("h-3.5 w-3.5", source === "gcp" ? "text-[color:var(--accent-coral)]" : "text-muted-foreground")}
+          className={cn("h-3.5 w-3.5", source === "gcp" ? "text-[color:var(--accent-green)]" : "text-muted-foreground")}
           aria-hidden
         />
         <span>Google Cloud</span>
@@ -299,7 +300,7 @@ export default function ServicesPage() {
     >
       {/* Not connected + user tries to see GCP → gentle empty state */}
       {source === "gcp" && !gcpAvailable && (
-        <SectionCard accent="coral">
+        <SectionCard accent="green">
           <EmptyState
             icon={Cloud}
             title="Aucun projet Google Cloud sélectionné"
@@ -353,7 +354,7 @@ export default function ServicesPage() {
                 value={<span className="text-base">{topRow?.service ?? "—"}</span>}
                 sub={topRow ? `${topRow.pct.toFixed(1)}% du coût total` : undefined}
                 icon={Crown}
-                tone="coral"
+                tone="green"
               />
               <KpiCard
                 label="Loi de Pareto"
@@ -407,9 +408,9 @@ export default function ServicesPage() {
                 <ReferenceLine
                   yAxisId="right"
                   y={80}
-                  stroke={COLOR_CORAL}
+                  stroke={COLOR_GREEN}
                   strokeDasharray="4 2"
-                  label={{ value: "80%", position: "right", fontSize: 10, fill: COLOR_CORAL }}
+                  label={{ value: "80%", position: "right", fontSize: 10, fill: COLOR_GREEN }}
                 />
                 <Bar yAxisId="left" dataKey="cost" radius={[6, 6, 0, 0]} name="Coût">
                   {rows.map((_, i) => (
@@ -420,9 +421,9 @@ export default function ServicesPage() {
                   yAxisId="right"
                   type="monotone"
                   dataKey="cumPct"
-                  stroke={COLOR_CORAL}
+                  stroke={COLOR_GREEN}
                   strokeWidth={2.5}
-                  dot={{ r: 3.5, fill: COLOR_CORAL, stroke: "white", strokeWidth: 2 }}
+                  dot={{ r: 3.5, fill: COLOR_GREEN, stroke: "white", strokeWidth: 2 }}
                   name="% cumulé"
                 />
               </ComposedChart>

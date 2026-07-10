@@ -12,7 +12,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { EmptyState } from "@/components/ui/empty-state"
 import { useDimReduction } from "@/lib/hooks/useApi"
 import {
-  CHART_COLORS, COLOR_BRAND, COLOR_CORAL, COLOR_MUTED, chartTooltipStyle, num,
+  CHART_COLORS, COLOR_BRAND, COLOR_GREEN, COLOR_MUTED, chartTooltipStyle, num,
 } from "./shared"
 import { Explain, Verdict } from "@/components/ui/explain"
 
@@ -65,7 +65,7 @@ export default function DimReductionTab() {
           value={`${(data.totalVarianceExplained * 100).toFixed(1)}%`}
           sub={`Cumulé sur ${data.pcaComponents.length} composantes`}
           icon={Sparkles}
-          tone={data.totalVarianceExplained > 0.8 ? "success" : "coral"}
+          tone={data.totalVarianceExplained > 0.8 ? "success" : "green"}
           info={
             <Explain
               title="Variance expliquée cumulée"
@@ -135,7 +135,7 @@ export default function DimReductionTab() {
               Chaque composante principale est une <strong>combinaison linéaire</strong> des services. Le loading = coefficient du service dans cette combinaison.
             </p>
             <p className="text-muted-foreground">
-              <strong>Loading positif</strong> (barre navy à droite) → le service augmente quand cette PC augmente. <strong>Loading négatif</strong> (barre corail à gauche) → le service diminue quand cette PC augmente. |loading| élevé = service <em>déterminant</em> pour cette PC.
+              <strong>Loading positif</strong> (barre navy à droite) → le service augmente quand cette PC augmente. <strong>Loading négatif</strong> (barre vert à gauche) → le service diminue quand cette PC augmente. |loading| élevé = service <em>déterminant</em> pour cette PC.
             </p>
             <p className="text-muted-foreground">
               Utilité : nommer les composantes (&laquo; axe compute vs stockage &raquo;, &laquo; axe LLM vs infrastructure &raquo;, etc.).
@@ -178,7 +178,7 @@ export default function DimReductionTab() {
                             style={{
                               width: `${width * 50}%`,
                               [value >= 0 ? "left" : "right"]: "50%",
-                              backgroundColor: value >= 0 ? COLOR_BRAND : COLOR_CORAL,
+                              backgroundColor: value >= 0 ? COLOR_BRAND : COLOR_GREEN,
                               transition: "width 500ms",
                             }}
                           />
@@ -263,7 +263,7 @@ export default function DimReductionTab() {
                   )
                 }}
               />
-              <Scatter data={data.tsne2d} fill={COLOR_CORAL}>
+              <Scatter data={data.tsne2d} fill={COLOR_GREEN}>
                 {data.tsne2d.map((_, i) => (
                   <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />
                 ))}

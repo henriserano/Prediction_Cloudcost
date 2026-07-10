@@ -93,24 +93,19 @@ export default function Sidebar() {
         className={cn(
           "fixed left-0 top-0 z-50 flex h-dvh w-72 flex-col",
           "bg-sidebar text-sidebar-foreground",
+          "shadow-[var(--shadow-sia-ambient)]",
           "transition-transform duration-300 ease-in-out",
           "lg:static lg:h-screen lg:w-64 lg:translate-x-0 lg:shrink-0",
-          open ? "translate-x-0" : "-translate-x-full lg:translate-x-0"
+          open ? "translate-x-0" : "-translate-x-full lg:translate-x-0",
         )}
         aria-label="Navigation principale"
       >
-        {/* Ambient corail gradient */}
-        <div
-          aria-hidden
-          className="pointer-events-none absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-[color:var(--accent-coral)]/12 to-transparent"
-        />
-
         {/* Header */}
         <div className="relative flex items-center justify-between px-5 py-5">
-          <SiaLogo />
+          <SiaLogo onLight />
           <button
             onClick={close}
-            className="lg:hidden rounded-lg p-1.5 text-sidebar-foreground/70 hover:bg-white/8 hover:text-white transition-colors"
+            className="lg:hidden rounded-lg p-1.5 text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors"
             aria-label="Fermer la navigation"
           >
             <X className="h-4 w-4" />
@@ -118,7 +113,7 @@ export default function Sidebar() {
         </div>
 
         {/* Section title */}
-        <p className="px-5 pt-2 pb-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-sidebar-foreground/40">
+        <p className="px-5 pt-2 pb-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-sidebar-foreground/70">
           Analyse
         </p>
 
@@ -130,7 +125,7 @@ export default function Sidebar() {
             ))}
           </ul>
 
-          <p className="mt-6 px-2 pt-2 pb-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-sidebar-foreground/40">
+          <p className="mt-6 px-2 pt-2 pb-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-sidebar-foreground/70">
             Configuration
           </p>
           <ul className="space-y-0.5">
@@ -140,24 +135,24 @@ export default function Sidebar() {
           </ul>
         </nav>
 
-        {/* Footer info */}
-        <div className="border-t border-sidebar-border px-4 py-3 space-y-2">
+        {/* Footer info — depth via subtle Sia-card shadow, no borders. */}
+        <div className="px-4 py-3 space-y-2">
           {user && (
-            <div className="flex items-center gap-2 rounded-lg bg-white/5 px-3 py-2 backdrop-blur-sm ring-1 ring-white/5">
-              <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-white/10">
-                <UserIcon className="h-3.5 w-3.5 text-sidebar-foreground/70" />
+            <div className="flex items-center gap-2 rounded-lg bg-white px-3 py-2 shadow-[var(--shadow-sia-card)]">
+              <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-sidebar-foreground/8">
+                <UserIcon className="h-3.5 w-3.5 text-sidebar-foreground/80" />
               </div>
               <div className="flex-1 min-w-0">
-                <p className="truncate text-xs font-semibold text-white">
+                <p className="truncate text-xs font-semibold text-sidebar-foreground">
                   {user.displayName}
                 </p>
-                <p className="text-[10px] text-sidebar-foreground/45">
+                <p className="text-[10px] text-sidebar-foreground/85">
                   {user.hasCredentials ? "Coffre actif" : "Aucun compte lié"}
                 </p>
               </div>
               <button
                 onClick={() => void logout()}
-                className="rounded-md p-1.5 text-sidebar-foreground/60 transition-colors hover:bg-white/10 hover:text-white"
+                className="rounded-md p-1.5 text-sidebar-foreground/70 transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground"
                 aria-label="Se déconnecter"
                 title="Se déconnecter"
               >
@@ -165,45 +160,48 @@ export default function Sidebar() {
               </button>
             </div>
           )}
-          <div className="rounded-lg bg-white/5 px-3 py-2.5 backdrop-blur-sm ring-1 ring-white/5">
+          <div className="rounded-lg bg-white px-3 py-2.5 shadow-[var(--shadow-sia-card)]">
             <div className="flex items-center justify-between gap-2 mb-1">
-              <p className="text-[10px] text-sidebar-foreground/50 uppercase tracking-widest font-semibold">
+              <p className="text-[10px] text-sidebar-foreground/85 uppercase tracking-widest font-semibold">
                 Source données
               </p>
               <Database
                 className={cn(
                   "h-3 w-3",
                   sourceActive
-                    ? "text-emerald-400"
-                    : "text-sidebar-foreground/40",
+                    ? "text-[color:var(--accent-green)]"
+                    : "text-sidebar-foreground/70",
                 )}
                 aria-hidden
               />
             </div>
-            <p className="text-xs text-white font-semibold truncate">{sourceLabel}</p>
-            <p className="text-[10px] text-sidebar-foreground/40 mt-0.5">
+            <p className="text-xs text-sidebar-foreground font-semibold truncate">{sourceLabel}</p>
+            <p className="text-[10px] text-sidebar-foreground/70 mt-0.5">
               {dataStatus?.periodStart && dataStatus?.periodEnd
                 ? `${dataStatus.periodStart} → ${dataStatus.periodEnd}`
                 : `${dataStatus?.rowsDaily ?? 0} points · ${dataStatus?.servicesCount ?? 0} services`}
             </p>
           </div>
-          <div className="rounded-lg bg-white/5 px-3 py-2.5 backdrop-blur-sm ring-1 ring-white/5">
+          <div className="rounded-lg bg-white px-3 py-2.5 shadow-[var(--shadow-sia-card)]">
             <div className="flex items-center justify-between gap-2 mb-1">
-              <p className="text-[10px] text-sidebar-foreground/50 uppercase tracking-widest font-semibold">
+              <p className="text-[10px] text-sidebar-foreground/85 uppercase tracking-widest font-semibold">
                 Modèle actif
               </p>
-              <Sparkles className="h-3 w-3 text-[color:var(--accent-coral)]" aria-hidden />
+              <Sparkles className="h-3 w-3 text-[color:var(--accent-green)]" aria-hidden />
             </div>
-            <p className="text-xs text-white font-semibold truncate">{bestModel}</p>
-            <p className="text-[10px] text-sidebar-foreground/40 mt-0.5">
+            <p className="text-xs text-sidebar-foreground font-semibold truncate">{bestModel}</p>
+            <p className="text-[10px] text-sidebar-foreground/70 mt-0.5">
               {dataStatus?.periodStart && dataStatus?.periodEnd
                 ? `${dataStatus.periodStart} – ${dataStatus.periodEnd}`
                 : "Jan – Juin 2026"}
             </p>
           </div>
 
-          <p className="text-[10px] text-sidebar-foreground/35 px-1">
-            Powered by <span className="text-sidebar-foreground/60 font-semibold">Sia</span>
+          <p className="text-[10px] text-sidebar-foreground/70 px-1">
+            Powered by{" "}
+            <span className="font-heading font-semibold tracking-[-0.02em] text-sidebar-foreground/80">
+              sia<span className="text-[color:var(--accent-green)]">.</span>
+            </span>
           </p>
         </div>
       </aside>
@@ -227,33 +225,29 @@ function NavLink({
         href={item.href}
         onClick={onNavigate}
         aria-current={active ? "page" : undefined}
+        title={item.hint}
         className={cn(
-          "group relative flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-all",
+          "group relative flex items-center gap-3 rounded-lg px-3 py-2 text-[13px] font-semibold leading-tight transition-all",
           active
-            ? "bg-white/8 text-white"
-            : "text-sidebar-foreground/65 hover:bg-white/5 hover:text-white"
+            ? "bg-white text-sidebar-foreground shadow-[var(--shadow-sia-card)]"
+            : "text-sidebar-foreground/90 hover:bg-sidebar-accent hover:text-sidebar-foreground",
         )}
       >
         {active && (
           <span
             aria-hidden
-            className="absolute left-0 top-1/2 -translate-y-1/2 h-5 w-0.5 rounded-r-full bg-[color:var(--accent-coral)]"
+            className="absolute left-0 top-1/2 -translate-y-1/2 h-5 w-0.5 rounded-r-full bg-[color:var(--accent-green)]"
           />
         )}
         <Icon
           className={cn(
             "h-4 w-4 shrink-0 transition-colors",
             active
-              ? "text-[color:var(--accent-coral)]"
-              : "text-sidebar-foreground/45 group-hover:text-white"
+              ? "text-[color:var(--accent-green)]"
+              : "text-sidebar-foreground/80 group-hover:text-sidebar-foreground",
           )}
         />
-        <span className="flex-1 truncate">{item.label}</span>
-        {item.hint && (
-          <span className="hidden xl:inline text-[10px] text-sidebar-foreground/30 group-hover:text-sidebar-foreground/60">
-            {item.hint}
-          </span>
-        )}
+        <span className="min-w-0 flex-1 whitespace-nowrap">{item.label}</span>
       </Link>
     </li>
   )

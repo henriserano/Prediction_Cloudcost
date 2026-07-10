@@ -596,7 +596,7 @@ export function ChatInterface() {
             <button
               type="button"
               onClick={() => setSidebarOpen(true)}
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground transition-colors focus-visible:ring-2 focus-visible:ring-[color:var(--accent-coral)]/40 md:hidden"
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground transition-colors focus-visible:ring-2 focus-visible:ring-[color:var(--accent-green)]/40 md:hidden"
               aria-label="Ouvrir la liste des conversations"
             >
               <PanelLeft className="h-4 w-4" />
@@ -606,7 +606,7 @@ export function ChatInterface() {
                 className={cn(
                   "h-1.5 w-1.5 shrink-0 rounded-full",
                   streaming
-                    ? "animate-pulse bg-[color:var(--accent-coral)]"
+                    ? "animate-pulse bg-[color:var(--accent-green)]"
                     : "bg-emerald-500",
                 )}
               />
@@ -869,7 +869,7 @@ function ConversationRow({
       className={cn(
         "group relative flex items-stretch overflow-hidden rounded-lg border transition-colors",
         active
-          ? "border-[color:var(--accent-coral)]/50 bg-[color:var(--accent-coral)]/8"
+          ? "border-[color:var(--accent-green)]/50 bg-[color:var(--accent-green)]/8"
           : "border-transparent hover:border-border hover:bg-card",
       )}
     >
@@ -981,8 +981,8 @@ function EmptyChat({
 }) {
   return (
     <div className="mx-auto flex h-full max-w-2xl flex-col items-center justify-center gap-6 py-8 text-center">
-      <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-[color:var(--accent-coral)]/20 to-[color:var(--brand)]/10 ring-1 ring-[color:var(--accent-coral)]/30">
-        <Sparkles className="h-6 w-6 text-[color:var(--accent-coral)]" />
+      <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-[color:var(--accent-green)]/20 to-[color:var(--brand)]/10 ring-1 ring-[color:var(--accent-green)]/30">
+        <Sparkles className="h-6 w-6 text-[color:var(--accent-green)]" />
       </div>
       <div className="space-y-1.5">
         <h2 className="font-heading text-lg font-semibold tracking-tight text-foreground">
@@ -1003,11 +1003,11 @@ function EmptyChat({
             onClick={() => onPick(s.prompt)}
             className={cn(
               "group rounded-lg border border-border bg-background px-3.5 py-3 text-left text-xs transition-all",
-              "hover:border-[color:var(--accent-coral)]/40 hover:bg-[color:var(--accent-coral)]/5",
+              "hover:border-[color:var(--accent-green)]/40 hover:bg-[color:var(--accent-green)]/5",
               "disabled:pointer-events-none disabled:opacity-50",
             )}
           >
-            <span className="mb-1 block text-[10px] font-semibold uppercase tracking-widest text-[color:var(--accent-coral)]">
+            <span className="mb-1 block text-[10px] font-semibold uppercase tracking-widest text-[color:var(--accent-green)]">
               {s.label}
             </span>
             <span className="text-foreground/80">{s.prompt}</span>
@@ -1226,8 +1226,8 @@ function Avatar({ role }: { role: "user" | "assistant" }) {
     )
   }
   return (
-    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-[color:var(--accent-coral)]/25 to-[color:var(--brand)]/15 ring-1 ring-[color:var(--accent-coral)]/30">
-      <Sparkles className="h-4 w-4 text-[color:var(--accent-coral)]" />
+    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-[color:var(--accent-green)]/25 to-[color:var(--brand)]/15 ring-1 ring-[color:var(--accent-green)]/30">
+      <Sparkles className="h-4 w-4 text-[color:var(--accent-green)]" />
     </div>
   )
 }

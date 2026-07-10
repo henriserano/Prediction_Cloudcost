@@ -25,15 +25,15 @@ const HORIZONS: { label: string; value: number }[] = [
   { label: "180 j", value: 180 },
 ]
 
-const FAMILY_VARIANT: Record<string, "default" | "coral" | "success" | "warning" | "muted"> = {
+const FAMILY_VARIANT: Record<string, "default" | "green" | "success" | "warning" | "muted"> = {
   "Exp. Smoothing": "default",
-  "Theta":          "coral",
+  "Theta":          "green",
   "ARIMA":          "muted",
   "Holt-Winters":   "success",
   "Seasonal Naive": "warning",
 }
 
-const COLOR_CORAL = "oklch(0.66 0.185 28)"
+const COLOR_GREEN = "oklch(0.68 0.15 160)"
 const COLOR_MUTED = "oklch(0.65 0.02 250)"
 
 // Metrics can be null when a fold failed backend-side. Never call .toFixed directly.
@@ -77,7 +77,7 @@ function ModelPicker({
   benchmarks, selected, onChange, loading,
 }: {
   benchmarks: ModelBenchmark[] | undefined
-  selected: string
+  selected: string | null
   onChange: (model: string) => void
   loading: boolean
 }) {
@@ -103,10 +103,10 @@ function ModelPicker({
             aria-pressed={active}
             className={cn(
               "group relative flex flex-col items-start gap-1 rounded-xl border p-3 text-left",
-              "transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--accent-coral)]/50",
+              "transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--accent-green)]/50",
               active
-                ? "border-[color:var(--accent-coral)] bg-[color:var(--accent-coral)]/6 shadow-sm"
-                : "border-border bg-card hover:border-[color:var(--accent-coral)]/40 hover:bg-muted/40"
+                ? "border-[color:var(--accent-green)] bg-[color:var(--accent-green)]/6 shadow-sm"
+                : "border-border bg-card hover:border-[color:var(--accent-green)]/40 hover:bg-muted/40"
             )}
           >
             <div className="flex items-center gap-1.5 w-full">
@@ -135,7 +135,7 @@ function ModelPicker({
             {active && (
               <span
                 aria-hidden
-                className="absolute top-2 right-2 h-1.5 w-1.5 rounded-full bg-[color:var(--accent-coral)]"
+                className="absolute top-2 right-2 h-1.5 w-1.5 rounded-full bg-[color:var(--accent-green)]"
               />
             )}
           </button>
@@ -150,10 +150,17 @@ function ModelPicker({
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function ForecastPage() {
-  const [selectedModel, setSelectedModel] = useState("AutoETS")
+  // `userSelectedModel` is null until the user picks one — the effective model
+  // then falls back to the champion returned by the benchmark endpoint, so the
+  // page opens on the best model without needing to hardcode a default.
+  const [userSelectedModel, setUserSelectedModel] = useState<string | null>(null)
   const [horizon, setHorizon] = useState(60)
 
   const { data: benchmarks, isLoading: benchLoading, error: benchError, refetch: refetchBench } = useModelBenchmarks()
+  const bestModel = benchmarks?.find((m) => m.winner)?.model ?? null
+  const selectedModel = userSelectedModel ?? bestModel
+  const setSelectedModel = setUserSelectedModel
+
   const { data: points, isLoading: forecastLoading, error: forecastError, refetch: refetchForecast } = useForecast(horizon, selectedModel)
   const { data: summary, isLoading: summaryLoading, error: summaryError, refetch: refetchSummary } = useForecastSummary(horizon, selectedModel)
 
@@ -219,11 +226,11 @@ export default function ForecastPage() {
               value={`${forecastTotal.toLocaleString("fr-FR", { maximumFractionDigits: 0 })} €`}
               sub={`~${num(summary.dailyAvgForecast, 0)} €/j en moyenne`}
               icon={TrendingUp}
-              tone="coral"
+              tone="green"
             />
             <KpiCard
               label="Modèle sélectionné"
-              value={selectedModel}
+              value={selectedModel ?? "…"}
               sub={activeBench ? `${activeBench.family} · rang #${activeBench.rank}` : undefined}
               icon={Award}
               tone="default"
@@ -241,8 +248,8 @@ export default function ForecastPage() {
 
       {/* Forecast chart */}
       <SectionCard
-        title={`Prévision · ${selectedModel}`}
-        description={`Historique (gris) · Prévision corail (pointillé) · IC 80% & 95% · horizon ${horizon} jours`}
+        title={`Prévision · ${selectedModel ?? "…"}`}
+        description={`Historique (gris) · Prévision vert (pointillé) · IC 80% & 95% · horizon ${horizon} jours`}
       >
         {(forecastLoading || !points) ? (
           <Skeleton className="h-[320px] lg:h-[380px]" />
@@ -251,12 +258,12 @@ export default function ForecastPage() {
             <ComposedChart data={points} margin={{ left: -18, right: 8, top: 8 }}>
               <defs>
                 <linearGradient id="ic95" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor={COLOR_CORAL} stopOpacity={0.22} />
-                  <stop offset="95%" stopColor={COLOR_CORAL} stopOpacity={0.03} />
+                  <stop offset="5%" stopColor={COLOR_GREEN} stopOpacity={0.22} />
+                  <stop offset="95%" stopColor={COLOR_GREEN} stopOpacity={0.03} />
                 </linearGradient>
                 <linearGradient id="ic80" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor={COLOR_CORAL} stopOpacity={0.38} />
-                  <stop offset="95%" stopColor={COLOR_CORAL} stopOpacity={0.10} />
+                  <stop offset="5%" stopColor={COLOR_GREEN} stopOpacity={0.38} />
+                  <stop offset="95%" stopColor={COLOR_GREEN} stopOpacity={0.10} />
                 </linearGradient>
               </defs>
               <CartesianGrid strokeDasharray="3 3" stroke="oklch(0 0 0 / 0.06)" />
@@ -270,7 +277,7 @@ export default function ForecastPage() {
               />
               <YAxis tick={{ fontSize: 10, fill: COLOR_MUTED }} tickLine={false} axisLine={false} unit=" €" width={56} />
               <Tooltip
-                cursor={{ stroke: COLOR_CORAL, strokeWidth: 1, strokeDasharray: "3 3" }}
+                cursor={{ stroke: COLOR_GREEN, strokeWidth: 1, strokeDasharray: "3 3" }}
                 contentStyle={{
                   borderRadius: 10,
                   border: "1px solid oklch(0.90 0.010 250)",
@@ -295,7 +302,7 @@ export default function ForecastPage() {
               <Area type="monotone" dataKey="high80" stroke="none" fill="url(#ic80)" name="IC 80%" isAnimationActive={false} />
               <Area type="monotone" dataKey="low80" stroke="none" fill="white" isAnimationActive={false} />
               <Line type="monotone" dataKey="actual" stroke={COLOR_MUTED} strokeWidth={1.5} dot={false} name="Réel" connectNulls={false} />
-              <Line type="monotone" dataKey="forecast" stroke={COLOR_CORAL} strokeWidth={2.5} dot={false} name="Prévision" strokeDasharray="5 3" />
+              <Line type="monotone" dataKey="forecast" stroke={COLOR_GREEN} strokeWidth={2.5} dot={false} name="Prévision" strokeDasharray="5 3" />
               <Legend iconSize={10} wrapperStyle={{ fontSize: 11, paddingTop: 4 }} />
             </ComposedChart>
           </ResponsiveContainer>
@@ -344,7 +351,7 @@ export default function ForecastPage() {
                         className={cn(
                           "cursor-pointer transition-colors duration-100 outline-none",
                           isSelected
-                            ? "bg-[color:var(--accent-coral)]/6 font-semibold"
+                            ? "bg-[color:var(--accent-green)]/6 font-semibold"
                             : m.winner
                             ? "bg-[color:var(--accent-gold)]/6 hover:bg-muted/60"
                             : "hover:bg-muted/40"
@@ -358,7 +365,7 @@ export default function ForecastPage() {
                             )}
                             <span className="truncate max-w-[110px]">{m.model}</span>
                             {isSelected && (
-                              <Badge variant="coral" size="sm" className="uppercase">Actif</Badge>
+                              <Badge variant="green" size="sm" className="uppercase">Actif</Badge>
                             )}
                           </div>
                         </td>

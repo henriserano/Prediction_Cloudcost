@@ -1,7 +1,7 @@
 "use client"
 
 import {
-  AreaChart, Area, Line, BarChart, Bar, Cell,
+  ComposedChart, Area, Line, BarChart, Bar, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from "recharts"
 import {
@@ -15,20 +15,44 @@ import { SectionCard } from "@/components/ui/section-card"
 import { EmptyState } from "@/components/ui/empty-state"
 import { QueryError } from "@/components/ui/query-error"
 import { useKPI, useDaily, useServices, useAnomalies } from "@/lib/hooks/useApi"
+import type { DailyPoint } from "@/lib/types"
 
-// Sia chart palette — navy, coral, teal, violet, gold, secondary tones
+/**
+ * Small colour-chip legend rendered in the SectionCard action slot so users
+ * can identify each series without a busy in-chart legend.
+ */
+function TrendLegend() {
+  return (
+    <div className="flex items-center gap-3 text-[11px] text-muted-foreground">
+      <span className="inline-flex items-center gap-1.5">
+        <span aria-hidden className="h-2.5 w-2.5 rounded-sm bg-[color:var(--accent-green)]/25 ring-1 ring-[color:var(--accent-green)]/40" />
+        IC 95 %
+      </span>
+      <span className="inline-flex items-center gap-1.5">
+        <span aria-hidden className="h-[2px] w-4 rounded-full bg-foreground/40" />
+        Coût brut
+      </span>
+      <span className="inline-flex items-center gap-1.5">
+        <span aria-hidden className="h-[3px] w-4 rounded-full bg-[color:var(--accent-green)]" />
+        MA 7 j
+      </span>
+    </div>
+  )
+}
+
+// Sia chart palette — black, green, sky-deep, blush-deep, gold
 const CHART_COLORS = [
-  "oklch(0.22 0.055 258)",   // navy
-  "oklch(0.66 0.185 28)",    // coral
-  "oklch(0.60 0.11 195)",    // teal
-  "oklch(0.52 0.19 295)",    // violet
+  "oklch(0.14 0 0)",         // Sia black
+  "oklch(0.68 0.15 160)",     // Sia green
+  "oklch(0.65 0.13 240)",    // sky-deep
+  "oklch(0.72 0.14 15)",     // blush-deep
   "oklch(0.75 0.15 78)",     // gold
-  "oklch(0.62 0.14 155)",    // success green
+  "oklch(0.62 0.14 155)",    // green
   "oklch(0.48 0.02 250)",    // slate
-  "oklch(0.42 0.15 320)",    // magenta
+  "oklch(0.60 0.11 195)",    // teal
 ]
 
-const COLOR_CORAL = "oklch(0.66 0.185 28)"
+const COLOR_GREEN = "oklch(0.68 0.15 160)"
 const COLOR_MUTED = "oklch(0.65 0.02 250)"
 
 export default function DashboardPage() {
@@ -91,7 +115,7 @@ export default function DashboardPage() {
                 value={`${kpi.dailyAvg.toFixed(0)} €`}
                 sub="par jour"
                 icon={TrendingUp}
-                tone="coral"
+                tone="green"
                 delta={{ value: Number(trendPct.toFixed(1)), suffix: "%" }}
               />
               <KpiCard
@@ -119,42 +143,90 @@ export default function DashboardPage() {
 
         <SectionCard
           title="Tendance quotidienne"
-          description="Coût brut, MA 7 jours, intervalle de confiance 95%"
+          description="Coût cloud journalier · 60 jours glissants"
           className="lg:col-span-2"
+          action={<TrendLegend />}
         >
           {(dailyLoading || !daily) ? (
-            <Skeleton className="h-[260px] lg:h-[300px]" />
+            <Skeleton className="h-[260px] lg:h-[320px]" />
           ) : (
-            <ResponsiveContainer width="100%" height={280}>
-              <AreaChart data={daily} margin={{ left: -18, right: 8, top: 8 }}>
+            <ResponsiveContainer width="100%" height={320}>
+              <ComposedChart data={daily} margin={{ left: -18, right: 8, top: 8, bottom: 0 }}>
                 <defs>
                   <linearGradient id="ciGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor={COLOR_CORAL} stopOpacity={0.20} />
-                    <stop offset="95%" stopColor={COLOR_CORAL} stopOpacity={0} />
+                    <stop offset="0%" stopColor={COLOR_GREEN} stopOpacity={0.22} />
+                    <stop offset="100%" stopColor={COLOR_GREEN} stopOpacity={0.06} />
                   </linearGradient>
                 </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="oklch(0 0 0 / 0.06)" />
-                <XAxis dataKey="date" tickFormatter={(v) => v.slice(5)} tick={{ fontSize: 10, fill: COLOR_MUTED }} tickLine={false} axisLine={false} interval={9} />
-                <YAxis tick={{ fontSize: 10, fill: COLOR_MUTED }} tickLine={false} axisLine={false} unit=" €" width={56} />
+                <CartesianGrid strokeDasharray="3 3" stroke="oklch(0 0 0 / 0.06)" vertical={false} />
+                <XAxis
+                  dataKey="date"
+                  tickFormatter={(v) => v.slice(5)}
+                  tick={{ fontSize: 10, fill: COLOR_MUTED }}
+                  tickLine={false}
+                  axisLine={false}
+                  interval={9}
+                  minTickGap={16}
+                />
+                <YAxis
+                  tick={{ fontSize: 10, fill: COLOR_MUTED }}
+                  tickLine={false}
+                  axisLine={false}
+                  unit=" €"
+                  width={56}
+                />
                 <Tooltip
-                  cursor={{ stroke: COLOR_CORAL, strokeWidth: 1, strokeDasharray: "3 3" }}
+                  cursor={{ stroke: COLOR_GREEN, strokeWidth: 1, strokeDasharray: "3 3" }}
                   contentStyle={{
                     borderRadius: 10,
                     border: "1px solid oklch(0.90 0.010 250)",
                     fontSize: 12,
                     boxShadow: "0 4px 12px oklch(0 0 0 / 0.06)",
+                    padding: "8px 10px",
                   }}
+                  labelStyle={{ fontWeight: 600, marginBottom: 4 }}
+                  itemStyle={{ padding: "2px 0" }}
                   formatter={(v: unknown, n: string) => {
+                    if (n === "IC 95 %") return [null, null] as unknown as [string, string]
                     const x = v as number
                     return [`${x.toFixed(2)} €`, n]
                   }}
                   labelFormatter={(l) => `Date · ${l}`}
                 />
-                <Area type="monotone" dataKey="ciHigh" stroke="none" fill="url(#ciGrad)" isAnimationActive={false} />
-                <Area type="monotone" dataKey="ciLow" stroke="none" fill="white" isAnimationActive={false} />
-                <Line type="monotone" dataKey="cost" stroke={COLOR_MUTED} strokeWidth={1.5} dot={false} name="Coût" />
-                <Line type="monotone" dataKey="ma7" stroke={COLOR_CORAL} strokeWidth={2.5} dot={false} name="MA 7 j" />
-              </AreaChart>
+                {/* Confidence interval band — proper range using tuple dataKey.
+                    Rendered first so lines paint on top. */}
+                <Area
+                  type="monotone"
+                  dataKey={(d: DailyPoint) => [d.ciLow, d.ciHigh]}
+                  fill="url(#ciGrad)"
+                  stroke="none"
+                  name="IC 95 %"
+                  activeDot={false}
+                  isAnimationActive={false}
+                />
+                {/* Raw daily cost — thin, muted, low visual weight */}
+                <Line
+                  type="monotone"
+                  dataKey="cost"
+                  stroke="oklch(0.30 0.02 250)"
+                  strokeWidth={1}
+                  strokeOpacity={0.55}
+                  dot={false}
+                  name="Coût brut"
+                  isAnimationActive={false}
+                />
+                {/* MA 7 j — Sia green highlight, the star of the chart */}
+                <Line
+                  type="monotone"
+                  dataKey="ma7"
+                  stroke={COLOR_GREEN}
+                  strokeWidth={2.5}
+                  dot={false}
+                  activeDot={{ r: 4, fill: COLOR_GREEN, stroke: "white", strokeWidth: 2 }}
+                  name="MA 7 j"
+                  isAnimationActive={false}
+                />
+              </ComposedChart>
             </ResponsiveContainer>
           )}
         </SectionCard>
@@ -162,7 +234,7 @@ export default function DashboardPage() {
         <SectionCard
           title="Répartition services"
           description="Part de la dépense totale"
-          accent="coral"
+          accent="green"
         >
           {(servicesLoading || !services) ? (
             <Skeleton className="h-[220px]" />
@@ -256,7 +328,7 @@ export default function DashboardPage() {
         <SectionCard
           title="Volatilité par service"
           description="Coefficient de variation (%) — plus élevé = plus imprévisible"
-          accent="coral"
+          accent="green"
         >
           {(servicesLoading || !services) ? (
             <Skeleton className="h-[200px]" />

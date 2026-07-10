@@ -13,7 +13,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { EmptyState } from "@/components/ui/empty-state"
 import { useEnsembleForecast } from "@/lib/hooks/useApi"
 import {
-  CHART_COLORS, COLOR_BRAND, COLOR_CORAL, COLOR_MUTED, chartTooltipStyle, num,
+  CHART_COLORS, COLOR_BRAND, COLOR_GREEN, COLOR_MUTED, chartTooltipStyle, num,
 } from "./shared"
 import { cn } from "@/lib/utils"
 import { Explain } from "@/components/ui/explain"
@@ -60,7 +60,7 @@ export default function EnsembleTab() {
           value={`${totalForecast.toLocaleString("fr-FR", { maximumFractionDigits: 0 })} €`}
           sub={`Moyenne pondérée · ${data.points.length} points`}
           icon={Target}
-          tone="coral"
+          tone="green"
           info={
             <Explain title="Prévision stacking" tone="warning">
               <p>
@@ -87,7 +87,7 @@ export default function EnsembleTab() {
                 <strong>Stacking</strong> = <em>stacked generalization</em> · combinaison pondérée où les poids sont appris. Ici, poids ∝ 1/MAE (méthode simple). Version avancée : entraîner un &laquo; meta-model &raquo; sur les prédictions out-of-fold.
               </p>
               <p className="text-muted-foreground">
-                Dans le graphique ci-dessous, la ligne <strong>navy pointillée</strong> est le bagging, la ligne <strong>corail pleine</strong> est le stacking. Comparez les deux pour voir si la pondération apporte quelque chose.
+                Dans le graphique ci-dessous, la ligne <strong>noire pointillée</strong> est le bagging, la ligne <strong>vert pleine</strong> est le stacking. Comparez les deux pour voir si la pondération apporte quelque chose.
               </p>
             </Explain>
           }
@@ -139,8 +139,8 @@ export default function EnsembleTab() {
           <ComposedChart data={data.points} margin={{ left: -18, right: 8, top: 8 }}>
             <defs>
               <linearGradient id="ensBand" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor={COLOR_CORAL} stopOpacity={0.25} />
-                <stop offset="95%" stopColor={COLOR_CORAL} stopOpacity={0.05} />
+                <stop offset="5%" stopColor={COLOR_GREEN} stopOpacity={0.25} />
+                <stop offset="95%" stopColor={COLOR_GREEN} stopOpacity={0.05} />
               </linearGradient>
             </defs>
             <CartesianGrid strokeDasharray="3 3" stroke="oklch(0 0 0 / 0.06)" />
@@ -172,7 +172,7 @@ export default function EnsembleTab() {
             <Area type="monotone" dataKey="lo80" stroke="none" fill="white" isAnimationActive={false} />
             <Line type="monotone" dataKey="actual" stroke={COLOR_MUTED} strokeWidth={1.5} dot={false} name="actual" connectNulls={false} />
             <Line type="monotone" dataKey="meanEnsemble" stroke={COLOR_BRAND} strokeWidth={1.5} dot={false} name="meanEnsemble" strokeDasharray="6 3" />
-            <Line type="monotone" dataKey="weightedEnsemble" stroke={COLOR_CORAL} strokeWidth={2.5} dot={false} name="weightedEnsemble" />
+            <Line type="monotone" dataKey="weightedEnsemble" stroke={COLOR_GREEN} strokeWidth={2.5} dot={false} name="weightedEnsemble" />
           </ComposedChart>
         </ResponsiveContainer>
         <div className="flex items-center gap-4 mt-2 flex-wrap text-[11px]">
@@ -185,11 +185,11 @@ export default function EnsembleTab() {
             Bagging (moyenne)
           </span>
           <span className="flex items-center gap-1.5">
-            <span aria-hidden className="inline-block h-0.5 w-4" style={{ backgroundColor: COLOR_CORAL }} />
+            <span aria-hidden className="inline-block h-0.5 w-4" style={{ backgroundColor: COLOR_GREEN }} />
             Stacking (pondéré)
           </span>
           <span className="flex items-center gap-1.5">
-            <span aria-hidden className="inline-block h-2 w-4 rounded-sm" style={{ background: `${COLOR_CORAL}22` }} />
+            <span aria-hidden className="inline-block h-2 w-4 rounded-sm" style={{ background: `${COLOR_GREEN}22` }} />
             IC 80% cross-model
           </span>
         </div>
@@ -248,7 +248,7 @@ export default function EnsembleTab() {
             <p>
               <strong>Erreur totale = Bias² + Variance + Bruit irréductible</strong>
             </p>
-            <ul className="space-y-1.5 pl-3 list-disc marker:text-[color:var(--accent-coral)]">
+            <ul className="space-y-1.5 pl-3 list-disc marker:text-[color:var(--accent-green)]">
               <li><strong>Bias²</strong> · erreur systématique due à un modèle trop simple qui ne capture pas la vraie relation. Un bias élevé = <em>sous-apprentissage</em>.</li>
               <li><strong>Variance</strong> · sensibilité aux fluctuations des données d&apos;entraînement. Une variance élevée = <em>sur-apprentissage</em>.</li>
               <li><strong>Bruit irréductible</strong> · limite théorique liée à l&apos;imprédictibilité intrinsèque du phénomène.</li>
@@ -277,7 +277,7 @@ export default function EnsembleTab() {
                 .map((r, idx) => {
                   const ratio = r.variance > 0 ? r.biasSquared / r.variance : Infinity
                   const profile =
-                    ratio > 5 ? { label: "Under-fit", variant: "coral" as const }
+                    ratio > 5 ? { label: "Under-fit", variant: "green" as const }
                     : ratio < 0.2 ? { label: "Over-fit", variant: "destructive" as const }
                     : { label: "Équilibré", variant: "success" as const }
                   const weight = data.weights[r.model] ?? 0

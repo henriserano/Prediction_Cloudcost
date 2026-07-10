@@ -11,7 +11,7 @@ import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
 import { EmptyState } from "@/components/ui/empty-state"
 import { useMissing } from "@/lib/hooks/useApi"
-import { COLOR_CORAL, COLOR_MUTED, COLOR_SUCCESS, chartTooltipStyle } from "./shared"
+import { COLOR_GREEN, COLOR_MUTED, COLOR_SUCCESS, chartTooltipStyle } from "./shared"
 import { Explain, Verdict } from "@/components/ui/explain"
 
 const MECHANISM_INFO: Record<string, { badge: "success" | "warning" | "destructive"; explanation: string }> = {
@@ -78,14 +78,14 @@ export default function MissingTab() {
           value={data.actualDays}
           sub={`${missingPctGlobal.toFixed(1)}% manquant · ${data.missingDays} jour${data.missingDays > 1 ? "s" : ""}`}
           icon={Puzzle}
-          tone={data.missingDays === 0 ? "success" : "coral"}
+          tone={data.missingDays === 0 ? "success" : "green"}
         />
         <KpiCard
           label="Mécanisme heuristique"
           value={<span className="text-base">{data.mechanismHint}</span>}
           sub="Basé sur la corrélation missing ↔ niveau"
           icon={HelpCircle}
-          tone={info.badge === "success" ? "success" : info.badge === "warning" ? "coral" : "destructive"}
+          tone={info.badge === "success" ? "success" : info.badge === "warning" ? "green" : "destructive"}
           info={
             <Explain
               title="MCAR / MAR / MNAR"
@@ -95,7 +95,7 @@ export default function MissingTab() {
               <p>
                 Trois mécanismes classiques (Rubin 1976) qui déterminent la stratégie d&apos;imputation :
               </p>
-              <ul className="space-y-1.5 pl-3 list-disc marker:text-[color:var(--accent-coral)]">
+              <ul className="space-y-1.5 pl-3 list-disc marker:text-[color:var(--accent-green)]">
                 <li><strong>MCAR</strong> · Missing Completely At Random : le manque est indépendant de tout. Simple à traiter, retrait des lignes acceptable.</li>
                 <li><strong>MAR</strong> · Missing At Random : le manque dépend d&apos;autres variables observées (ex : un service ne facture pas les weekends). Imputation conditionnelle (KNN, MICE).</li>
                 <li><strong>MNAR</strong> · Missing Not At Random : le manque dépend de la valeur manquante elle-même (ex : les gros coûts sont masqués). Cas critique — modélisation explicite requise.</li>
@@ -112,7 +112,7 @@ export default function MissingTab() {
       <SectionCard
         title="Mécanisme des données manquantes"
         description="Diagnostic heuristique (MCAR / MAR / MNAR) et recommandations"
-        accent={info.badge === "destructive" ? "coral" : "brand"}
+        accent={info.badge === "destructive" ? "green" : "brand"}
         action={<Badge variant={info.badge}>{data.mechanismHint}</Badge>}
       >
         <p className="text-sm text-foreground/85 leading-relaxed">{info.explanation}</p>
@@ -170,7 +170,7 @@ export default function MissingTab() {
                     fill={
                       r.pct < 10 ? COLOR_SUCCESS
                         : r.pct < 40 ? "oklch(0.75 0.15 78)"
-                        : r.pct < 80 ? COLOR_CORAL
+                        : r.pct < 80 ? COLOR_GREEN
                         : "oklch(0.60 0.22 25)"
                     }
                   />
@@ -182,7 +182,7 @@ export default function MissingTab() {
         <div className="flex flex-wrap items-center gap-4 mt-3 text-[11px]">
           <span className="flex items-center gap-1.5"><span className="inline-block h-2.5 w-2.5 rounded" style={{ backgroundColor: COLOR_SUCCESS }} /> {"< 10% (OK)"}</span>
           <span className="flex items-center gap-1.5"><span className="inline-block h-2.5 w-2.5 rounded" style={{ backgroundColor: "oklch(0.75 0.15 78)" }} /> {"10-40% (à surveiller)"}</span>
-          <span className="flex items-center gap-1.5"><span className="inline-block h-2.5 w-2.5 rounded" style={{ backgroundColor: COLOR_CORAL }} /> {"40-80% (critique)"}</span>
+          <span className="flex items-center gap-1.5"><span className="inline-block h-2.5 w-2.5 rounded" style={{ backgroundColor: COLOR_GREEN }} /> {"40-80% (critique)"}</span>
           <span className="flex items-center gap-1.5"><span className="inline-block h-2.5 w-2.5 rounded" style={{ backgroundColor: "oklch(0.60 0.22 25)" }} /> {"> 80% (quasi vide)"}</span>
         </div>
       </SectionCard>
@@ -200,10 +200,10 @@ export default function MissingTab() {
                 className="flex items-center justify-between rounded-lg border border-border bg-muted/20 px-3 py-2 text-xs"
               >
                 <div className="flex items-center gap-2">
-                  <span aria-hidden className="h-2 w-2 rounded-full bg-[color:var(--accent-coral)]" />
+                  <span aria-hidden className="h-2 w-2 rounded-full bg-[color:var(--accent-green)]" />
                   <span className="font-medium tabular-nums">{g.start} → {g.end}</span>
                 </div>
-                <Badge variant="coral" size="sm">{g.days} jour{g.days > 1 ? "s" : ""}</Badge>
+                <Badge variant="green" size="sm">{g.days} jour{g.days > 1 ? "s" : ""}</Badge>
               </li>
             ))}
           </ul>

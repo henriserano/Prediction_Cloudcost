@@ -30,15 +30,16 @@ import type { GCPBillingByMonth, GCPBillingByService, GCPLogEntry, GCPServiceInf
 // Chart palette — aligned with Sia design system
 // ---------------------------------------------------------------------------
 
+// Sia chart palette — black, green, sky-deep, blush-deep, gold
 const CHART_COLORS = [
-  "oklch(0.22 0.055 258)",
-  "oklch(0.66 0.185 28)",
-  "oklch(0.60 0.11 195)",
-  "oklch(0.52 0.19 295)",
+  "oklch(0.14 0 0)",
+  "oklch(0.68 0.15 160)",
+  "oklch(0.65 0.13 240)",
+  "oklch(0.72 0.14 15)",
   "oklch(0.75 0.15 78)",
   "oklch(0.62 0.14 155)",
   "oklch(0.48 0.02 250)",
-  "oklch(0.42 0.15 320)",
+  "oklch(0.60 0.11 195)",
 ]
 
 const COLOR_MUTED = "oklch(0.65 0.02 250)"
@@ -167,7 +168,7 @@ function AuthStatusCard({
               id="project-select"
               value={selectedProject}
               onChange={(e) => onSelectProject(e.target.value)}
-              className="w-full appearance-none rounded-lg border border-border bg-card px-3 py-2.5 pr-9 text-sm focus:outline-none focus:ring-2 focus:ring-[color:var(--accent-coral)]/40 focus:border-[color:var(--accent-coral)]/50 transition-shadow"
+              className="w-full appearance-none rounded-lg border border-border bg-card px-3 py-2.5 pr-9 text-sm focus:outline-none focus:ring-2 focus:ring-[color:var(--accent-green)]/40 focus:border-[color:var(--accent-green)]/50 transition-shadow"
             >
               <option value="">— Choisir un projet —</option>
               {projects?.map((p) => (
@@ -530,7 +531,7 @@ function ServicesSection({ projectId }: { projectId: string }) {
       description="APIs et services activés sur ce projet"
       action={
         !isLoading && services ? (
-          <Badge variant="coral">
+          <Badge variant="green">
             {enabledCount} activé{enabledCount > 1 ? "s" : ""}
           </Badge>
         ) : null
@@ -560,7 +561,7 @@ function ServicesSection({ projectId }: { projectId: string }) {
                     className={cn(
                       "flex items-center justify-between rounded-lg border px-3 py-2 text-xs gap-2 transition-colors",
                       svc.enabled
-                        ? "border-border bg-card hover:border-[color:var(--accent-coral)]/30"
+                        ? "border-border bg-card hover:border-[color:var(--accent-green)]/30"
                         : "border-border/40 bg-muted/10 opacity-60"
                     )}
                   >

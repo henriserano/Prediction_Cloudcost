@@ -12,8 +12,8 @@ import { Badge } from "@/components/ui/badge"
 import { QueryError } from "@/components/ui/query-error"
 import { useSTL, useSTLStrengths, useAnomalies, useStats, useStationarity } from "@/lib/hooks/useApi"
 
-const COLOR_BRAND = "oklch(0.22 0.055 258)"
-const COLOR_CORAL = "oklch(0.66 0.185 28)"
+const COLOR_BRAND = "oklch(0.14 0 0)"
+const COLOR_GREEN = "oklch(0.68 0.15 160)"
 const COLOR_TEAL  = "oklch(0.60 0.11 195)"
 const COLOR_DEST  = "oklch(0.60 0.22 25)"
 const COLOR_MUTED = "oklch(0.65 0.02 250)"
@@ -135,7 +135,7 @@ export default function AnalyticsPage() {
               {[
                 { key: "trend",    label: "Tendance",                        color: COLOR_BRAND },
                 { key: "seasonal", label: "Saisonnalité (cycle hebdo)",      color: COLOR_TEAL },
-                { key: "residual", label: "Résidus",                         color: COLOR_CORAL },
+                { key: "residual", label: "Résidus",                         color: COLOR_GREEN },
               ].map(({ key, label, color }) => (
                 <div key={key}>
                   <p className="text-[11px] text-muted-foreground mb-1 font-semibold uppercase tracking-wider">{label}</p>
@@ -171,7 +171,7 @@ export default function AnalyticsPage() {
         title="Détection d'anomalies · bandes ±2σ"
         description={
           stats && !statsLoading
-            ? `Seuil supérieur ${(mean + sigma2).toFixed(0)} € · points corail = z-score > 2`
+            ? `Seuil supérieur ${(mean + sigma2).toFixed(0)} € · points vert = z-score > 2`
             : "Chargement…"
         }
       >
@@ -211,8 +211,8 @@ export default function AnalyticsPage() {
                   if (!payload.isAnomaly) return <g key={payload.date} />
                   return (
                     <g key={payload.date}>
-                      <circle cx={cx} cy={cy} r={7} fill={COLOR_CORAL} fillOpacity={0.18} />
-                      <circle cx={cx} cy={cy} r={4} fill={COLOR_CORAL} stroke="white" strokeWidth={1.5} />
+                      <circle cx={cx} cy={cy} r={7} fill={COLOR_GREEN} fillOpacity={0.18} />
+                      <circle cx={cx} cy={cy} r={4} fill={COLOR_GREEN} stroke="white" strokeWidth={1.5} />
                     </g>
                   )
                 }}

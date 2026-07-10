@@ -103,3 +103,5 @@ Cloud Run Revision - *.csv
 Time-Series-Library/
 Time-Series-Library/
 ./Time-Series-Library
+./skills
+skills/

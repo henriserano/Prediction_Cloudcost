@@ -9,8 +9,8 @@ const badgeVariants = cva(
       variant: {
         default:
           "border-brand/20 bg-brand/8 text-brand-foreground/90 [color:var(--brand)]",
-        coral:
-          "border-[color:var(--accent-coral)]/20 bg-[color:var(--accent-coral)]/10 text-[color:var(--accent-coral)]",
+        green:
+          "border-[color:var(--accent-green)]/20 bg-[color:var(--accent-green)]/10 text-[color:var(--accent-green)]",
         outline: "border-border bg-transparent text-muted-foreground",
         muted: "border-transparent bg-muted text-muted-foreground",
         success:

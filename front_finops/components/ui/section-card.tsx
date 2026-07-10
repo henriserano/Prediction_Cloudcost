@@ -14,7 +14,7 @@ interface SectionCardProps {
   action?: React.ReactNode
   info?: React.ReactNode
   children: React.ReactNode
-  accent?: "brand" | "coral" | "none"
+  accent?: "brand" | "green" | "none"
   className?: string
   contentClassName?: string
 }
@@ -37,8 +37,8 @@ export function SectionCard({
           className={cn(
             "absolute inset-x-0 top-0 h-0.5",
             accent === "brand"
-              ? "bg-gradient-to-r from-[color:var(--brand)] via-[color:var(--accent-coral)]/70 to-transparent"
-              : "bg-gradient-to-r from-[color:var(--accent-coral)] via-[color:var(--accent-gold)]/70 to-transparent"
+              ? "bg-gradient-to-r from-[color:var(--brand)] via-[color:var(--accent-green)]/70 to-transparent"
+              : "bg-gradient-to-r from-[color:var(--accent-green)] via-[color:var(--accent-gold)]/70 to-transparent"
           )}
         />
       )}

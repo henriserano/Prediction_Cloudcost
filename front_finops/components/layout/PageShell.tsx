@@ -84,7 +84,7 @@ export default function PageShell({
       <div className="lg:hidden sticky top-0 z-30 flex items-center gap-3 border-b border-border bg-card/95 px-4 py-3 backdrop-blur supports-[backdrop-filter]:bg-card/70 shrink-0">
         <button
           onClick={toggle}
-          className="flex h-9 w-9 items-center justify-center rounded-lg text-foreground hover:bg-muted transition-colors focus-visible:ring-2 focus-visible:ring-[color:var(--accent-coral)]/40"
+          className="flex h-9 w-9 items-center justify-center rounded-lg text-foreground hover:bg-muted transition-colors focus-visible:ring-2 focus-visible:ring-[color:var(--accent-green)]/40"
           aria-label="Ouvrir la navigation"
         >
           <Menu className="h-5 w-5" />
@@ -142,12 +142,17 @@ export default function PageShell({
           </nav>
         )}
 
-        <div className="px-8 py-5 flex items-start justify-between gap-6">
-          <div className="min-w-0">
+        <div className="relative px-8 py-6 flex items-start justify-between gap-6">
+          {/* Subtle green wick — editorial "Sia" signature on every page header */}
+          <span
+            aria-hidden
+            className="absolute left-8 top-6 h-8 w-0.5 rounded-full bg-[color:var(--accent-green)]"
+          />
+          <div className="min-w-0 pl-4">
             {eyebrow && (
-              <div className="mb-1.5 flex items-center gap-2">
+              <div className="mb-2 flex items-center gap-2">
                 {typeof eyebrow === "string" ? (
-                  <span className="text-[11px] font-semibold uppercase tracking-widest text-[color:var(--accent-coral)]">
+                  <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[color:var(--accent-green)]">
                     {eyebrow}
                   </span>
                 ) : (
@@ -155,11 +160,11 @@ export default function PageShell({
                 )}
               </div>
             )}
-            <h1 className="font-heading text-[26px] font-semibold tracking-tight text-foreground leading-tight text-balance">
+            <h1 className="font-heading text-[28px] font-semibold tracking-[-0.02em] text-foreground leading-[1.1] text-balance lg:text-[32px]">
               {title}
             </h1>
             {description && (
-              <p className="text-sm text-muted-foreground mt-1 max-w-2xl text-pretty">
+              <p className="text-sm text-muted-foreground mt-2 max-w-2xl text-pretty">
                 {description}
               </p>
             )}
@@ -179,7 +184,13 @@ export default function PageShell({
       </main>
 
       <footer className="hidden lg:flex items-center justify-between border-t border-border bg-card/50 px-8 py-3 text-[11px] text-muted-foreground">
-        <span>© {new Date().getFullYear()} Sia · FinOps Analytics</span>
+        <span className="flex items-center gap-1.5">
+          © {new Date().getFullYear()}
+          <span className="font-heading font-semibold tracking-[-0.02em] text-foreground">
+            sia<span className="text-[color:var(--accent-green)]">.</span>
+          </span>
+          <span className="text-muted-foreground/70">· FinOps Analytics</span>
+        </span>
         <span className="tabular-nums">v1.0 · Sia Design System</span>
       </footer>
     </div>

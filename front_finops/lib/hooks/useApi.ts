@@ -125,21 +125,23 @@ export function useACF(nlags = 28) {
   })
 }
 
-export function useForecast(horizon = 60, model = "AutoETS") {
+export function useForecast(horizon = 60, model: string | null = "AutoETS") {
   return useQuery<ForecastPoint[]>({
     queryKey: ["forecast", horizon, model],
     queryFn: () =>
       api.get("/api/forecast", { params: { horizon, model } }).then((r) => r.data),
     staleTime: STALE,
+    enabled: model != null,
   })
 }
 
-export function useForecastSummary(horizon = 60, model = "AutoETS") {
+export function useForecastSummary(horizon = 60, model: string | null = "AutoETS") {
   return useQuery<ForecastSummary>({
     queryKey: ["forecast-summary", horizon, model],
     queryFn: () =>
       api.get("/api/forecast/summary", { params: { horizon, model } }).then((r) => r.data),
     staleTime: STALE,
+    enabled: model != null,
   })
 }
 

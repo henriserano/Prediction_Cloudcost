@@ -1,18 +1,22 @@
 // Shared chart palette + helpers for the Diagnostics page
 
+// Sia chart palette — black, green, sky-deep, blush-deep, gold
+// (mirrors --chart-1 … --chart-5 in globals.css)
 export const CHART_COLORS = [
-  "oklch(0.22 0.055 258)",  // navy
-  "oklch(0.66 0.185 28)",   // coral
-  "oklch(0.60 0.11 195)",   // teal
-  "oklch(0.52 0.19 295)",   // violet
-  "oklch(0.75 0.15 78)",    // gold
-  "oklch(0.62 0.14 155)",   // green
-  "oklch(0.48 0.02 250)",   // slate
-  "oklch(0.42 0.15 320)",   // magenta
+  "oklch(0.14 0 0)",         // Sia black
+  "oklch(0.68 0.15 160)",     // Sia green
+  "oklch(0.65 0.13 240)",    // sky-deep
+  "oklch(0.72 0.14 15)",     // blush-deep
+  "oklch(0.75 0.15 78)",     // gold
+  "oklch(0.62 0.14 155)",    // green
+  "oklch(0.48 0.02 250)",    // slate
+  "oklch(0.60 0.11 195)",    // teal
 ]
 
-export const COLOR_BRAND = "oklch(0.22 0.055 258)"
-export const COLOR_CORAL = "oklch(0.66 0.185 28)"
+export const COLOR_BRAND = "oklch(0.14 0 0)"
+export const COLOR_GREEN = "oklch(0.68 0.15 160)"
+export const COLOR_SKY   = "oklch(0.65 0.13 240)"
+export const COLOR_BLUSH = "oklch(0.72 0.14 15)"
 export const COLOR_TEAL  = "oklch(0.60 0.11 195)"
 export const COLOR_GOLD  = "oklch(0.75 0.15 78)"
 export const COLOR_DEST  = "oklch(0.60 0.22 25)"
