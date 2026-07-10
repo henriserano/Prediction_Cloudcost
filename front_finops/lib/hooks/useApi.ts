@@ -2,6 +2,15 @@
 
 import { useQuery, useMutation } from "@tanstack/react-query"
 import { api } from "@/lib/api"
+import {
+  DailyResponseSchema,
+  ForecastPointsResponseSchema,
+  ForecastSummarySchema,
+  KPIDataSchema,
+  ModelBenchmarksResponseSchema,
+  ServicesResponseSchema,
+  parseApi,
+} from "@/lib/api-schema"
 import type {
   DailyPoint,
   ServiceShare,
@@ -54,7 +63,10 @@ export function useHealth() {
 export function useKPI() {
   return useQuery<KPIData>({
     queryKey: ["kpi"],
-    queryFn: () => api.get("/api/kpi").then((r) => r.data),
+    queryFn: () =>
+      api
+        .get("/api/kpi")
+        .then((r) => parseApi(KPIDataSchema, r.data, "GET /api/kpi")),
     staleTime: STALE,
   })
 }
@@ -63,7 +75,9 @@ export function useDaily(lastN?: number) {
   return useQuery<DailyPoint[]>({
     queryKey: ["daily", lastN],
     queryFn: () =>
-      api.get("/api/daily", { params: lastN ? { last_n: lastN } : {} }).then((r) => r.data),
+      api
+        .get("/api/daily", { params: lastN ? { last_n: lastN } : {} })
+        .then((r) => parseApi(DailyResponseSchema, r.data, "GET /api/daily")),
     staleTime: STALE,
   })
 }
@@ -71,7 +85,10 @@ export function useDaily(lastN?: number) {
 export function useServices() {
   return useQuery<ServiceShare[]>({
     queryKey: ["services"],
-    queryFn: () => api.get("/api/services").then((r) => r.data),
+    queryFn: () =>
+      api
+        .get("/api/services")
+        .then((r) => parseApi(ServicesResponseSchema, r.data, "GET /api/services")),
     staleTime: STALE,
   })
 }
@@ -129,7 +146,12 @@ export function useForecast(horizon = 60, model: string | null = "AutoETS") {
   return useQuery<ForecastPoint[]>({
     queryKey: ["forecast", horizon, model],
     queryFn: () =>
-      api.get("/api/forecast", { params: { horizon, model } }).then((r) => r.data),
+      api
+        .get("/api/forecast", { params: { horizon, model } })
+        .then(
+          (r) =>
+            parseApi(ForecastPointsResponseSchema, r.data, "GET /api/forecast") as ForecastPoint[],
+        ),
     staleTime: STALE,
     enabled: model != null,
   })
@@ -139,7 +161,16 @@ export function useForecastSummary(horizon = 60, model: string | null = "AutoETS
   return useQuery<ForecastSummary>({
     queryKey: ["forecast-summary", horizon, model],
     queryFn: () =>
-      api.get("/api/forecast/summary", { params: { horizon, model } }).then((r) => r.data),
+      api
+        .get("/api/forecast/summary", { params: { horizon, model } })
+        .then(
+          (r) =>
+            parseApi(
+              ForecastSummarySchema,
+              r.data,
+              "GET /api/forecast/summary",
+            ) as ForecastSummary,
+        ),
     staleTime: STALE,
     enabled: model != null,
   })
@@ -148,7 +179,17 @@ export function useForecastSummary(horizon = 60, model: string | null = "AutoETS
 export function useModelBenchmarks() {
   return useQuery<ModelBenchmark[]>({
     queryKey: ["model-benchmarks"],
-    queryFn: () => api.get("/api/forecast/models").then((r) => r.data),
+    queryFn: () =>
+      api
+        .get("/api/forecast/models")
+        .then(
+          (r) =>
+            parseApi(
+              ModelBenchmarksResponseSchema,
+              r.data,
+              "GET /api/forecast/models",
+            ) as ModelBenchmark[],
+        ),
     staleTime: STALE,
   })
 }

@@ -1,8 +1,13 @@
 # ── Application Auto Scaling for ECS ──────────────────────────────────────────
 
 resource "aws_appautoscaling_target" "ecs" {
-  max_capacity       = var.env == "prod" ? 2 : 1
-  min_capacity       = var.desired_count
+  # INFRA-014: prod keeps a floor of 2 running tasks — one alone is a single
+  # point of failure during rolling deploys, Fargate task migration or an AZ
+  # outage. Non-prod stays at desired_count to avoid burning cost on empty
+  # environments. The max_capacity keeps the same env-based split.
+  max_capacity = var.env == "prod" ? max(4, var.desired_count * 2) : max(1, var.desired_count)
+  min_capacity = var.env == "prod" ? max(2, var.desired_count) : var.desired_count
+
   resource_id        = "service/${aws_ecs_cluster.main.name}/${aws_ecs_service.app.name}"
   scalable_dimension = "ecs:service:DesiredCount"
   service_namespace  = "ecs"

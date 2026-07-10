@@ -1,3 +1,12 @@
+// PERF-005: Bundle analyzer — run `npm run analyze` (or `ANALYZE=true npm run
+// build`) to produce a client + server treemap under .next/analyze/. Wrapped
+// as a no-op when ANALYZE is unset so normal builds pay zero cost. Used to
+// audit heavy deps (recharts, react-markdown, @anthropic-ai/sdk) before code-
+// splitting decisions.
+const withBundleAnalyzer = require("@next/bundle-analyzer")({
+  enabled: process.env.ANALYZE === "true",
+})
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
@@ -60,4 +69,4 @@ const nextConfig = {
   },
 }
 
-module.exports = nextConfig
+module.exports = withBundleAnalyzer(nextConfig)

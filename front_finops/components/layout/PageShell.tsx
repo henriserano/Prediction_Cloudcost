@@ -182,17 +182,6 @@ export default function PageShell({
       >
         {children}
       </main>
-
-      <footer className="hidden lg:flex items-center justify-between border-t border-border bg-card/50 px-8 py-3 text-[11px] text-muted-foreground">
-        <span className="flex items-center gap-1.5">
-          © {new Date().getFullYear()}
-          <span className="font-heading font-semibold tracking-[-0.02em] text-foreground">
-            sia<span className="text-[color:var(--accent-green)]">.</span>
-          </span>
-          <span className="text-muted-foreground/70">· FinOps Analytics</span>
-        </span>
-        <span className="tabular-nums">v1.0 · Sia Design System</span>
-      </footer>
     </div>
   )
 }

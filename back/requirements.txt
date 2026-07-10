@@ -17,6 +17,12 @@ google-auth-oauthlib>=1.2.0
 google-api-python-client>=2.120.0
 google-cloud-bigquery>=3.20.0
 boto3>=1.35.0
+# Azure — Cost Management + Service Principal auth. Optional at import-time:
+# the /api/azure/* routes surface a clean "install these packages" error if
+# they're missing, and the rest of the API still starts up.
+azure-identity>=1.17.0
+azure-mgmt-resource>=23.0.0
+azure-mgmt-costmanagement>=4.0.0
 langchain-core>=0.3.0
 langchain-aws>=0.2.0
 langgraph>=0.2.0

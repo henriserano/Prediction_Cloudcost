@@ -104,6 +104,28 @@ def _cleanup_expired_states() -> None:
         _oauth_states.pop(k, None)
 
 
+def _consume_oauth_state(state: Optional[str]) -> Optional[dict]:
+    """Atomically pop-and-validate the OAuth state token.
+
+    SEC-015: pop + TTL check must both happen under _state_lock in a single
+    critical section. A previous version popped under the lock but validated
+    the timestamp outside it; a second worker could race the check and
+    perform another pop with a stale reference. Returning the entry only if
+    it is fresh keeps the whole flow single-use and multi-worker-safe.
+    """
+    if not state:
+        return None
+    now = time.time()
+    with _state_lock:
+        entry = _oauth_states.pop(state, None)
+        if entry is None:
+            return None
+        if now - entry["created_at"] > _OAUTH_STATE_TTL:
+            # Popped but expired — discard.
+            return None
+        return entry
+
+
 def _cleanup_expired_sessions() -> None:
     """Drop sessions past their TTL. Caller must hold _state_lock (SEC-014)."""
     now = time.time()
@@ -317,16 +339,11 @@ def gcp_callback(
         redirect_url = f"{frontend_url}/dashboard?gcp_error=missing_code"
         return RedirectResponse(url=redirect_url, status_code=302)
 
-    # SEC-015: pop-then-check atomically under the lock (single-use state).
-    with _state_lock:
-        state_entry = _oauth_states.pop(state, None) if state else None
+    # SEC-015: pop AND TTL-check atomically under _state_lock (single-use
+    # state, safe under concurrent workers/threads).
+    state_entry = _consume_oauth_state(state)
     if state_entry is None:
         redirect_url = f"{frontend_url}/dashboard?gcp_error=invalid_state"
-        return RedirectResponse(url=redirect_url, status_code=302)
-
-    # Reject states that have exceeded the TTL (SEC-003).
-    if time.time() - state_entry["created_at"] > _OAUTH_STATE_TTL:
-        redirect_url = f"{frontend_url}/dashboard?gcp_error=state_expired"
         return RedirectResponse(url=redirect_url, status_code=302)
 
     # SEC-014: the session the token will be bound to.

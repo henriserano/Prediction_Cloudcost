@@ -8,14 +8,24 @@ terraform {
     }
   }
 
-  # ── Remote state (uncomment once you have an S3 bucket + DynamoDB table) ──
-  # backend "s3" {
-  #   bucket         = "finops-tfstate"
-  #   key            = "finops-backend/terraform.tfstate"
-  #   region         = var.aws_region
-  #   dynamodb_table = "finops-tflock"
-  #   encrypt        = true
-  # }
+  # INFRA-011: remote state is REQUIRED before any team apply — a local
+  # tfstate on one operator's laptop is impossible to review, back up, or
+  # reconcile after a failed apply. Partial config: the bucket/table names
+  # are supplied via `terraform init -backend-config="bucket=..." \
+  # -backend-config="dynamodb_table=..."` so we don't commit the account-
+  # specific values. Encryption + DynamoDB locking must always be on.
+  #
+  # Bootstrapping (once per account, done by an admin):
+  #   aws s3api create-bucket --bucket finops-tfstate-<acct> ...
+  #   aws dynamodb create-table --table-name finops-tflock ...
+  #   terraform init \
+  #     -backend-config="bucket=finops-tfstate-<acct>" \
+  #     -backend-config="dynamodb_table=finops-tflock" \
+  #     -backend-config="region=eu-west-1"
+  backend "s3" {
+    key     = "finops-backend/terraform.tfstate"
+    encrypt = true
+  }
 }
 
 provider "aws" {

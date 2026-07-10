@@ -196,13 +196,6 @@ export default function Sidebar() {
                 : "Jan – Juin 2026"}
             </p>
           </div>
-
-          <p className="text-[10px] text-sidebar-foreground/70 px-1">
-            Powered by{" "}
-            <span className="font-heading font-semibold tracking-[-0.02em] text-sidebar-foreground/80">
-              sia<span className="text-[color:var(--accent-green)]">.</span>
-            </span>
-          </p>
         </div>
       </aside>
     </>

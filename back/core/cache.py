@@ -2,17 +2,21 @@ from __future__ import annotations
 
 import threading
 import time
-from collections import OrderedDict
 from typing import Any
 
 
 class _CacheEntry:
-    __slots__ = ("value", "expires_at", "created_at")
+    __slots__ = ("value", "expires_at", "created_at", "last_access")
 
     def __init__(self, value: Any, expires_at: float | None) -> None:
+        now = time.monotonic()
         self.value = value
         self.expires_at = expires_at
-        self.created_at = time.monotonic()
+        self.created_at = now
+        # PERF-002: touched on every ``get`` — a scalar write is dozens of
+        # instructions cheaper than the OrderedDict.move_to_end linked-list
+        # splice that used to run under the global lock on every cache hit.
+        self.last_access = now
 
 
 # SEC: hard cap on the number of entries kept in memory. Without a cap, an
@@ -22,47 +26,68 @@ class _CacheEntry:
 # forecast:<model>:<horizon>, advanced analyses) with headroom to spare.
 DEFAULT_MAX_ENTRIES = 512
 
+# On overflow we evict this fraction of the store in a single pass, instead of
+# popping one entry at a time. Amortises the O(n) sort across many future
+# ``set`` calls — with 512 entries and 0.1, one eviction pass drops ~51 keys.
+_EVICT_BATCH_FRACTION = 0.1
+
 
 class AppCache:
-    """Thread-safe in-memory result cache with optional TTL and LRU eviction.
+    """Thread-safe in-memory result cache with optional TTL and approx-LRU eviction.
 
-    Bounded by ``max_entries``. When full, the least-recently-used key is
-    dropped on the next ``set()``. Reads count as "used" — an entry is only
-    considered stale for eviction if nothing else has touched it in a while.
+    Bounded by ``max_entries``. On overflow, the coldest fraction of entries
+    (by ``last_access``) is dropped in a single pass on ``set``. Reads only
+    update a per-entry timestamp — no lock-serialised linked-list mutation,
+    so hot-path contention stays flat under load.
     """
 
     def __init__(self, max_entries: int = DEFAULT_MAX_ENTRIES) -> None:
-        self._store: "OrderedDict[str, _CacheEntry]" = OrderedDict()
-        self._lock = threading.RLock()
+        # Plain dict, ordering not load-bearing anymore.
+        self._store: dict[str, _CacheEntry] = {}
+        # Regular Lock (not RLock) — none of the paths below recurse.
+        self._lock = threading.Lock()
         self._max_entries = max_entries
         self._hits = 0
         self._misses = 0
         self._evictions = 0
 
     def get(self, key: str) -> Any:
+        # Short critical section: dict lookup + TTL check + timestamp bump.
         with self._lock:
             entry = self._store.get(key)
             if entry is None:
                 self._misses += 1
                 return None
-            if entry.expires_at is not None and time.monotonic() > entry.expires_at:
+            now = time.monotonic()
+            if entry.expires_at is not None and now > entry.expires_at:
                 del self._store[key]
                 self._misses += 1
                 return None
-            # Mark as most-recently-used.
-            self._store.move_to_end(key)
+            entry.last_access = now
             self._hits += 1
             return entry.value
+
+    def _evict_batch_locked(self) -> None:
+        """Drop the coldest ~10% of entries. Caller MUST hold ``self._lock``."""
+        overflow = len(self._store) - self._max_entries
+        if overflow <= 0:
+            return
+        # Batch = at least the overflow, and at least floor(max*fraction) so
+        # the O(n) scan below amortises across many future ``set`` calls.
+        batch = max(overflow, int(self._max_entries * _EVICT_BATCH_FRACTION))
+        # Partial sort by last_access. n <= 512 in practice — a full sort is
+        # well below any perceptible latency.
+        coldest = sorted(self._store.items(), key=lambda kv: kv[1].last_access)[:batch]
+        for k, _ in coldest:
+            self._store.pop(k, None)
+            self._evictions += 1
 
     def set(self, key: str, value: Any, ttl: float | None = None) -> None:
         expires_at = time.monotonic() + ttl if ttl is not None else None
         with self._lock:
-            if key in self._store:
-                self._store.move_to_end(key)
             self._store[key] = _CacheEntry(value, expires_at)
-            while len(self._store) > self._max_entries:
-                self._store.popitem(last=False)  # drop LRU
-                self._evictions += 1
+            if len(self._store) > self._max_entries:
+                self._evict_batch_locked()
 
     def invalidate(self, *keys: str) -> None:
         with self._lock:

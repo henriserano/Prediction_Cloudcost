@@ -32,7 +32,11 @@ resource "aws_lb_target_group" "app" {
     unhealthy_threshold = 3
   }
 
-  deregistration_delay = 30
+  # INFRA-013: 60s covers long-running uploads (multi-file Excel ingest,
+  # /api/gcp/sync BigQuery pulls) that would otherwise be cut mid-flight
+  # when a task is drained during a rolling deploy. 30s was tight enough
+  # to reproducibly 502 on 5-10 MB uploads.
+  deregistration_delay = 60
 
   tags = { Name = "${local.prefix}-tg" }
 }

@@ -23,6 +23,7 @@ from routes.routes_forecast import router as forecast_router
 from routes.routes_health import router as health_router
 from routes.routes_gcp import router as gcp_router
 from routes.routes_aws import router as aws_router
+from routes.routes_azure import router as azure_router
 from routes.routes_events import router as events_router
 from routes.routes_data import router as data_router
 from routes.routes_advanced import router as advanced_router
@@ -39,6 +40,21 @@ logger = get_logger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     setup_logging(level="INFO", json_logs=True)
+
+    # SEC-018: fail fast if argon2-cffi is missing or has a broken native
+    # binding — otherwise the first /signup call would surface a 500 to the
+    # user instead of a clear boot-time error.
+    from core.crypto import smoke_test_argon2
+
+    try:
+        smoke_test_argon2()
+        logger.info("argon2_smoke_ok")
+    except Exception as exc:
+        logger.error("argon2_smoke_failed", extra={"error": repr(exc)})
+        raise RuntimeError(
+            "Argon2 self-test failed at startup. Install/repair argon2-cffi "
+            "(and argon2-cffi-bindings on musl/alpine images) and restart."
+        ) from exc
 
     from data.loader import load_daily_costs, load_daily_per_service
     load_daily_costs()
@@ -136,6 +152,35 @@ async def request_id_middleware(request: Request, call_next):
         request_id_ctx.reset(token)
 
 
+@app.middleware("http")
+async def api_version_alias_middleware(request: Request, call_next):
+    """Transparent /api/v1/* → /api/* alias.
+
+    The dashboard and every existing client call the API at ``/api/<path>``.
+    Introducing a versioned prefix in one step would break them all, so this
+    middleware accepts ``/api/v1/<path>`` as an alias of the same handler.
+    New clients can opt in to ``/api/v1/*`` today; a future ``/api/v2/*`` can
+    branch off without touching the unversioned surface.
+
+    The rewrite is transparent (no redirect) so cookies, X-API-Key headers
+    and streaming responses all flow through untouched.
+    """
+    path = request.scope.get("path", "")
+    if path.startswith("/api/v1/"):
+        request.scope["path"] = "/api/" + path[len("/api/v1/"):]
+        # Also rewrite the raw path so downstream logs / URL reconstruction
+        # match the effective handler.
+        request.scope["raw_path"] = request.scope["path"].encode("ascii")
+    elif path == "/api/v1":
+        request.scope["path"] = "/api"
+        request.scope["raw_path"] = b"/api"
+    response = await call_next(request)
+    # Advertise the current stable version so clients can discover what they
+    # are speaking to without a separate meta endpoint.
+    response.headers.setdefault("X-API-Version", "v1")
+    return response
+
+
 @app.exception_handler(AppError)
 async def app_error_handler(request: Request, exc: AppError):
     payload = {"error": {"code": exc.code, "message": exc.message, "details": exc.details}}
@@ -147,6 +192,7 @@ app.include_router(analytics_router)
 app.include_router(forecast_router)
 app.include_router(gcp_router)
 app.include_router(aws_router)
+app.include_router(azure_router)
 app.include_router(events_router)
 app.include_router(data_router)
 app.include_router(advanced_router)

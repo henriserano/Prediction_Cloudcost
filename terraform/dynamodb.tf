@@ -54,9 +54,9 @@ resource "aws_dynamodb_table" "conversations" {
 
   # LSI to list a user's conversations sorted by recency without a full scan.
   local_secondary_index {
-    name            = "user-updated-at-index"
-    range_key       = "updated_at"
-    projection_type = "INCLUDE"
+    name               = "user-updated-at-index"
+    range_key          = "updated_at"
+    projection_type    = "INCLUDE"
     non_key_attributes = ["title", "message_count"]
   }
 
@@ -89,6 +89,17 @@ resource "aws_dynamodb_table" "credentials" {
 
   server_side_encryption {
     enabled = true
+  }
+
+  # INFRA-017: DynamoDB TTL on the ``expires_at`` epoch-seconds attribute.
+  # Rows the backend stamps with an expires_at in the past are evicted by
+  # DynamoDB itself within 48h. Prevents an ever-growing table of stale
+  # encrypted rows when a user rotates credentials or when session-bound
+  # activation records are written with a short lifetime. Rows without the
+  # attribute are kept indefinitely — same as today.
+  ttl {
+    attribute_name = "expires_at"
+    enabled        = true
   }
 
   tags = {

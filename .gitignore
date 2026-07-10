@@ -99,6 +99,25 @@ Cloud Run Revision - *.csv
 /daily_costs.parquet
 /daily_per_service.parquet
 
+# ── Terraform ──────────────────────────────────────────────────────────────────
+# .terraform/ holds the downloaded provider binaries + remote-state metadata.
+# .tfstate is either local state (before backend "s3" is configured) or a
+# backup — never commit either, always huge and possibly full of secrets.
+# backend.hcl is the account-specific partial config produced by
+# terraform/bootstrap-backend.sh (bucket + table names) — off-limits.
+**/.terraform/
+**/.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+terraform.tfvars
+terraform/backend.hcl
+crash.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
 # ── Dépendances externes explicitement exclues ─────────────────────────────────
 Time-Series-Library/
 Time-Series-Library/

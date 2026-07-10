@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from typing import List, Annotated
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Response
 
+from core.pagination import apply_pagination
 from analysis.timeseries import (
     get_acf_pacf,
     get_anomalies,
@@ -37,16 +38,34 @@ def kpi():
 
 @router.get("/daily", response_model=List[DailyPoint])
 def daily_costs(
+    response: Response,
     last_n: Annotated[int | None, Query(ge=7, le=365, description="Limit to last N days")] = None,
+    limit: Annotated[int | None, Query(ge=1, le=1000, description="Opt-in pagination — omit to get the full series")] = None,
+    offset: Annotated[int, Query(ge=0)] = 0,
 ):
-    """Daily aggregated costs with 7-day MA and 95% CI bands."""
-    return get_daily_series(last_n)
+    """Daily aggregated costs with 7-day MA and 95% CI bands.
+
+    Pagination is opt-in: without ``limit`` the response matches the pre-
+    pagination shape byte-for-byte. When ``limit`` is provided the response
+    body is a sliced array and pagination metadata is returned in
+    ``X-Total-Count`` / ``X-Offset`` / ``X-Limit`` / ``X-Next-Offset`` headers.
+    """
+    series = get_daily_series(last_n)
+    return apply_pagination(series, response, limit=limit, offset=offset)
 
 
 @router.get("/services", response_model=List[ServiceShare])
-def services():
-    """Per-service cost totals, share %, CV, and cumulative % (Pareto-sorted)."""
-    return get_service_shares()
+def services(
+    response: Response,
+    limit: Annotated[int | None, Query(ge=1, le=1000, description="Opt-in pagination — omit to get the full Pareto list")] = None,
+    offset: Annotated[int, Query(ge=0)] = 0,
+):
+    """Per-service cost totals, share %, CV, and cumulative % (Pareto-sorted).
+
+    Pagination is opt-in — see /daily above for the header contract.
+    """
+    shares = get_service_shares()
+    return apply_pagination(shares, response, limit=limit, offset=offset)
 
 
 @router.get("/anomalies", response_model=List[AnomalyPoint])

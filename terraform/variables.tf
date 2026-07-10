@@ -62,9 +62,19 @@ variable "app_port" {
 }
 
 variable "image_tag" {
-  description = "Docker image tag to deploy (overridden by deploy script)"
+  description = <<-EOT
+    Immutable Docker image tag to deploy (git SHA, semver, or CI build ID).
+    No default: a manual `terraform apply` without -var="image_tag=..." now
+    fails fast instead of silently redeploying whatever "latest" pointed to
+    at that moment (INFRA-015). deploy.sh always supplies the SHA it just
+    pushed to ECR, so the guard rail only bites unintended manual applies.
+  EOT
   type        = string
-  default     = "latest"
+
+  validation {
+    condition     = length(var.image_tag) > 0 && var.image_tag != "latest"
+    error_message = "image_tag must be an immutable tag (git SHA, semver, CI build ID). 'latest' is refused because it makes apply non-reproducible."
+  }
 }
 
 # ── ALB / HTTPS ────────────────────────────────────────────────────────────────
@@ -174,15 +184,19 @@ variable "bedrock_allowed_model_arns" {
     ARN forms accepted:
       - Foundation model:  arn:aws:bedrock:<region>::foundation-model/<id>
       - Inference profile: arn:aws:bedrock:<region>:<account>:inference-profile/<id>
+
+    Default = the exact Sonnet 4.5 model driving the LangGraph agent
+    (bedrock_model_id) plus the EU cross-region inference profile it routes
+    through. Do NOT re-broaden to `anthropic.claude-*` — that lets any newly
+    released Anthropic model (Opus, future versions) run on this account with
+    no code change and no cost review.
   EOT
   type        = list(string)
   default = [
-    # Foundation models — no account ID in the ARN by AWS design.
-    "arn:aws:bedrock:*::foundation-model/anthropic.claude-*",
-    # Cross-region inference profiles (EU + US + any). Account ID is required
-    # here; wildcard on region lets a single policy work across eu-west-1/3.
-    "arn:aws:bedrock:*:*:inference-profile/*anthropic.claude-*",
-    "arn:aws:bedrock:*:*:application-inference-profile/*",
+    # Foundation model actually invoked (Sonnet 4.5, versioned).
+    "arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-4-5-20250929-v1:0",
+    # EU cross-region inference profile the agent targets (see bedrock_model_id).
+    "arn:aws:bedrock:*:*:inference-profile/eu.anthropic.claude-sonnet-4-5-20250929-v1:0",
   ]
 }
 
@@ -190,4 +204,17 @@ variable "bedrock_max_tokens" {
   description = "Default max output tokens sent to Bedrock InvokeModel. Non-sensitive tuning knob exposed as env var so it can be changed without a code deploy."
   type        = number
   default     = 4096
+}
+
+# ── Ops alerting ─────────────────────────────────────────────────────────────
+variable "alarm_email_subscribers" {
+  description = <<-EOT
+    Email addresses subscribed to the CloudWatch alarm SNS topic (INFRA-010).
+    Leave empty in dev/staging; set to the on-call rota in prod so CPU / memory
+    / 5xx / unhealthy-target alarms actually page someone. For PagerDuty or
+    Opsgenie, subscribe the integration URL to the topic ARN outside of Terraform
+    (or extend this file with an additional aws_sns_topic_subscription).
+  EOT
+  type        = list(string)
+  default     = []
 }

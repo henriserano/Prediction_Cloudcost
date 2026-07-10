@@ -167,27 +167,65 @@ def _parse_billing_file(filename: str, raw_bytes: bytes) -> tuple[list[dict], li
             )
             return [], warnings
 
-        df = None
+        # Score every candidate sheet: any sheet with Date + Cost headers is
+        # eligible, and we pick the RICHEST one (most non-empty rows). A
+        # workbook shipped with a stray "Notes" or "Legend" tab that also
+        # happens to have Date/Cost columns would otherwise be picked over the
+        # actual "2025" data sheet purely because dict iteration hit it first.
+        candidates: list[tuple[int, str, pd.DataFrame]] = []
         for sheet_name, candidate in book.items():
+            if candidate is None or candidate.empty:
+                continue
             if _first_matching_column(candidate, _DATE_COLUMN_ALIASES) and \
                _first_matching_column(candidate, _COST_COLUMN_ALIASES):
-                df = candidate
-                filename = f"{filename}#{sheet_name}"
-                break
-        if df is None:
+                candidates.append((len(candidate), sheet_name, candidate))
+        if not candidates:
             warnings.append(f"{filename}: no sheet contained recognisable billing columns")
             return [], warnings
+        candidates.sort(key=lambda t: t[0], reverse=True)
+        row_count, sheet_name, df = candidates[0]
+        filename = f"{filename}#{sheet_name}"
+        if len(candidates) > 1:
+            others = ", ".join(f"{n} ({r} rows)" for r, n, _ in candidates[1:])
+            warnings.append(
+                f"{filename}: chose sheet '{sheet_name}' ({row_count} rows). "
+                f"Other candidate sheet(s) ignored: {others}"
+            )
     else:
+        # Try UTF-8 with BOM first (Excel export default), fall back to latin-1.
         try:
-            # Try UTF-8 with BOM first (Excel export default), fall back to latin-1.
+            text = raw_bytes.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            text = raw_bytes.decode("latin-1")
+
+        # Explicit delimiter cascade — pandas' sep=None Sniffer occasionally
+        # picks the wrong character on files with commas inside quoted fields
+        # or on mixed line endings, then errors out later on unrelated rows.
+        # Trying the three common billing delimiters in order and taking the
+        # one that yields the most columns is deterministic and debuggable.
+        df = None
+        last_exc: Optional[Exception] = None
+        best: tuple[int, pd.DataFrame] | None = None
+        for delimiter in (",", ";", "\t"):
             try:
-                text = raw_bytes.decode("utf-8-sig")
-            except UnicodeDecodeError:
-                text = raw_bytes.decode("latin-1")
-            df = pd.read_csv(io.StringIO(text), sep=None, engine="python")
-        except Exception as exc:
-            warnings.append(f"{filename}: could not parse as CSV ({exc.__class__.__name__})")
+                candidate = pd.read_csv(io.StringIO(text), sep=delimiter, engine="c")
+            except Exception as exc:
+                last_exc = exc
+                continue
+            # A wrong delimiter typically collapses the whole line into a
+            # single column — reject anything with < 2 columns.
+            if candidate.shape[1] < 2:
+                continue
+            score = candidate.shape[1]
+            if best is None or score > best[0]:
+                best = (score, candidate)
+        if best is None:
+            reason = f"{last_exc.__class__.__name__}" if last_exc else "no usable delimiter"
+            warnings.append(
+                f"{filename}: could not parse as CSV — tried ',', ';', tab. Last error: {reason}"
+            )
             return [], warnings
+        df = best[1]
 
     date_col = _first_matching_column(df, _DATE_COLUMN_ALIASES)
     service_col = _first_matching_column(df, _SERVICE_COLUMN_ALIASES)

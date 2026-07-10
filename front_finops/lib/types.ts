@@ -287,3 +287,69 @@ export interface EventsIngestResponse { ingested: number; totalRows: number; dat
 export interface EventsUploadResponse { filesProcessed: number; ingested: number; totalRows: number; dateRange: { start: string; end: string }; previewKpi: { totalSpend: number; dailyAvg: number }; perFile: Record<string, number>; warnings: string[] }
 // GET /health — backend liveness (also returns cache/data fingerprints, ignored here)
 export interface HealthStatus { status: string }
+
+// ─── Azure Cost Management ─────────────────────────────────────────────────
+// Mirror of back/schemas/azure.py — keep the two in sync (CLAUDE.md).
+
+export interface AzureAuthStatus {
+  authenticated: boolean
+  tenantId?: string | null
+  subscriptionId?: string | null
+  displayName?: string | null
+  location?: string | null
+  detail?: string | null
+}
+
+export interface AzureSubscription {
+  subscriptionId: string
+  name: string
+  state?: string | null
+  tenantId?: string | null
+}
+
+export interface AzureBillingByService {
+  service: string
+  cost: number
+  pct: number
+  category: string
+}
+
+export interface AzureBillingByMonth {
+  month: string
+  cost: number
+}
+
+export interface AzureBillingByDay {
+  date: string
+  cost: number
+}
+
+export interface AzureBillingResponse {
+  subscriptionId: string | null
+  period: { start: string; end: string }
+  total: number
+  byService: AzureBillingByService[]
+  byMonth: AzureBillingByMonth[]
+  byDay: AzureBillingByDay[]
+  currency: string
+  source: string
+  granularity: string
+}
+
+// POST /api/azure/sync — Cost Management → events store
+export interface AzureSyncRequest {
+  subscriptionId?: string | null
+  months?: number
+  replace?: boolean
+}
+
+export interface AzureSyncResponse {
+  ingested: number
+  subscriptionId: string | null
+  periodStart: string
+  periodEnd: string
+  servicesCount: number
+  totalCost: number
+  currency: string
+  replaced: boolean
+}

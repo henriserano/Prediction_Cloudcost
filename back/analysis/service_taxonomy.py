@@ -151,14 +151,14 @@ _RULES: list[tuple[str, Category]] = [
 ]
 
 
-def categorize(service_name: str) -> Category:
+def categorize(service_name: object) -> Category:
     """Return the category for a service name (substring match, case-insensitive).
 
-    Unknown services fall through to ``"other"`` — check ``/api/services`` for
-    any row tagged ``other`` and add its substring to ``_RULES`` if it deserves
-    a proper bucket.
+    Unknown services — and any non-string input (NaN, None, unexpected types
+    from pandas rows) — fall through to ``"other"`` so callers never leak raw
+    service labels into the category axis of a chart.
     """
-    if not service_name:
+    if not isinstance(service_name, str) or not service_name:
         return "other"
     needle = service_name.lower()
     for keyword, category in _RULES:

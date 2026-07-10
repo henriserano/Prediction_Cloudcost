@@ -41,11 +41,17 @@ class DependencyError(AppError):
 
 class NotEnoughData(AppError):
     """Raised when a statistical routine is asked to run on an empty or
-    too-short series (SEC-017). Maps to HTTP 422 so the frontend can show a
-    "sync some data first" state instead of a 500."""
+    too-short series (SEC-017).
+
+    Status is 400 with the machine-readable code ``NOT_ENOUGH_DATA`` — 422 is
+    reserved by FastAPI for schema-validation errors, and mixing the two makes
+    it hard for the frontend to dispatch on the reason. Clients should branch
+    on the ``code`` field ("NOT_ENOUGH_DATA") to render the "sync some data
+    first" empty state.
+    """
 
     def __init__(self, message: str = "Not enough data", *, details: Any = None):
-        super().__init__(message, code="NOT_ENOUGH_DATA", status_code=422, details=details)
+        super().__init__(message, code="NOT_ENOUGH_DATA", status_code=400, details=details)
 
 
 class PayloadTooLarge(AppError):

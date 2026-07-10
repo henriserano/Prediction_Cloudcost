@@ -188,14 +188,15 @@ export default function DashboardPage() {
                   labelStyle={{ fontWeight: 600, marginBottom: 4 }}
                   itemStyle={{ padding: "2px 0" }}
                   formatter={(v: unknown, n: string) => {
-                    if (n === "IC 95 %") return [null, null] as unknown as [string, string]
-                    const x = v as number
+                    const x = typeof v === "number" ? v : Number(v)
                     return [`${x.toFixed(2)} €`, n]
                   }}
                   labelFormatter={(l) => `Date · ${l}`}
                 />
                 {/* Confidence interval band — proper range using tuple dataKey.
-                    Rendered first so lines paint on top. */}
+                    Rendered first so lines paint on top. `tooltipType="none"`
+                    keeps the band out of the tooltip without an unsafe cast on
+                    the formatter return (which Recharts may harden any release). */}
                 <Area
                   type="monotone"
                   dataKey={(d: DailyPoint) => [d.ciLow, d.ciHigh]}
@@ -204,6 +205,7 @@ export default function DashboardPage() {
                   name="IC 95 %"
                   activeDot={false}
                   isAnimationActive={false}
+                  tooltipType="none"
                 />
                 {/* Raw daily cost — thin, muted, low visual weight */}
                 <Line

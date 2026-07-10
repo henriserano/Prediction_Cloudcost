@@ -39,6 +39,18 @@ _PBKDF2_SALT_LEN = 16
 _hasher = PasswordHasher()
 
 
+def smoke_test_argon2() -> None:
+    """Verify argon2-cffi is importable AND functional at startup.
+
+    Called from the FastAPI lifespan. A missing/broken C extension (common on
+    freshly-built Alpine images that skipped ``argon2-cffi-bindings``) will
+    surface here as a startup crash instead of a 500 on the first ``/signup``.
+    """
+    probe = _hasher.hash("smoke-test-000000")
+    if not _hasher.verify(probe, "smoke-test-000000"):
+        raise RuntimeError("Argon2 self-verification returned False")
+
+
 # ---------------------------------------------------------------------------
 # PIN hashing
 # ---------------------------------------------------------------------------

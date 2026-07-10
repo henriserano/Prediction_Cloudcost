@@ -1,6 +1,21 @@
 # Security scanning pipeline.
 # Runs weekly (Monday 08:00 UTC) and on every push to main.
 # Three independent jobs: dependency audit, Python SAST, container scan.
+#
+# Blocking vs. informational (INFRA-018): every step is explicitly tagged so
+# a contributor knows what breaks the build vs. what is surfaced for review.
+#
+#   BLOCKING (fails the job / PR / release):
+#     - pip-audit         : Python CVEs on back/requirements.txt
+#     - npm audit --high  : HIGH/CRITICAL JS CVEs on front_finops
+#     - bandit            : Python SAST rules triaged in bandit.yaml
+#     - semgrep --error   : broader semantic checks (p/python + p/security-audit)
+#
+#   INFORMATIONAL (uploaded as an artifact, does NOT fail the job):
+#     - bandit JSON report artifact (kept even when bandit exits 0)
+#
+# To move a step from blocking to informational: add ``continue-on-error: true``
+# and note it in this header so the trade-off is auditable.
 name: Security
 
 on:
@@ -19,6 +34,9 @@ permissions:
 jobs:
   # ────────────────────────────────────────────────────────────────────────────
   # A. Dependency audit — pip-audit (Python CVEs) + npm audit (JS CVEs)
+  # Both steps are BLOCKING. A HIGH/CRITICAL CVE in a runtime dependency must
+  # be resolved (bump, ignore with justification, or migrate off the package)
+  # before merge — do not weaken the audit level to make CI green.
   # ────────────────────────────────────────────────────────────────────────────
   dependency-audit:
     name: Dependency audit
@@ -33,8 +51,9 @@ jobs:
         with:
           python-version: "3.11"
 
-      # pip-audit queries the OSV / PyPI advisory databases
-      - name: pip-audit (Python dependencies)
+      # pip-audit queries the OSV / PyPI advisory databases.
+      # BLOCKING: exits non-zero when any advisory matches back/requirements.txt.
+      - name: pip-audit (Python dependencies) — BLOCKING
         run: |
           pip install --upgrade pip pip-audit
           pip-audit -r back/requirements.txt
@@ -44,8 +63,10 @@ jobs:
         with:
           node-version: "20"
 
-      # npm audit exits non-zero only for HIGH/CRITICAL findings
-      - name: npm audit (JS dependencies)
+      # BLOCKING: npm audit exits non-zero on HIGH/CRITICAL findings.
+      # LOW/MODERATE findings are intentionally ignored — bumping the audit
+      # level down would turn this step into noise.
+      - name: npm audit (JS dependencies) — BLOCKING
         working-directory: front_finops
         run: |
           npm ci
@@ -53,6 +74,9 @@ jobs:
 
   # ────────────────────────────────────────────────────────────────────────────
   # B. Python SAST — bandit + semgrep
+  # Both steps are BLOCKING. Triaged rules live in ``bandit.yaml`` for bandit,
+  # and semgrep uses the curated ``p/python`` + ``p/security-audit`` rulesets.
+  # A new finding must either be fixed or explicitly waived in bandit.yaml.
   # ────────────────────────────────────────────────────────────────────────────
   sast-python:
     name: Python SAST
@@ -67,15 +91,18 @@ jobs:
         with:
           python-version: "3.11"
 
-      # bandit: BLOCKING — fails the workflow on any finding not triaged in
-      # bandit.yaml (tests excluded, reviewed skips documented in that file).
-      # The JSON report is still uploaded as an artifact for review.
-      - name: Bandit SAST scan
+      # BLOCKING: bandit fails on any finding not triaged in bandit.yaml
+      # (tests excluded, reviewed skips documented in that file).
+      # The JSON report is still uploaded even when bandit passes so the
+      # security review has an audit trail.
+      - name: Bandit SAST scan — BLOCKING
         run: |
           pip install --upgrade pip bandit
           bandit -c bandit.yaml -r back/ -f json -o bandit-report.json
 
-      - name: Upload bandit report
+      # INFORMATIONAL: the artifact is uploaded whether bandit passed or
+      # failed. This does not affect the pass/fail status of the job.
+      - name: Upload bandit report — INFORMATIONAL
         uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -83,9 +110,9 @@ jobs:
           path: bandit-report.json
           retention-days: 30
 
-      # semgrep: broader semantic pattern matching; BLOCKING — --error exits
-      # non-zero on findings and fails the workflow.
-      - name: Semgrep scan
+      # BLOCKING: --error makes semgrep exit non-zero on findings.
+      # Broader semantic pattern matching complementary to bandit's AST rules.
+      - name: Semgrep scan — BLOCKING
         run: |
           pip install semgrep
           semgrep --config=p/python --config=p/security-audit back/ \

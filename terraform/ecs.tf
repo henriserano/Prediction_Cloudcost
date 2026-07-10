@@ -3,9 +3,13 @@
 resource "aws_ecs_cluster" "main" {
   name = "${local.prefix}-cluster"
 
+  # INFRA-012: Container Insights enabled in every env — the marginal cost is
+  # negligible next to the visibility gain (CPU, memory, network, task
+  # transitions surfaced in CloudWatch without instrumenting the container).
+  # Required to root-cause the alarms wired up in cloudwatch.tf.
   setting {
     name  = "containerInsights"
-    value = "disabled"
+    value = "enabled"
   }
 
   tags = { Name = "${local.prefix}-cluster" }
@@ -124,14 +128,30 @@ resource "aws_ecs_task_definition" "app" {
         startPeriod = 120
       }
 
-      # SECURITY NOTE (INFRA-009): readonlyRootFilesystem = true is the recommended
-      # hardening posture. Set to true and mount explicit tmpfs volumes for any
-      # paths the app writes to (e.g. /tmp). Requires verifying the app starts
-      # cleanly with a read-only root.
-      readonlyRootFilesystem = false
+      # INFRA-009: read-only root filesystem blocks persistence of any malware
+      # that lands in the container — writes to /app, /usr, /etc etc. all fail.
+      # Fargate does not support the `tmpfs` container option, so writable
+      # scratch space is provided via ephemeral in-task volumes mounted at the
+      # paths Python/uvicorn actually need (matplotlib cache, tmpfile, etc.).
+      readonlyRootFilesystem = true
       user                   = "1000"
+
+      mountPoints = [
+        { sourceVolume = "tmp", containerPath = "/tmp", readOnly = false },
+        { sourceVolume = "shm", containerPath = "/dev/shm", readOnly = false },
+      ]
     }
   ])
+
+  # Ephemeral scratch volumes for the read-only root filesystem hardening
+  # above. Fargate emptyDir-style volumes have their lifecycle tied to the
+  # task — nothing persists across task restarts.
+  volume {
+    name = "tmp"
+  }
+  volume {
+    name = "shm"
+  }
 
   tags = { Name = "${local.prefix}-task" }
 }

@@ -17,6 +17,31 @@ from core.errors import NotEnoughData
 # Metric helpers
 # ---------------------------------------------------------------------------
 
+# Absolute ceiling multiplier applied to the upper confidence intervals. A
+# noisy model on a short series can otherwise emit std_r > 10× the mean and
+# push high80/high95 into the 5–6 figures range, which then drives the y-axis
+# on the front-end into meaningless territory. 10× mean(train) is generous
+# enough to preserve real uncertainty while keeping charts readable.
+_CI_UPPER_MULTIPLIER = 10.0
+
+
+def _clamp_ci_upper(ci: np.ndarray, train: np.ndarray) -> np.ndarray:
+    """Cap the upper bound of a (h, 2) CI matrix at _CI_UPPER_MULTIPLIER × mean(train).
+
+    Lower bound is left alone (models already clamp it at 0 in-place). No-op
+    when the ceiling is 0/NaN so a legitimately zero-mean series stays as-is.
+    """
+    if ci.size == 0:
+        return ci
+    mean_train = float(np.mean(train)) if len(train) else 0.0
+    if not math.isfinite(mean_train) or mean_train <= 0:
+        return ci
+    ceiling = mean_train * _CI_UPPER_MULTIPLIER
+    ci = ci.copy()
+    ci[:, 1] = np.minimum(ci[:, 1], ceiling)
+    return ci
+
+
 def _mape(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     mask = y_true != 0
     if not mask.any():
@@ -317,6 +342,10 @@ def get_forecast(horizon: int = 60, model: str = "ETS") -> tuple[List[ForecastPo
 
     _family, fn = MODELS[model]
     forecast_vals, ci80, ci95 = fn(arr, horizon)
+    # Bound the upper CI so a noisy fit cannot yield 0–100k intervals that
+    # blow out the y-axis on the frontend chart.
+    ci80 = _clamp_ci_upper(ci80, arr)
+    ci95 = _clamp_ci_upper(ci95, arr)
 
     # Last 30 actuals included for context in chart
     n_hist = 30
