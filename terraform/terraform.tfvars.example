@@ -5,36 +5,29 @@ aws_region = "eu-west-1"
 env        = "dev"
 app_name   = "finops"
 
-# Networking
-vpc_cidr  = "10.0.0.0/16"
-az_count  = 2
-
-# ECS / Fargate
-# 0.5 vCPU is sufficient — scipy/numpy cold start fits in 2 GB
-container_cpu    = 512   # 0.5 vCPU
-container_memory = 2048  # 2 GB
-desired_count    = 1
-
-# HTTPS — set to your ACM certificate ARN to enable TLS.
-# REQUIRED when env = "prod" (terraform will refuse to apply an HTTP-only ALB in prod).
-# certificate_arn = "arn:aws:acm:eu-west-1:123456789012:certificate/xxxxxxxx"
-certificate_arn = ""
+# ── App Runner (INFRA-018) ────────────────────────────────────────────────────
+# Idle cost = memory + 1/10th of vCPU rate:
+#   1 vCPU / 2 GB idle ≈ $2.55 (cpu) + $10.08 (mem) = ~$12.6/mo
+#   0.5 vCPU / 1 GB idle ≈ $2.55/mo (may cold-start on numpy imports)
+# Bump to 2 vCPU / 4 GB if the timeseries pipeline saturates a single vCPU.
+apprunner_cpu    = "1 vCPU"
+apprunner_memory = "2 GB"
 
 # API key protecting the mutating backend endpoints (POST /api/events,
 # /api/events/upload, /api/aws/connect, /admin/cache/clear). Required in prod.
 # Prefer TF_VAR_api_key over storing it in this file; AWS Secrets Manager is
-# the recommended target for production (see ecs.tf).
+# the recommended target for production.
 api_key = ""
 
-# JWT signing key for the session cookie (auth POC). Must be ≥32 chars in
-# prod — generate with `openssl rand -base64 48`. Rotating invalidates every
-# active session. Same guidance as api_key: prefer TF_VAR_session_secret.
+# JWT signing key for the session cookie. Must be ≥32 chars in prod —
+# generate with `openssl rand -base64 48`. Rotating invalidates every active
+# session. Same guidance as api_key: prefer TF_VAR_session_secret.
 session_secret = ""
 
 # Google OAuth2 — register at https://console.cloud.google.com/apis/credentials
-# The redirect URI must be HTTPS. Point it at your Vercel deployment (the
-# Next.js rewrite forwards /api/gcp/callback to the backend transparently)
-# so Google, Vercel and users all share a single canonical domain.
+# The redirect URI points at the Vercel frontend (the Next.js rewrite forwards
+# /api/gcp/callback to the App Runner backend transparently) so Google,
+# Vercel and users all share a single canonical domain.
 google_client_id     = ""
 google_client_secret = ""
 google_redirect_uri  = "https://finopsgcp.vercel.app/api/gcp/callback"
@@ -42,8 +35,8 @@ frontend_url         = "https://finopsgcp.vercel.app"
 
 # ── AWS Bedrock ───────────────────────────────────────────────────────────────
 # All Bedrock values below are NON-SENSITIVE (region, model IDs). Bedrock
-# credentials come from the ECS task role — no AWS keys in env vars.
-# Rotate by editing here and re-applying; no secret rotation needed.
+# credentials come from the App Runner instance role — no AWS keys in env
+# vars. Rotate by editing here and re-applying; no secret rotation needed.
 
 # Region where Bedrock is called. Claude models in EU are hosted in
 # eu-west-3 / eu-central-1 — this can differ from your primary aws_region.
@@ -51,9 +44,9 @@ bedrock_region = "eu-west-3"
 
 # Model ID or cross-region EU inference profile.
 # Examples:
-#   "anthropic.claude-sonnet-4-6"          (single-region)
-#   "eu.anthropic.claude-sonnet-4-6"       (EU cross-region inference profile)
-bedrock_model_id = "eu.anthropic.claude-sonnet-4-6"
+#   "anthropic.claude-sonnet-4-5-20250929-v1:0"       (single-region)
+#   "eu.anthropic.claude-sonnet-4-5-20250929-v1:0"    (EU cross-region profile)
+bedrock_model_id = "eu.anthropic.claude-sonnet-4-5-20250929-v1:0"
 
 # Bedrock Guardrail — strongly recommended when processing client data
 # (PII filtering, prompt-injection defence). Create in the Bedrock console,
@@ -61,16 +54,22 @@ bedrock_model_id = "eu.anthropic.claude-sonnet-4-6"
 bedrock_guardrail_id      = ""
 bedrock_guardrail_version = "DRAFT"
 
-# Least-privilege IAM: narrow this list to the exact model ARNs you invoke.
-# Calling an inference profile (eu.anthropic.claude-*) requires BOTH the
-# profile ARN AND the underlying foundation model ARNs — Bedrock's authz
-# walks through both hops.
+# Least-privilege IAM: narrow to the exact model ARNs you invoke. Calling an
+# inference profile (eu.anthropic.claude-*) requires BOTH the profile ARN
+# AND the underlying foundation model ARNs — Bedrock's authz walks both hops.
 bedrock_allowed_model_arns = [
-  "arn:aws:bedrock:*::foundation-model/anthropic.claude-*",
-  "arn:aws:bedrock:*:*:inference-profile/*anthropic.claude-*",
-  "arn:aws:bedrock:*:*:application-inference-profile/*",
+  "arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-4-5-20250929-v1:0",
+  "arn:aws:bedrock:*:*:inference-profile/eu.anthropic.claude-sonnet-4-5-20250929-v1:0",
 ]
 
 # Default max output tokens for InvokeModel. Exposed as env var so tuning
 # doesn't require a code deploy.
 bedrock_max_tokens = 4096
+
+# Optional: Secrets Manager ARN for AWS_BEARER_TOKEN_BEDROCK. Leave empty
+# to use the App Runner instance role (SigV4) instead — recommended path.
+bedrock_api_key_secret_arn = ""
+
+# ── Ops alerting ──────────────────────────────────────────────────────────────
+# Non-prod: leave empty. Prod: on-call rota so CPU / memory / 5xx alarms page.
+alarm_email_subscribers = []

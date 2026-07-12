@@ -21,38 +21,29 @@ variable "app_name" {
   default     = "finops"
 }
 
-# ── Networking ─────────────────────────────────────────────────────────────────
+# ── App Runner ────────────────────────────────────────────────────────────────
 
-variable "vpc_cidr" {
-  description = "CIDR block for the VPC"
+variable "apprunner_cpu" {
+  description = <<-EOT
+    App Runner instance CPU. Allowed: "0.25 vCPU", "0.5 vCPU", "1 vCPU",
+    "2 vCPU", "4 vCPU". Default 1 vCPU matches the previous 512-CU Fargate
+    setup for numpy/statsmodels workloads. Idle vCPU is billed at $0.007/h
+    (~$5/mo) vs $0.064/h active — pick the smallest tier that fits the
+    cold-start memory budget.
+  EOT
   type        = string
-  default     = "10.0.0.0/16"
+  default     = "1 vCPU"
 }
 
-variable "az_count" {
-  description = "Number of availability zones to deploy into (2 minimum recommended)"
-  type        = number
-  default     = 2
-}
-
-# ── ECS / Fargate ──────────────────────────────────────────────────────────────
-
-variable "container_cpu" {
-  description = "CPU units for the Fargate task (512 = 0.5 vCPU — sufficient for this workload)"
-  type        = number
-  default     = 512
-}
-
-variable "container_memory" {
-  description = "Memory (MiB) for the Fargate task — numpy/scipy/statsmodels need ≥ 1.5 GB at cold start"
-  type        = number
-  default     = 2048
-}
-
-variable "desired_count" {
-  description = "Number of running ECS tasks"
-  type        = number
-  default     = 1
+variable "apprunner_memory" {
+  description = <<-EOT
+    App Runner instance memory. Allowed values depend on the CPU tier:
+      1 vCPU → "2 GB", "3 GB", "4 GB"
+    2 GB is the minimum for the FinOps backend — numpy/scipy/statsmodels
+    push resident memory above 1.5 GB at cold start.
+  EOT
+  type        = string
+  default     = "2 GB"
 }
 
 variable "app_port" {
@@ -77,13 +68,13 @@ variable "image_tag" {
   }
 }
 
-# ── ALB / HTTPS ────────────────────────────────────────────────────────────────
-
-variable "certificate_arn" {
-  description = "ACM certificate ARN for HTTPS listener. Leave empty to use HTTP-only."
+variable "health_check_path" {
+  description = "App Runner health check path (must return HTTP 200)"
   type        = string
-  default     = ""
+  default     = "/health"
 }
+
+# ── Secrets / auth ────────────────────────────────────────────────────────────
 
 variable "api_key" {
   description = "API key protecting the mutating backend endpoints (POST /api/events, /api/events/upload, /api/aws/connect, /admin/cache/clear). Required in prod. Injected as the API_KEY env var only when non-empty."
@@ -99,12 +90,6 @@ variable "session_secret" {
   default     = ""
 }
 
-variable "health_check_path" {
-  description = "ALB target group health check path"
-  type        = string
-  default     = "/health"
-}
-
 # ── Google OAuth2 ──────────────────────────────────────────────────────────────
 
 variable "google_client_id" {
@@ -114,20 +99,20 @@ variable "google_client_id" {
 }
 
 variable "google_client_secret" {
-  description = "Google OAuth2 client secret. DEPRECATED for production — set google_client_secret_arn instead and let ECS resolve it from Secrets Manager at startup. Leaving this in plain tfvars persists the secret in terraform.tfstate."
+  description = "Google OAuth2 client secret. DEPRECATED for production — set google_client_secret_arn instead and let App Runner resolve it from Secrets Manager at startup. Leaving this in plain tfvars persists the secret in terraform.tfstate."
   type        = string
   sensitive   = true
   default     = ""
 }
 
 variable "google_client_secret_arn" {
-  description = "ARN of a Secrets Manager secret storing GOOGLE_CLIENT_SECRET. When set, ECS resolves it at startup and injects it as an env var; leave the plain google_client_secret empty in that case."
+  description = "ARN of a Secrets Manager secret storing GOOGLE_CLIENT_SECRET. When set, App Runner resolves it at startup via the instance role and injects it as an env var; leave the plain google_client_secret empty in that case."
   type        = string
   default     = ""
 }
 
 variable "google_redirect_uri" {
-  description = "OAuth2 redirect URI — must match what is registered in Google Cloud Console"
+  description = "OAuth2 redirect URI — must match what is registered in Google Cloud Console. Note: with App Runner, this becomes https://<service_url>/api/auth/google/callback."
   type        = string
   default     = ""
 }
@@ -139,8 +124,8 @@ variable "frontend_url" {
 }
 
 # ── AWS Bedrock ────────────────────────────────────────────────────────────────
-# Bedrock is called via the ECS task role (aws_iam_role.ecs_task) — no AWS
-# credentials are injected as env vars. Only non-sensitive config is passed.
+# Bedrock is called via the App Runner instance role — no AWS credentials
+# are injected as env vars. Only non-sensitive config is passed.
 
 variable "bedrock_region" {
   description = "AWS region for Bedrock API calls. May differ from aws_region if the target model is not available in the primary region (e.g. Claude in eu-west-3 / eu-central-1)."
@@ -155,7 +140,7 @@ variable "bedrock_model_id" {
 }
 
 variable "bedrock_api_key_secret_arn" {
-  description = "ARN of a Secrets Manager secret storing the AWS_BEARER_TOKEN_BEDROCK. Leave empty to use the ECS task role (SigV4) instead — recommended path. When set, the value is injected as the AWS_BEARER_TOKEN_BEDROCK env var via the ECS `secrets` block."
+  description = "ARN of a Secrets Manager secret storing the AWS_BEARER_TOKEN_BEDROCK. Leave empty to use the App Runner instance role (SigV4) instead — recommended path. When set, the value is injected as the AWS_BEARER_TOKEN_BEDROCK env var via the App Runner `runtime_environment_secrets` block."
   type        = string
   default     = ""
 }
@@ -174,8 +159,8 @@ variable "bedrock_guardrail_version" {
 
 variable "bedrock_allowed_model_arns" {
   description = <<-EOT
-    Bedrock ARNs the task role is allowed to invoke. Least privilege — narrow to
-    the exact model(s)/profiles you use.
+    Bedrock ARNs the App Runner instance role is allowed to invoke. Least
+    privilege — narrow to the exact model(s)/profiles you use.
 
     Calling an inference profile (e.g. eu.anthropic.claude-sonnet-4-5-*) requires
     IAM permission on BOTH the profile ARN AND the underlying foundation models
@@ -193,9 +178,7 @@ variable "bedrock_allowed_model_arns" {
   EOT
   type        = list(string)
   default = [
-    # Foundation model actually invoked (Sonnet 4.5, versioned).
     "arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-4-5-20250929-v1:0",
-    # EU cross-region inference profile the agent targets (see bedrock_model_id).
     "arn:aws:bedrock:*:*:inference-profile/eu.anthropic.claude-sonnet-4-5-20250929-v1:0",
   ]
 }
@@ -211,9 +194,9 @@ variable "alarm_email_subscribers" {
   description = <<-EOT
     Email addresses subscribed to the CloudWatch alarm SNS topic (INFRA-010).
     Leave empty in dev/staging; set to the on-call rota in prod so CPU / memory
-    / 5xx / unhealthy-target alarms actually page someone. For PagerDuty or
-    Opsgenie, subscribe the integration URL to the topic ARN outside of Terraform
-    (or extend this file with an additional aws_sns_topic_subscription).
+    / 5xx alarms actually page someone. For PagerDuty or Opsgenie, subscribe
+    the integration URL to the topic ARN outside of Terraform (or extend this
+    file with an additional aws_sns_topic_subscription).
   EOT
   type        = list(string)
   default     = []

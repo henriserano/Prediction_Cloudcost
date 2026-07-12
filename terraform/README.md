@@ -1,6 +1,13 @@
 # Terraform · Infrastructure AWS
 
-Infrastructure as code pour le backend FinOps. Déploie une architecture AWS ECS Fargate + ALB + ECR + VPC dans la région `eu-west-1`, avec CloudWatch logs/alarms et auto-scaling.
+Infrastructure as code pour le backend FinOps. Déploie une architecture AWS App Runner + ECR + DynamoDB dans la région `eu-west-1`, avec CloudWatch logs/alarms.
+
+> **INFRA-018 (2026-07)** — migration ALB+Fargate+VPC → App Runner. Motivation :
+> le stack précédent facturait ~$40/mo de coût fixe (ALB $16, IPv4 publiques $7,
+> Fargate 24/7 $18) pour ≤10 utilisateurs. App Runner ramène le baseline à
+> ~$13/mo et facture le CPU à 1/10 du taux normal quand personne n'utilise
+> l'app. Le reste de ce README décrit encore l'ancienne archi par endroits —
+> **fiez-vous au code, pas à la doc, tant qu'elle n'a pas été réécrite**.
 
 ---
 

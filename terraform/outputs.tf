@@ -1,11 +1,21 @@
-output "alb_dns_name" {
-  description = "Public DNS of the Application Load Balancer"
-  value       = aws_lb.app.dns_name
+output "apprunner_service_url" {
+  description = "Public HTTPS URL of the App Runner service (managed cert, HTTPS by default)"
+  value       = "https://${aws_apprunner_service.app.service_url}"
 }
 
 output "api_base_url" {
   description = "Base URL to call the FastAPI backend"
-  value       = local.https_enabled ? "https://${aws_lb.app.dns_name}" : "http://${aws_lb.app.dns_name}"
+  value       = "https://${aws_apprunner_service.app.service_url}"
+}
+
+output "apprunner_service_arn" {
+  description = "App Runner service ARN — passed to `aws apprunner start-deployment` by deploy.sh"
+  value       = aws_apprunner_service.app.arn
+}
+
+output "apprunner_service_name" {
+  description = "App Runner service name"
+  value       = aws_apprunner_service.app.service_name
 }
 
 output "ecr_repository_url" {
@@ -13,28 +23,8 @@ output "ecr_repository_url" {
   value       = aws_ecr_repository.app.repository_url
 }
 
-output "ecs_cluster_name" {
-  description = "ECS cluster name"
-  value       = aws_ecs_cluster.main.name
-}
-
-output "ecs_service_name" {
-  description = "ECS service name"
-  value       = aws_ecs_service.app.name
-}
-
-output "ecs_task_family" {
-  description = "Task-definition family name — pass this (not an ARN) to `ecs update-service --task-definition` so ECS resolves to the latest ACTIVE revision."
-  value       = aws_ecs_task_definition.app.family
-}
-
-output "cloudwatch_log_group" {
-  description = "CloudWatch log group for ECS task output"
-  value       = aws_cloudwatch_log_group.app.name
-}
-
 output "ecr_push_policy_arn" {
-  description = "ARN of the IAM policy to attach to your CI/CD role for ECR push + service update"
+  description = "ARN of the IAM policy to attach to your CI/CD role for ECR push + App Runner deploy"
   value       = aws_iam_policy.ecr_push.arn
 }
 

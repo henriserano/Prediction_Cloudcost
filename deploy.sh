@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# deploy.sh — Build, push to ECR and force a new ECS deployment
+# deploy.sh — Build, push to ECR and trigger an App Runner deployment
 #
 # Usage:
 #   ./deploy.sh [--env dev|staging|prod] [--region eu-west-1] [--tag v1.2.3]
@@ -10,10 +10,9 @@
 #   - Docker daemon running
 #
 # Post-deploy behaviour (INFRA-016):
-#   The script waits for services-stable, then hits /health via the ALB. If
-#   /health does not return 200 within HEALTH_TIMEOUT_S seconds, the previous
-#   task-definition revision is rolled back automatically via
-#   `aws ecs update-service --task-definition <prev-revision>`.
+#   The script waits for the App Runner deployment to reach RUNNING, then
+#   probes /health on the public service URL. On failure the previous image
+#   tag is redeployed automatically via `apprunner update-service`.
 set -euo pipefail
 
 # ── Defaults ──────────────────────────────────────────────────────────────────
@@ -25,6 +24,7 @@ BACK_DIR="$(cd "$(dirname "$0")/back" && pwd)"
 TF_DIR="$(cd "$(dirname "$0")/terraform" && pwd)"
 HEALTH_TIMEOUT_S=180
 HEALTH_INTERVAL_S=5
+DEPLOY_TIMEOUT_S=900   # App Runner deployments typically settle in 3-6 min
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -37,8 +37,6 @@ while [[ $# -gt 0 ]]; do
 done
 
 # ── Preflight ─────────────────────────────────────────────────────────────────
-# INFRA-016: fail fast when a required CLI is missing (or when Docker is not
-# running / AWS creds are stale) rather than half-way through the deploy.
 fail() { echo "❌ $*" >&2; exit 1; }
 
 check_cmd() {
@@ -56,11 +54,6 @@ if [[ -z "${TAG}" || "${TAG}" == "latest" ]]; then
   fail "Refusing to deploy with an empty tag or the moving tag 'latest'. Pass --tag <git-sha> (variables.tf validation also enforces this)."
 fi
 
-# INFRA-011: the S3 backend must be initialised locally before the first apply.
-# ``bootstrap-backend.sh`` provisions the bucket + Dynamo lock table + writes
-# terraform/backend.hcl and runs ``terraform init``. Detect the un-initialised
-# state and point the operator at the fix instead of surfacing terraform's
-# opaque "Backend initialization required" error.
 if [[ ! -d "${TF_DIR}/.terraform" || ! -f "${TF_DIR}/backend.hcl" ]]; then
   echo "❌ Terraform backend is not initialised in ${TF_DIR}."
   echo ""
@@ -74,16 +67,13 @@ if [[ ! -d "${TF_DIR}/.terraform" || ! -f "${TF_DIR}/backend.hcl" ]]; then
 fi
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "  FinOps Deploy"
+echo "  FinOps Deploy (App Runner)"
 echo "  env    : $ENV"
 echo "  region : $REGION"
 echo "  tag    : $TAG"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-# ── Step 1 — Terraform apply targeted on ECR (repository must exist to push) ──
-# image_tag is required by the variable's validation block, so we pass a
-# placeholder tag here — targeted at ECR, no task-definition change happens
-# on this pass (aws_ecr_repository is unaffected by image_tag).
+# ── Step 1 — Terraform apply targeted on ECR (repo must exist to push) ────────
 echo "[1/7] Applying Terraform (ECR repository)..."
 cd "$TF_DIR"
 terraform apply \
@@ -113,8 +103,8 @@ aws ecr get-login-password --region "$REGION" \
 docker push "${ECR_URL}:${TAG}"
 docker push "${ECR_URL}:latest"
 
-# ── Step 4 — Full Terraform apply with the new image tag ──────────────────────
-echo "[4/7] Updating task definition (image_tag=$TAG)..."
+# ── Step 4 — Full Terraform apply (ensures service exists, envvars up to date) ─
+echo "[4/7] Applying Terraform (App Runner service, envvars, IAM)..."
 cd "$TF_DIR"
 terraform apply \
   -var "image_tag=${TAG}" \
@@ -122,43 +112,61 @@ terraform apply \
   -var "aws_region=${REGION}" \
   -auto-approve
 
-CLUSTER=$(terraform output -raw ecs_cluster_name)
-SERVICE=$(terraform output -raw ecs_service_name)
+SERVICE_ARN=$(terraform output -raw apprunner_service_arn)
+SERVICE_NAME=$(terraform output -raw apprunner_service_name)
 API_URL=$(terraform output -raw api_base_url)
-TASK_FAMILY=$(terraform output -raw ecs_task_family 2>/dev/null || echo "${APP_NAME}-${ENV}-task")
 
-echo "  ECS  : $CLUSTER / $SERVICE"
-echo "  URL  : $API_URL"
+echo "  service : $SERVICE_NAME"
+echo "  URL     : $API_URL"
 
-# INFRA-016: capture the currently-running task-def BEFORE we point the
-# service at the new one, so we have a target to roll back to.
-PREV_TASK_DEF=$(aws ecs describe-services \
-  --cluster "$CLUSTER" --services "$SERVICE" --region "$REGION" \
-  --query 'services[0].taskDefinition' --output text)
-echo "  prev task-def : $PREV_TASK_DEF"
+# INFRA-016: capture the current image identifier BEFORE we redeploy, so we
+# have a rollback target if the new image fails its health probe.
+PREV_IMAGE=$(aws apprunner describe-service \
+  --service-arn "$SERVICE_ARN" --region "$REGION" \
+  --query 'Service.SourceConfiguration.ImageRepository.ImageIdentifier' \
+  --output text)
+echo "  prev image : $PREV_IMAGE"
 
-# ── Step 5 — Force new ECS deployment ─────────────────────────────────────────
-echo "[5/7] Triggering rolling deployment (task-def family: $TASK_FAMILY)..."
-aws ecs update-service \
-  --cluster "$CLUSTER" \
-  --service "$SERVICE" \
-  --task-definition "$TASK_FAMILY" \
-  --force-new-deployment \
+# ── Step 5 — Point the service at the new image tag & start deployment ────────
+# Terraform ignores image_identifier drift (see apprunner.tf lifecycle block),
+# so we mutate the service directly via the API.
+echo "[5/7] Updating service image and triggering deployment..."
+aws apprunner update-service \
+  --service-arn "$SERVICE_ARN" \
   --region "$REGION" \
-  --output json | jq -r '.service.deployments[0] | "  deployment: \(.id)  status: \(.status)  task-def: \(.taskDefinition)"'
+  --source-configuration "ImageRepository={ImageIdentifier=${ECR_URL}:${TAG},ImageRepositoryType=ECR,ImageConfiguration={Port=8080}}" \
+  --output json >/dev/null
 
-# ── Step 6 — Wait for stability ───────────────────────────────────────────────
-echo "[6/7] Waiting for service to stabilise (up to 10 min)..."
-aws ecs wait services-stable \
-  --cluster "$CLUSTER" \
-  --services "$SERVICE" \
-  --region "$REGION"
+OPERATION_ID=$(aws apprunner start-deployment \
+  --service-arn "$SERVICE_ARN" \
+  --region "$REGION" \
+  --query 'OperationId' --output text)
+echo "  deployment operation : $OPERATION_ID"
+
+# ── Step 6 — Wait for the App Runner service to reach RUNNING ─────────────────
+echo "[6/7] Waiting for service to stabilise (up to $((DEPLOY_TIMEOUT_S / 60)) min)..."
+deploy_deadline=$((SECONDS + DEPLOY_TIMEOUT_S))
+while (( SECONDS < deploy_deadline )); do
+  STATUS=$(aws apprunner describe-service \
+    --service-arn "$SERVICE_ARN" --region "$REGION" \
+    --query 'Service.Status' --output text)
+  case "$STATUS" in
+    RUNNING)             echo "  status: RUNNING"; break ;;
+    OPERATION_IN_PROGRESS) echo "  status: OPERATION_IN_PROGRESS…"; sleep 15 ;;
+    CREATE_FAILED|DELETE_FAILED|PAUSED)
+                         fail "App Runner service in unrecoverable state: $STATUS" ;;
+    *)                   echo "  status: $STATUS"; sleep 15 ;;
+  esac
+done
+
+FINAL_STATUS=$(aws apprunner describe-service \
+  --service-arn "$SERVICE_ARN" --region "$REGION" \
+  --query 'Service.Status' --output text)
+if [[ "$FINAL_STATUS" != "RUNNING" ]]; then
+  fail "App Runner service did not reach RUNNING within ${DEPLOY_TIMEOUT_S}s (last: $FINAL_STATUS)"
+fi
 
 # ── Step 7 — Post-deploy health check (with automatic rollback) ───────────────
-# INFRA-016: services-stable only confirms ECS finished the rolling update; a
-# container may still crash on the /health probe or serve 5xx. We hit /health
-# directly through the ALB and roll back the task-def if it fails to come
-# green within HEALTH_TIMEOUT_S.
 HEALTH_URL="${API_URL%/}/health"
 echo "[7/7] Probing $HEALTH_URL (timeout ${HEALTH_TIMEOUT_S}s)..."
 
@@ -175,15 +183,16 @@ while (( SECONDS < deadline )); do
 done
 
 if (( health_ok == 0 )); then
-  echo "❌ Health check failed after ${HEALTH_TIMEOUT_S}s — rolling back to ${PREV_TASK_DEF}"
-  aws ecs update-service \
-    --cluster "$CLUSTER" \
-    --service "$SERVICE" \
-    --task-definition "$PREV_TASK_DEF" \
-    --force-new-deployment \
-    --region "$REGION" >/dev/null
-  echo "   Rollback issued. Investigate CloudWatch logs before retrying:"
-  echo "   aws logs tail /ecs/${APP_NAME}-${ENV} --region ${REGION} --since 15m"
+  echo "❌ Health check failed after ${HEALTH_TIMEOUT_S}s — rolling back to ${PREV_IMAGE}"
+  aws apprunner update-service \
+    --service-arn "$SERVICE_ARN" \
+    --region "$REGION" \
+    --source-configuration "ImageRepository={ImageIdentifier=${PREV_IMAGE},ImageRepositoryType=ECR,ImageConfiguration={Port=8080}}" \
+    --output json >/dev/null
+  aws apprunner start-deployment \
+    --service-arn "$SERVICE_ARN" --region "$REGION" >/dev/null
+  echo "   Rollback issued. Investigate App Runner logs before retrying:"
+  echo "   aws logs tail /aws/apprunner/${SERVICE_NAME} --region ${REGION} --since 15m --follow"
   exit 1
 fi
 

@@ -109,9 +109,9 @@ resource "aws_dynamodb_table" "credentials" {
   }
 }
 
-# IAM permissions so the ECS task role can read/write the tables.
-# Attached in iam.tf; declared here to keep the table-related policy
-# grouped with the resources.
+# IAM policy that the App Runner instance role attaches (see apprunner.tf).
+# Kept in this file so the DynamoDB policy stays co-located with the tables
+# it authorises.
 data "aws_iam_policy_document" "dynamodb_access" {
   statement {
     effect = "Allow"
@@ -137,9 +137,4 @@ resource "aws_iam_policy" "dynamodb_access" {
   name        = "${local.prefix}-dynamodb-access"
   description = "Read/write access to the FinOps DynamoDB tables"
   policy      = data.aws_iam_policy_document.dynamodb_access.json
-}
-
-resource "aws_iam_role_policy_attachment" "task_dynamodb" {
-  role       = aws_iam_role.ecs_task.name
-  policy_arn = aws_iam_policy.dynamodb_access.arn
 }

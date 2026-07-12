@@ -522,7 +522,7 @@ vercel --prod
 
 Variables à définir dans Vercel :
 
-- `NEXT_PUBLIC_API_URL` = URL publique du backend (ex : `https://finops-dev-alb-…elb.amazonaws.com`)
+- `NEXT_PUBLIC_API_URL` = URL publique du backend App Runner (ex : `https://rtg5ndsskm.eu-west-1.awsapprunner.com`)
 - `BACKEND_API_KEY` = clé API du backend (header `X-API-Key` des endpoints mutateurs) — secret runtime côté serveur, jamais exposé au client
 
 ### Docker (self-hosted)
