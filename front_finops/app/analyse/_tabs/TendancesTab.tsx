@@ -10,6 +10,8 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Badge } from "@/components/ui/badge"
 import { QueryError } from "@/components/ui/query-error"
 import { useSTL, useSTLStrengths, useAnomalies, useStats, useStationarity } from "@/lib/hooks/useApi"
+import { isAllLocal, usePortfolioAggregate } from "@/lib/hooks/usePortfolios"
+import type { AnalyseTabProps } from "../page"
 
 const COLOR_BRAND = "oklch(0.14 0 0)"
 const COLOR_GREEN = "oklch(0.68 0.15 160)"
@@ -45,7 +47,129 @@ function StrengthBar({ label, value, color }: { label: string; value: number; co
   )
 }
 
-export function TendancesTab() {
+export function TendancesTab({ source, portfolio }: AnalyseTabProps) {
+  // All-local portfolios have daily data — same events store as Vue projet.
+  // Cloud-mixed portfolios only expose monthly aggregates, so we render a
+  // best-effort monthly view instead of a blank unavailable state.
+  if (source === "portefeuille" && portfolio && !isAllLocal(portfolio)) {
+    return <TendancesPortefeuilleMonthly portfolio={portfolio} />
+  }
+
+  return <TendancesProjet />
+}
+
+// Monthly best-effort view rendered when a portfolio mixes cloud members.
+// Shows what the /billing aggregate can actually support: a monthly trend
+// line and simple descriptive stats. STL / stationarity / daily anomalies
+// aren't computed — they require a daily series with dozens of points.
+function TendancesPortefeuilleMonthly({
+  portfolio,
+}: {
+  portfolio: NonNullable<AnalyseTabProps["portfolio"]>
+}) {
+  const aggregate = usePortfolioAggregate(portfolio)
+  const monthly = aggregate.monthly
+
+  const values = monthly.map((m) => m.cost)
+  const n = values.length
+  const mean = n > 0 ? values.reduce((s, v) => s + v, 0) / n : 0
+  const sorted = [...values].sort((a, b) => a - b)
+  const median = n === 0
+    ? 0
+    : n % 2 === 1
+      ? sorted[(n - 1) / 2]
+      : (sorted[n / 2 - 1] + sorted[n / 2]) / 2
+  const std = n > 0
+    ? Math.sqrt(values.reduce((s, v) => s + (v - mean) ** 2, 0) / n)
+    : 0
+  const min = n > 0 ? sorted[0] : 0
+  const max = n > 0 ? sorted[n - 1] : 0
+
+  if (aggregate.loading) {
+    return <Skeleton className="h-[280px]" />
+  }
+  if (n === 0) {
+    return (
+      <SectionCard>
+        <p className="text-sm text-muted-foreground">
+          Aucune donnée mensuelle disponible pour ce portefeuille.
+        </p>
+      </SectionCard>
+    )
+  }
+
+  return (
+    <>
+      <section aria-label="Vue portefeuille" className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+        <SectionCard
+          title="Statistiques mensuelles"
+          description={`Distribution de la dépense mensuelle · ${n} mois d'historique`}
+          className="lg:col-span-1"
+        >
+          <div className="pt-1">
+            <StatRow label="Moyenne" value={mean} unit=" €" />
+            <StatRow label="Médiane" value={median} unit=" €" />
+            <StatRow label="Écart-type" value={std} unit=" €" />
+            <StatRow label="Coef. variation" value={mean > 0 ? (std / mean) * 100 : 0} unit="%" />
+            <StatRow label="Min" value={min} unit=" €" />
+            <StatRow label="Max" value={max} unit=" €" />
+          </div>
+        </SectionCard>
+
+        <SectionCard
+          title="Tendance mensuelle"
+          description={`${portfolio.name} · agrégat multi-cloud`}
+          className="lg:col-span-2"
+        >
+          <ResponsiveContainer width="100%" height={280}>
+            <AreaChart data={monthly} margin={{ left: -18, right: 8, top: 8 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="oklch(0 0 0 / 0.06)" />
+              <XAxis
+                dataKey="month"
+                tick={{ fontSize: 10, fill: COLOR_MUTED }}
+                tickLine={false}
+                axisLine={false}
+              />
+              <YAxis
+                tick={{ fontSize: 10, fill: COLOR_MUTED }}
+                tickLine={false}
+                axisLine={false}
+                unit=" €"
+                width={64}
+              />
+              <Tooltip
+                contentStyle={{
+                  borderRadius: 10,
+                  border: "1px solid oklch(0.90 0.010 250)",
+                  fontSize: 12,
+                }}
+                formatter={(v: number) => [`${v.toFixed(2)} €`, "Coût mensuel"]}
+                labelFormatter={(l) => `Mois · ${l}`}
+              />
+              <ReferenceLine y={mean} stroke={COLOR_MUTED} strokeDasharray="2 2"
+                label={{ value: "μ", position: "right", fontSize: 9, fill: COLOR_MUTED }} />
+              <Area
+                type="monotone"
+                dataKey="cost"
+                stroke={COLOR_GREEN}
+                strokeWidth={2}
+                fill={COLOR_GREEN}
+                fillOpacity={0.12}
+              />
+            </AreaChart>
+          </ResponsiveContainer>
+        </SectionCard>
+      </section>
+
+      <p className="text-xs text-muted-foreground">
+        Décomposition STL, tests de stationnarité et détection d&apos;anomalies journalières indisponibles en vue portefeuille cloud — l&apos;agrégat /billing est mensuel par service, pas journalier.
+        Basculer en Vue projet, ou créer un portefeuille contenant uniquement des fichiers importés, pour les activer.
+      </p>
+    </>
+  )
+}
+
+function TendancesProjet() {
   const { data: stl, isLoading: stlLoading, error: stlError, refetch: refetchStl } = useSTL()
   const { data: strengths, isLoading: strengthsLoading, error: strengthsError, refetch: refetchStrengths } = useSTLStrengths()
   const { data: anomalies, isLoading: anomaliesLoading, error: anomaliesError, refetch: refetchAnomalies } = useAnomalies()

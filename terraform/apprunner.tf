@@ -158,6 +158,7 @@ resource "aws_apprunner_service" "app" {
             DDB_TABLE_USERS           = aws_dynamodb_table.users.name
             DDB_TABLE_CONVERSATIONS   = aws_dynamodb_table.conversations.name
             DDB_TABLE_CREDENTIALS     = aws_dynamodb_table.credentials.name
+            DDB_TABLE_PORTFOLIOS      = aws_dynamodb_table.portfolios.name
             BEDROCK_REGION            = var.bedrock_region
             BEDROCK_MODEL_ID          = var.bedrock_model_id
             BEDROCK_GUARDRAIL_ID      = var.bedrock_guardrail_id

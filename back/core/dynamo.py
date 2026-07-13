@@ -60,3 +60,7 @@ def conversations_table() -> "Table":
 
 def credentials_table() -> "Table":
     return _require_table(get_settings().ddb_table_credentials, "credentials")
+
+
+def portfolios_table() -> "Table":
+    return _require_table(get_settings().ddb_table_portfolios, "portfolios")

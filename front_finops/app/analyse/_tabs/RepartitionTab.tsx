@@ -1,21 +1,22 @@
 "use client"
 
-import { useMemo, useState } from "react"
+import { useMemo } from "react"
 import Link from "next/link"
 import {
   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, Cell, ReferenceLine,
 } from "recharts"
-import { Layers, Crown, PieChart, Cloud, HardDrive, ArrowUpRight } from "lucide-react"
+import { Layers, Crown, PieChart, Briefcase, ArrowUpRight } from "lucide-react"
 import { SectionCard } from "@/components/ui/section-card"
 import { KpiCard } from "@/components/ui/kpi-card"
 import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
 import { EmptyState } from "@/components/ui/empty-state"
 import { Button } from "@/components/ui/button"
-import { useServices, useGCPStatus, useGCPBilling } from "@/lib/hooks/useApi"
-import { useSelectedGCPProject } from "@/lib/hooks/useSelectedGCPProject"
+import { useServices } from "@/lib/hooks/useApi"
+import { isAllLocal, usePortfolioAggregate } from "@/lib/hooks/usePortfolios"
 import { cn, truncateLabel } from "@/lib/utils"
+import type { AnalyseTabProps } from "../page"
 
 // Sia chart palette — black, green, sky-deep, blush-deep, gold
 const CHART_COLORS = [
@@ -35,7 +36,7 @@ const COLOR_MUTED = "oklch(0.65 0.02 250)"
 import type { ServiceCategory } from "@/lib/types"
 import { CATEGORY_META, CATEGORY_ORDER } from "@/lib/service-taxonomy"
 
-type Source = "local" | "gcp"
+type Source = "projet" | "portefeuille"
 
 interface UnifiedRow {
   service: string
@@ -130,116 +131,37 @@ function CVBadge({ cv }: { cv: number | null }) {
 }
 
 // ---------------------------------------------------------------------------
-// Source picker — visible only when GCP is authenticated and a project is set
+// Page — source + portfolio come from the /analyse page-level picker via props.
 // ---------------------------------------------------------------------------
 
-function SourcePicker({
-  source,
-  onChange,
-  gcpAvailable,
-  gcpProjectId,
-}: {
-  source: Source
-  onChange: (s: Source) => void
-  gcpAvailable: boolean
-  gcpProjectId: string
-}) {
-  return (
-    <nav
-      aria-label="Source des données"
-      className="inline-flex rounded-xl border border-border bg-card p-1 gap-1 shadow-sm"
-    >
-      <button
-        type="button"
-        onClick={() => onChange("local")}
-        aria-pressed={source === "local"}
-        className={cn(
-          "inline-flex items-center gap-2 rounded-lg px-3.5 py-2 text-sm font-medium transition-all",
-          source === "local"
-            ? "bg-brand text-brand-foreground shadow-sm"
-            : "text-muted-foreground hover:bg-muted hover:text-foreground"
-        )}
-      >
-        <HardDrive
-          className={cn("h-3.5 w-3.5", source === "local" ? "text-[color:var(--accent-green)]" : "text-muted-foreground")}
-          aria-hidden
-        />
-        <span>Local</span>
-        <span className={cn("text-[10px] font-medium", source === "local" ? "text-white/60" : "text-muted-foreground/60")}>
-          Parquet
-        </span>
-      </button>
-      <button
-        type="button"
-        onClick={() => onChange("gcp")}
-        disabled={!gcpAvailable}
-        aria-pressed={source === "gcp"}
-        title={
-          gcpAvailable
-            ? undefined
-            : "Connectez un projet GCP via Sources de données pour activer cette source"
-        }
-        className={cn(
-          "inline-flex items-center gap-2 rounded-lg px-3.5 py-2 text-sm font-medium transition-all disabled:opacity-40 disabled:cursor-not-allowed",
-          source === "gcp"
-            ? "bg-brand text-brand-foreground shadow-sm"
-            : "text-muted-foreground hover:bg-muted hover:text-foreground"
-        )}
-      >
-        <Cloud
-          className={cn("h-3.5 w-3.5", source === "gcp" ? "text-[color:var(--accent-green)]" : "text-muted-foreground")}
-          aria-hidden
-        />
-        <span>Google Cloud</span>
-        <span
-          className={cn(
-            "text-[10px] font-medium max-w-[120px] truncate",
-            source === "gcp" ? "text-white/60" : "text-muted-foreground/60"
-          )}
-        >
-          {gcpProjectId || "aucun projet"}
-        </span>
-      </button>
-    </nav>
-  )
-}
+export function RepartitionTab({ source, portfolio }: AnalyseTabProps) {
+  // Fall back to projet when: no portfolio selected, OR the portfolio only
+  // contains local members (data is identical to the local events store, and
+  // the projet body has the CV/volatility column that the aggregate can't
+  // reconstruct from monthly data).
+  const effectiveSource: Source =
+    source === "portefeuille" && portfolio && !isAllLocal(portfolio)
+      ? "portefeuille"
+      : "projet"
 
-// ---------------------------------------------------------------------------
-// Page
-// ---------------------------------------------------------------------------
-
-export function RepartitionTab() {
-  const [gcpProjectId] = useSelectedGCPProject()
-  const { data: gcpStatus } = useGCPStatus()
-
-  const gcpAuth = gcpStatus?.authenticated === true
-  const gcpAvailable = gcpAuth && !!gcpProjectId
-
-  // Source is derived: GCP if available and user hasn't opted out; otherwise local.
-  // We use URL search param via internal state — kept simple via useState.
-  // (Persisting could be added via localStorage later.)
-  const [source, setSource] = useSourceState(gcpAvailable ? "gcp" : "local")
-
-  // Fall back to local if the GCP source becomes unavailable mid-session.
-  const effectiveSource: Source = source === "gcp" && gcpAvailable ? "gcp" : "local"
-
-  // ── LOCAL data ────────────────────────────────────────────────────────────
+  // ── LOCAL data (vue projet) ───────────────────────────────────────────────
   const {
     data: localServices,
     isLoading: localLoading,
     error: localError,
   } = useServices()
 
-  // ── GCP data ──────────────────────────────────────────────────────────────
-  const {
-    data: gcpBilling,
-    isLoading: gcpLoading,
-    error: gcpError,
-  } = useGCPBilling(effectiveSource === "gcp" ? gcpProjectId : undefined, 6)
+  // ── PORTFOLIO data (vue portefeuille) ─────────────────────────────────────
+  // Only fan out when the portfolio view is actually active — usePortfolioAggregate
+  // returns an inert result when passed `null`.
+  const aggregate = usePortfolioAggregate(
+    effectiveSource === "portefeuille" ? portfolio : null,
+  )
 
-  // Adapt to a single unified row shape
+  // Adapt to a single unified row shape. Vue projet keeps the daily-derived
+  // CV (volatility); vue portefeuille has no daily granularity so cv=null.
   const rows: UnifiedRow[] = useMemo(() => {
-    if (effectiveSource === "local") {
+    if (effectiveSource === "projet") {
       return (localServices ?? []).map((s) => ({
         service: s.service,
         cost: s.cost,
@@ -249,67 +171,51 @@ export function RepartitionTab() {
         category: s.category ?? guessCategory(s.service),
       }))
     }
-    if (!gcpBilling) return []
-    const sorted = [...gcpBilling.byService].sort((a, b) => b.cost - a.cost)
-    let acc = 0
-    return sorted.map((s) => {
-      acc += s.pct
-      return {
-        service: s.service,
-        cost: s.cost,
-        pct: s.pct,
-        cumPct: acc,
-        cv: null,
-        category: guessCategory(s.service),
-      }
-    })
-  }, [effectiveSource, localServices, gcpBilling])
+    return aggregate.topServices.map((s) => ({
+      service: s.service,
+      cost: s.cost,
+      pct: s.pct,
+      cumPct: s.cumPct,
+      cv: null,
+      category: guessCategory(s.service),
+    }))
+  }, [effectiveSource, localServices, aggregate.topServices])
 
-  const isLoading = effectiveSource === "local" ? localLoading : gcpLoading
-  const hasError = effectiveSource === "local" ? !!localError : !!gcpError
+  const isLoading = effectiveSource === "projet" ? localLoading : aggregate.loading
+  const hasError = effectiveSource === "projet" ? !!localError : aggregate.hasAnyError && !aggregate.hasAnyData
 
-  const currency = effectiveSource === "gcp" ? gcpBilling?.currency ?? "EUR" : "EUR"
+  const currency = effectiveSource === "portefeuille" ? aggregate.currency : "EUR"
   const top5Pct = rows.slice(0, 5).reduce((s, r) => s + r.pct, 0)
   const topRow = rows[0]
 
-  // ── Period label ──────────────────────────────────────────────────────────
   const periodLabel =
-    effectiveSource === "gcp" && gcpBilling
-      ? `${gcpBilling.period.start} → ${gcpBilling.period.end}`
+    effectiveSource === "portefeuille" && aggregate.monthly.length > 0
+      ? `${aggregate.monthly[0].month} → ${aggregate.monthly[aggregate.monthly.length - 1].month}`
       : "Période complète"
 
   const description =
-    effectiveSource === "gcp"
-      ? `Données Google Cloud · projet ${gcpProjectId} · ${periodLabel}`
+    effectiveSource === "portefeuille" && portfolio
+      ? `Portefeuille · ${portfolio.name} · ${portfolio.members.length} compte${portfolio.members.length > 1 ? "s" : ""} agrégé${portfolio.members.length > 1 ? "s" : ""}`
       : "Analyse Pareto 80/20 · répartition et volatilité par service"
 
   return (
     <>
-      {/* Sub-tab header — source picker + contextual description */}
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <p className="text-sm text-muted-foreground max-w-2xl">{description}</p>
-        <SourcePicker
-          source={effectiveSource}
-          onChange={setSource}
-          gcpAvailable={gcpAvailable}
-          gcpProjectId={gcpProjectId}
-        />
-      </div>
-      {/* Not connected + user tries to see GCP → gentle empty state */}
-      {source === "gcp" && !gcpAvailable && (
+      {/* Contextual description — the source picker itself lives at the
+          /analyse page level so all sub-tabs stay in sync. */}
+      <p className="text-sm text-muted-foreground max-w-3xl">{description}</p>
+
+      {/* Portefeuille asked but no portfolio is currently selected → gentle
+          empty state guiding the user to /portefeuille. */}
+      {source === "portefeuille" && !portfolio && (
         <SectionCard accent="green">
           <EmptyState
-            icon={Cloud}
-            title="Aucun projet Google Cloud sélectionné"
-            description={
-              gcpAuth
-                ? "Choisissez un projet dans GCP Connect pour visualiser sa facturation ici."
-                : "Connectez d'abord votre compte Google Cloud via la page Collecte des données."
-            }
+            icon={Briefcase}
+            title="Aucun portefeuille sélectionné"
+            description="Créez un portefeuille depuis la page Portefeuille pour agréger plusieurs comptes cloud dans cette vue."
             action={
-              <Link href={gcpAuth ? "/gcp-connect" : "/collecte"}>
+              <Link href="/portefeuille">
                 <Button className="gap-2">
-                  {gcpAuth ? "Choisir un projet" : "Connecter Google Cloud"}
+                  Créer un portefeuille
                   <ArrowUpRight className="h-3.5 w-3.5" />
                 </Button>
               </Link>
@@ -323,11 +229,15 @@ export function RepartitionTab() {
         <SectionCard accent="none">
           <EmptyState
             title={
-              effectiveSource === "gcp"
-                ? "Impossible de charger les données GCP"
+              effectiveSource === "portefeuille"
+                ? "Impossible de charger les données du portefeuille"
                 : "Impossible de charger les données locales"
             }
-            description="Vérifiez la connexion au backend et réessayez."
+            description={
+              effectiveSource === "portefeuille"
+                ? "Un ou plusieurs providers ont refusé la requête billing (permission ou session expirée)."
+                : "Vérifiez la connexion au backend et réessayez."
+            }
           />
         </SectionCard>
       )}
@@ -369,7 +279,7 @@ export function RepartitionTab() {
       {!hasError && (
         <SectionCard
           title="Analyse Pareto 80/20"
-          description={`Coût par service (barres) · pourcentage cumulé (ligne) · seuil 80% (référence)${effectiveSource === "gcp" ? ` · devise ${currency}` : ""}`}
+          description={`Coût par service (barres) · pourcentage cumulé (ligne) · seuil 80% (référence)${effectiveSource === "portefeuille" ? ` · devise ${currency}` : ""}`}
         >
           {(isLoading || rows.length === 0) ? (
             <Skeleton className="h-[300px]" />
@@ -437,8 +347,8 @@ export function RepartitionTab() {
         <SectionCard
           title="Détail par service"
           description={
-            effectiveSource === "gcp"
-              ? "Coût, part et part cumulée · volatilité indisponible en source GCP mensuelle"
+            effectiveSource === "portefeuille"
+              ? "Coût, part et part cumulée · volatilité indisponible sur agrégat mensuel"
               : "Coût, part, part cumulée, volatilité et profil de risque"
           }
           className="hidden sm:block"
@@ -548,13 +458,3 @@ export function RepartitionTab() {
   )
 }
 
-// ---------------------------------------------------------------------------
-// useSourceState — auto-picks the default until the user explicitly toggles.
-// Derives the current source from an optional user choice, no effect needed.
-// ---------------------------------------------------------------------------
-
-function useSourceState(defaultSource: Source): [Source, (s: Source) => void] {
-  const [userChoice, setUserChoice] = useState<Source | null>(null)
-  const source = userChoice ?? defaultSource
-  return [source, setUserChoice]
-}

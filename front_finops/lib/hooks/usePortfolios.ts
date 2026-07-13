@@ -1,7 +1,7 @@
 "use client"
 
-import { useMemo, useSyncExternalStore } from "react"
-import { useQueries, useQuery } from "@tanstack/react-query"
+import { useMemo } from "react"
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query"
 import { api } from "@/lib/api"
 import type {
   AzureBillingResponse,
@@ -14,7 +14,25 @@ import type {
 // Types
 // ---------------------------------------------------------------------------
 
-export type Provider = "gcp" | "aws" | "azure"
+export type Provider = "gcp" | "aws" | "azure" | "local"
+
+// A portfolio can carry at most one "local" member — the local events store
+// is a singleton, so the id is fixed. Kept as a top-level export so the
+// PortfolioEditor toggle uses the exact same values the backend expects.
+export const LOCAL_MEMBER_ID = "events-store"
+export const LOCAL_MEMBER_LABEL = "Fichiers importés"
+
+/**
+ * True when a portfolio only contains local members (the events store).
+ * Consumers use this to route Analyse sub-tabs to the daily-granularity
+ * endpoints (kpi/daily/stl/anomalies) — since the underlying data is the
+ * same events store, no aggregation is needed.
+ */
+export function isAllLocal(portfolio: { members: { provider: Provider }[] } | null): boolean {
+  if (!portfolio) return false
+  if (portfolio.members.length === 0) return false
+  return portfolio.members.every((m) => m.provider === "local")
+}
 
 export interface PortfolioMember {
   provider: Provider
@@ -27,6 +45,7 @@ export interface Portfolio {
   name: string
   members: PortfolioMember[]
   createdAt: string
+  updatedAt: string
 }
 
 // Provider payloads that the collecte page already knows how to call. Kept
@@ -48,145 +67,130 @@ interface AWSBillingResponse {
 }
 
 // ---------------------------------------------------------------------------
-// localStorage-backed store (SSR-safe via useSyncExternalStore)
+// Server-backed store — /api/portfolios (DynamoDB, per authenticated user)
 // ---------------------------------------------------------------------------
 
-const STORAGE_KEY = "sia:portfolios:v1"
-
-// Server snapshot must be stable across renders — a fresh [] each call would
-// break useSyncExternalStore's reference-equality check under SSR.
+const PORTFOLIOS_KEY = ["portfolios"] as const
 const EMPTY: Portfolio[] = []
 
-// Module-level snapshot cache. useSyncExternalStore requires getSnapshot to
-// return the *same* reference when the underlying data hasn't changed —
-// otherwise React throws "The result of getSnapshot should be cached to avoid
-// an infinite loop". We cache the parsed value and only re-parse when the raw
-// localStorage string changes.
-let cachedRaw: string | null | undefined = undefined
-let cachedSnapshot: Portfolio[] = EMPTY
-
-function parseStore(raw: string | null): Portfolio[] {
-  if (!raw) return EMPTY
-  try {
-    const parsed: unknown = JSON.parse(raw)
-    if (!Array.isArray(parsed)) return EMPTY
-    // Shallow validation — reject anything that doesn't look like a Portfolio.
-    const valid = parsed.filter(
-      (p): p is Portfolio =>
-        !!p &&
-        typeof p === "object" &&
-        typeof (p as Portfolio).id === "string" &&
-        typeof (p as Portfolio).name === "string" &&
-        Array.isArray((p as Portfolio).members),
-    )
-    return valid.length === 0 ? EMPTY : valid
-  } catch {
-    return EMPTY
-  }
-}
-
-function readStore(): Portfolio[] {
-  if (typeof window === "undefined") return EMPTY
-  const raw = window.localStorage.getItem(STORAGE_KEY)
-  if (raw === cachedRaw) return cachedSnapshot
-  cachedRaw = raw
-  cachedSnapshot = parseStore(raw)
-  return cachedSnapshot
-}
-
-function writeStore(next: Portfolio[]): void {
-  if (typeof window === "undefined") return
-  const serialized = JSON.stringify(next)
-  window.localStorage.setItem(STORAGE_KEY, serialized)
-  // Pre-seed the cache so the follow-up readStore() returns the same
-  // reference as `next` (avoids a redundant parse on the next render).
-  cachedRaw = serialized
-  cachedSnapshot = next
-  // Notify subscribers in the same tab. `storage` event only fires cross-tab.
-  window.dispatchEvent(new StorageEvent("storage", { key: STORAGE_KEY }))
-}
-
-function subscribe(listener: () => void): () => void {
-  if (typeof window === "undefined") return () => {}
-  const handler = (e: StorageEvent) => {
-    if (e.key === STORAGE_KEY || e.key === null) listener()
-  }
-  window.addEventListener("storage", handler)
-  return () => window.removeEventListener("storage", handler)
-}
-
-function getServerSnapshot(): Portfolio[] {
-  return EMPTY
+function stableMember(m: PortfolioMember): PortfolioMember {
+  // Drop undefined label so the JSON payload doesn't ship `"label":null` that
+  // Pydantic v2 would happily accept but complicates the diff at read time.
+  return m.label ? { provider: m.provider, id: m.id, label: m.label } : { provider: m.provider, id: m.id }
 }
 
 export interface PortfolioOps {
-  create: (name: string, members?: PortfolioMember[]) => Portfolio
-  rename: (id: string, name: string) => void
-  remove: (id: string) => void
-  addMember: (portfolioId: string, member: PortfolioMember) => void
-  removeMember: (portfolioId: string, provider: Provider, memberId: string) => void
+  create: (name: string, members?: PortfolioMember[]) => Promise<Portfolio>
+  rename: (id: string, name: string) => Promise<void>
+  remove: (id: string) => Promise<void>
+  addMember: (portfolioId: string, member: PortfolioMember) => Promise<void>
+  removeMember: (portfolioId: string, provider: Provider, memberId: string) => Promise<void>
 }
 
 /**
- * Read/write portfolios stored in localStorage. Uses useSyncExternalStore so
- * every consumer in the tree updates on any mutation without a context
- * provider.
+ * Read/write portfolios via /api/portfolios (server-side DDB persistence).
+ * Uses TanStack Query as the client-side cache. Mutations optimistically
+ * update the cache then trigger a refetch so failures self-heal.
  */
-export function usePortfolios(): { portfolios: Portfolio[]; ops: PortfolioOps } {
-  const portfolios = useSyncExternalStore(subscribe, readStore, getServerSnapshot)
+export function usePortfolios(): {
+  portfolios: Portfolio[]
+  loading: boolean
+  ops: PortfolioOps
+} {
+  const queryClient = useQueryClient()
+
+  const listQuery = useQuery<Portfolio[]>({
+    queryKey: PORTFOLIOS_KEY,
+    queryFn: () =>
+      api
+        .get("/api/portfolios")
+        .then((r) => (r.data.portfolios ?? []) as Portfolio[]),
+    staleTime: 60_000,
+    retry: false,
+  })
+
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: PORTFOLIOS_KEY })
+
+  const createMut = useMutation<
+    Portfolio,
+    Error,
+    { name: string; members: PortfolioMember[] }
+  >({
+    mutationFn: ({ name, members }) =>
+      api
+        .post("/api/portfolios", { name, members: members.map(stableMember) })
+        .then((r) => r.data as Portfolio),
+    onSuccess: () => void invalidate(),
+  })
+
+  const updateMut = useMutation<
+    Portfolio,
+    Error,
+    { id: string; name?: string; members?: PortfolioMember[] }
+  >({
+    mutationFn: ({ id, name, members }) => {
+      // Only forward provided fields — matches the partial update contract on
+      // the server side (PortfolioUpdate).
+      const body: Record<string, unknown> = {}
+      if (name !== undefined) body.name = name
+      if (members !== undefined) body.members = members.map(stableMember)
+      return api.put(`/api/portfolios/${id}`, body).then((r) => r.data as Portfolio)
+    },
+    onSuccess: () => void invalidate(),
+  })
+
+  const deleteMut = useMutation<void, Error, string>({
+    mutationFn: (id) => api.delete(`/api/portfolios/${id}`).then(() => undefined),
+    onSuccess: () => void invalidate(),
+  })
+
+  const portfolios = listQuery.data ?? EMPTY
 
   const ops = useMemo<PortfolioOps>(() => {
+    // The mutation objects are stable per component instance; capturing them
+    // in useMemo means callers see the same reference across renders as long
+    // as this hook instance is alive.
     return {
-      create: (name, members = []) => {
-        const p: Portfolio = {
-          id:
-            typeof crypto !== "undefined" && "randomUUID" in crypto
-              ? crypto.randomUUID()
-              : `pf_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-          name: name.trim() || "Portefeuille",
-          members,
-          createdAt: new Date().toISOString(),
-        }
-        writeStore([...readStore(), p])
-        return p
+      create: async (name, members = []) => {
+        const trimmed = name.trim() || "Portefeuille"
+        return createMut.mutateAsync({ name: trimmed, members })
       },
-      rename: (id, name) => {
-        writeStore(
-          readStore().map((p) => (p.id === id ? { ...p, name: name.trim() || p.name } : p)),
+      rename: async (id, name) => {
+        const trimmed = name.trim()
+        if (!trimmed) return
+        await updateMut.mutateAsync({ id, name: trimmed })
+      },
+      remove: async (id) => {
+        await deleteMut.mutateAsync(id)
+      },
+      addMember: async (portfolioId, member) => {
+        const current = queryClient.getQueryData<Portfolio[]>(PORTFOLIOS_KEY) ?? []
+        const target = current.find((p) => p.id === portfolioId)
+        if (!target) return
+        const already = target.members.some(
+          (m) => m.provider === member.provider && m.id === member.id,
         )
+        if (already) return
+        await updateMut.mutateAsync({
+          id: portfolioId,
+          members: [...target.members, member],
+        })
       },
-      remove: (id) => {
-        writeStore(readStore().filter((p) => p.id !== id))
-      },
-      addMember: (portfolioId, member) => {
-        writeStore(
-          readStore().map((p) => {
-            if (p.id !== portfolioId) return p
-            const already = p.members.some(
-              (m) => m.provider === member.provider && m.id === member.id,
-            )
-            if (already) return p
-            return { ...p, members: [...p.members, member] }
-          }),
-        )
-      },
-      removeMember: (portfolioId, provider, memberId) => {
-        writeStore(
-          readStore().map((p) => {
-            if (p.id !== portfolioId) return p
-            return {
-              ...p,
-              members: p.members.filter(
-                (m) => !(m.provider === provider && m.id === memberId),
-              ),
-            }
-          }),
-        )
+      removeMember: async (portfolioId, provider, memberId) => {
+        const current = queryClient.getQueryData<Portfolio[]>(PORTFOLIOS_KEY) ?? []
+        const target = current.find((p) => p.id === portfolioId)
+        if (!target) return
+        await updateMut.mutateAsync({
+          id: portfolioId,
+          members: target.members.filter(
+            (m) => !(m.provider === provider && m.id === memberId),
+          ),
+        })
       },
     }
-  }, [])
+  }, [createMut, updateMut, deleteMut, queryClient])
 
-  return { portfolios, ops }
+  return { portfolios, loading: listQuery.isPending, ops }
 }
 
 // ---------------------------------------------------------------------------
@@ -325,6 +329,12 @@ function endpointFor(m: PortfolioMember): {
       url: "/api/aws/billing",
       params: { account_id: m.id, months: MEMBER_MONTHS, granularity: "MONTHLY" },
     }
+  }
+  if (m.provider === "local") {
+    // Aggregates the events store — no provider-specific id (the id is a
+    // sentinel LOCAL_MEMBER_ID). Same response shape as the cloud endpoints
+    // so the aggregate merger doesn't need a special branch.
+    return { url: "/api/events/billing", params: { months: MEMBER_MONTHS } }
   }
   return {
     url: "/api/azure/billing",
@@ -474,10 +484,12 @@ export const PROVIDER_LABEL: Record<Provider, string> = {
   gcp: "Google Cloud",
   aws: "Amazon Web Services",
   azure: "Microsoft Azure",
+  local: "Fichiers importés",
 }
 
 export const PROVIDER_SHORT: Record<Provider, string> = {
   gcp: "GCP",
   aws: "AWS",
   azure: "Azure",
+  local: "Local",
 }

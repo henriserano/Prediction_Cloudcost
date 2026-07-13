@@ -88,6 +88,7 @@ class Settings(BaseSettings):
     ddb_table_users: str = Field(default="")
     ddb_table_conversations: str = Field(default="")
     ddb_table_credentials: str = Field(default="")
+    ddb_table_portfolios: str = Field(default="")
     ddb_endpoint_url: str = Field(
         default="",
         description="Override for DynamoDB Local (e.g. http://localhost:8000). "

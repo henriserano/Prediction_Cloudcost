@@ -6,6 +6,7 @@ import {
   ArrowUpRight,
   Briefcase,
   Cloud as CloudIcon,
+  FileSpreadsheet,
   Layers,
   Plus,
   Trash2,
@@ -32,6 +33,8 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { EmptyState } from "@/components/ui/empty-state"
 import { WarnBanner } from "@/components/ui/banners"
 import {
+  LOCAL_MEMBER_ID,
+  LOCAL_MEMBER_LABEL,
   PROVIDER_LABEL,
   PROVIDER_SHORT,
   usePortfolioAggregate,
@@ -64,6 +67,7 @@ const PROVIDER_COLOR: Record<Provider, string> = {
   gcp: "oklch(0.65 0.13 240)",   // sky
   aws: "oklch(0.75 0.15 78)",    // gold
   azure: "oklch(0.62 0.14 155)", // green
+  local: "oklch(0.48 0.02 250)", // slate — visually neutral for the file source
 }
 
 function currencyFmt(v: number, currency = "EUR"): string {
@@ -215,10 +219,29 @@ function PortfolioEditor({
   const [name, setName] = useState(portfolio.name)
   const { accounts, loading } = useAvailableAccounts()
 
-  const alreadyIn = new Set(portfolio.members.map((m) => `${m.provider}:${m.id}`))
+  // The local events store is its own section (toggle), keep it out of the
+  // per-cloud-account listing so the user doesn't see "Fichiers importés"
+  // listed alongside real accounts.
+  const cloudMembers = portfolio.members.filter((m) => m.provider !== "local")
+  const hasLocal = portfolio.members.some(
+    (m) => m.provider === "local" && m.id === LOCAL_MEMBER_ID,
+  )
+  const alreadyIn = new Set(cloudMembers.map((m) => `${m.provider}:${m.id}`))
   const availableAccounts = accounts.filter(
     (a) => !alreadyIn.has(`${a.provider}:${a.id}`),
   )
+
+  function toggleLocal() {
+    if (hasLocal) {
+      onRemoveMember("local", LOCAL_MEMBER_ID)
+    } else {
+      onAddMember({
+        provider: "local",
+        id: LOCAL_MEMBER_ID,
+        label: LOCAL_MEMBER_LABEL,
+      })
+    }
+  }
 
   return (
     <SectionCard
@@ -246,15 +269,15 @@ function PortfolioEditor({
 
       <div className="space-y-1.5">
         <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
-          Comptes inclus ({portfolio.members.length})
+          Comptes cloud inclus ({cloudMembers.length})
         </p>
-        {portfolio.members.length === 0 ? (
+        {cloudMembers.length === 0 ? (
           <p className="text-xs text-muted-foreground">
-            Aucun compte. Ajoutez-en depuis la liste ci-dessous.
+            Aucun compte cloud. Ajoutez-en depuis la liste ci-dessous.
           </p>
         ) : (
           <ul className="space-y-1.5">
-            {portfolio.members.map((m) => (
+            {cloudMembers.map((m) => (
               <li
                 key={`${m.provider}:${m.id}`}
                 className="flex items-center gap-2.5 rounded-lg border border-border bg-card px-3 py-2"
@@ -278,6 +301,40 @@ function PortfolioEditor({
             ))}
           </ul>
         )}
+      </div>
+
+      {/* Fichiers importés — le pot local est un singleton, contrôlé par un
+          simple toggle. Ajoute {provider:"local", id:LOCAL_MEMBER_ID} au
+          portefeuille, ce qui fait apparaître les events de la Fichier tab
+          dans l'agrégat consolidé (via /api/events/billing). */}
+      <div className="space-y-1.5">
+        <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
+          Fichiers importés
+        </p>
+        <label
+          className={cn(
+            "flex items-start gap-3 rounded-lg border px-3 py-3 cursor-pointer transition-colors",
+            hasLocal
+              ? "border-[color:var(--accent-green)]/40 bg-[color:var(--accent-green)]/5"
+              : "border-border bg-card hover:border-[color:var(--accent-green)]/30",
+          )}
+        >
+          <input
+            type="checkbox"
+            checked={hasLocal}
+            onChange={toggleLocal}
+            className="mt-0.5 h-4 w-4 rounded border-border accent-[color:var(--accent-green)]"
+          />
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <FileSpreadsheet className="h-3.5 w-3.5 text-muted-foreground shrink-0" aria-hidden />
+              <p className="text-sm font-medium">Inclure les fichiers importés</p>
+            </div>
+            <p className="text-[11px] text-muted-foreground mt-0.5">
+              Ajoute les events déposés depuis la <Link href="/collecte" className="underline underline-offset-2 text-foreground hover:text-[color:var(--accent-green)]">Fichier tab</Link> à ce portefeuille. Un seul pot local partagé entre tous les portefeuilles qui l&apos;activent.
+            </p>
+          </div>
+        </label>
       </div>
 
       <div className="space-y-1.5">
@@ -632,10 +689,16 @@ export function PortefeuilleView() {
       <div className="space-y-4 lg:space-y-5 min-w-0">
         {creating && (
           <CreatePortfolioForm
-            onCreate={(name) => {
-              const p = ops.create(name)
-              setWantedId(p.id)
-              setCreating(false)
+            onCreate={async (name) => {
+              try {
+                const p = await ops.create(name)
+                setWantedId(p.id)
+                setCreating(false)
+              } catch {
+                // The API surfaced a validation or auth error; leave the
+                // form open so the user can retry. TanStack Query has
+                // already logged the failure via retry: false.
+              }
             }}
             onCancel={() => setCreating(false)}
           />

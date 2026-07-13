@@ -55,7 +55,84 @@ const CHART_COLORS = [
 const COLOR_GREEN = "oklch(0.68 0.15 160)"
 const COLOR_MUTED = "oklch(0.65 0.02 250)"
 
-export function TableauDeBordTab() {
+import { isAllLocal, usePortfolioAggregate } from "@/lib/hooks/usePortfolios"
+import type { AnalyseTabProps } from "../page"
+
+// Simplified KPI grid rendered when the /analyse page-level toggle is set to
+// "Vue portefeuille". Only surfaces indicators we can actually derive from the
+// monthly cloud-billing aggregate — no daily chart, no daily anomalies. All
+// heavy visualisations (60j trend, ±2σ band, sparkline) stay in Vue projet.
+function PortfolioTableauDeBord({ portfolio }: { portfolio: NonNullable<AnalyseTabProps["portfolio"]> }) {
+  const aggregate = usePortfolioAggregate(portfolio)
+  const monthly = aggregate.monthly
+
+  // Month-over-month comparison using the last two months in the aggregate.
+  let trendPct: number | null = null
+  if (monthly.length >= 2) {
+    const [prev, curr] = monthly.slice(-2)
+    if (prev.cost > 0) trendPct = ((curr.cost - prev.cost) / prev.cost) * 100
+  }
+  const topRow = aggregate.topServices[0]
+  const currencySymbol = aggregate.currency === "USD" ? "$" : "€"
+
+  return (
+    <>
+      <section aria-label="KPI portefeuille" className="grid grid-cols-1 sm:grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-4">
+        {aggregate.loading ? (
+          Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-28" />)
+        ) : (
+          <>
+            <KpiCard
+              label="Coût consolidé"
+              value={`${aggregate.totalCost.toLocaleString("fr-FR", { maximumFractionDigits: 0 })} ${currencySymbol}`}
+              sub={`${monthly.length} mois d'historique`}
+              icon={Wallet}
+              tone="green"
+            />
+            <KpiCard
+              label="Comptes agrégés"
+              value={portfolio.members.length}
+              sub={`${aggregate.byProvider.length} provider${aggregate.byProvider.length > 1 ? "s" : ""}`}
+              icon={Activity}
+              tone="default"
+            />
+            <KpiCard
+              label="Service dominant"
+              value={<span className="text-base">{topRow?.service ?? "—"}</span>}
+              sub={topRow ? `${topRow.pct.toFixed(1)}% du portefeuille` : undefined}
+              icon={TrendingUp}
+              tone="success"
+            />
+            <KpiCard
+              label="Tendance M/M-1"
+              value={trendPct == null ? "—" : `${trendPct >= 0 ? "+" : ""}${trendPct.toFixed(1)} %`}
+              sub={trendPct == null ? "Données insuffisantes" : "Dernier mois vs précédent"}
+              icon={trendPct == null ? ShieldCheck : trendPct > 5 ? AlertTriangle : ShieldCheck}
+              tone={trendPct == null ? "default" : trendPct > 5 ? "destructive" : "success"}
+            />
+          </>
+        )}
+      </section>
+
+      <p className="text-xs text-muted-foreground">
+        Tendance journalière et détection d&apos;anomalies non disponibles en vue portefeuille — l&apos;agrégat multi-cloud est mensuel par service.
+        Basculer en Vue projet pour retrouver la vue quotidienne.
+      </p>
+    </>
+  )
+}
+
+export function TableauDeBordTab({ source, portfolio }: AnalyseTabProps) {
+  // All-local portfolios read the same events store as Vue projet — no need
+  // for the degraded monthly grid, we just render the full daily dashboard.
+  if (source === "portefeuille" && portfolio && !isAllLocal(portfolio)) {
+    return <PortfolioTableauDeBord portfolio={portfolio} />
+  }
+
+  return <TableauDeBordProjet />
+}
+
+function TableauDeBordProjet() {
   const { data: kpi, isLoading: kpiLoading, error: kpiError, refetch: refetchKpi } = useKPI()
   const { data: daily, isLoading: dailyLoading, error: dailyError, refetch: refetchDaily } = useDaily(60)
   const { data: services, isLoading: servicesLoading, error: servicesError, refetch: refetchServices } = useServices()

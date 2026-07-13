@@ -11,6 +11,9 @@ import {
   Sparkles,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { isAllLocal } from "@/lib/hooks/usePortfolios"
+import { PortfolioUnavailableState } from "../_components/PortfolioUnavailableState"
+import type { AnalyseTabProps } from "../page"
 
 import OutliersTab from "./_anomalies/OutliersTab"
 import DriftTab from "./_anomalies/DriftTab"
@@ -32,7 +35,18 @@ const SUB_TABS = [
 
 type SubTabId = (typeof SUB_TABS)[number]["id"]
 
-export function AnomaliesTab() {
+export function AnomaliesTab({ source, portfolio }: AnalyseTabProps) {
+  // All-local portfolios have daily data — full anomaly stack works. The
+  // unavailable state only fires when the portfolio actually mixes cloud
+  // members that only expose monthly aggregates.
+  if (source === "portefeuille" && portfolio && !isAllLocal(portfolio)) {
+    return <PortfolioUnavailableState tabLabel="Détection d'anomalies" />
+  }
+
+  return <AnomaliesProjet />
+}
+
+function AnomaliesProjet() {
   const [tab, setTab] = useState<SubTabId>("outliers")
 
   return (

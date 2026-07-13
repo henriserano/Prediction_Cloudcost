@@ -109,6 +109,37 @@ resource "aws_dynamodb_table" "credentials" {
   }
 }
 
+# Cross-cloud groupings a user defines to consolidate spend from multiple
+# accounts/projects. Members are stored as a JSON blob so the shape can evolve
+# without a schema migration — same rationale as the ``messages`` column on
+# the conversations table.
+resource "aws_dynamodb_table" "portfolios" {
+  name         = "${local.prefix}-portfolios"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "user_id"
+  range_key    = "portfolio_id"
+
+  attribute {
+    name = "user_id"
+    type = "S"
+  }
+
+  attribute {
+    name = "portfolio_id"
+    type = "S"
+  }
+
+  server_side_encryption {
+    enabled = true
+  }
+
+  tags = {
+    Name        = "${local.prefix}-portfolios"
+    Environment = var.env
+    Purpose     = "portfolio-definitions"
+  }
+}
+
 # IAM policy that the App Runner instance role attaches (see apprunner.tf).
 # Kept in this file so the DynamoDB policy stays co-located with the tables
 # it authorises.
@@ -129,6 +160,7 @@ data "aws_iam_policy_document" "dynamodb_access" {
       aws_dynamodb_table.conversations.arn,
       "${aws_dynamodb_table.conversations.arn}/index/*",
       aws_dynamodb_table.credentials.arn,
+      aws_dynamodb_table.portfolios.arn,
     ]
   }
 }
