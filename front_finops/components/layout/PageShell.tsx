@@ -19,14 +19,21 @@ interface PageShellProps {
 }
 
 const ROUTE_LABELS: Record<string, string> = {
-  dashboard: "Vue d'ensemble",
-  forecast: "Prévision",
-  services: "Services",
-  analytics: "Analytique",
-  diagnostics: "Diagnostics",
+  cadrage: "Cadrage",
+  collecte: "Collecte",
+  analyse: "Analyse",
+  projection: "Projection",
+  optimiser: "Optimiser",
   assistant: "Assistant",
-  "data-sources": "Sources de données",
   "gcp-connect": "GCP Connect",
+  // Legacy paths kept for the (rare) case a redirect chain briefly renders the
+  // shell before Next.js resolves the target.
+  dashboard: "Tableau de bord",
+  forecast: "Projection",
+  services: "Répartition",
+  analytics: "Tendances",
+  diagnostics: "Anomalies",
+  "data-sources": "Collecte",
 }
 
 // Real backend status via GET /health (useHealth: staleTime 30 s, refetch 60 s).
@@ -114,7 +121,7 @@ export default function PageShell({
             className="px-8 pt-4 pb-1 flex items-center gap-1.5 text-[11px] text-muted-foreground"
           >
             <Link
-              href="/dashboard"
+              href="/analyse"
               className="hover:text-foreground transition-colors"
             >
               Sia FinOps

@@ -19,7 +19,7 @@ import { Badge } from "@/components/ui/badge"
 import { SectionCard } from "@/components/ui/section-card"
 import { cn } from "@/lib/utils"
 import { api } from "@/lib/api"
-import { ErrorBanner, SuccessBanner, extractMessage } from "./shared"
+import { ErrorBanner, SuccessBanner, extractMessage } from "@/components/ui/banners"
 
 // Tab 5 — Agentic scoping simulator
 // ---------------------------------------------------------------------------

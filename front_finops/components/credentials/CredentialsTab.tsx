@@ -13,7 +13,7 @@ import {
   ErrorBanner,
   SuccessBanner,
   WarnBanner,
-} from "@/app/data-sources/_tabs/shared"
+} from "@/components/ui/banners"
 
 // ---------------------------------------------------------------------------
 // Generic credentials tab used by every cloud connect flow.

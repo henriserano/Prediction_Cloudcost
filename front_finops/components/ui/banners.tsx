@@ -2,9 +2,9 @@
 
 import { AlertTriangle, CheckCircle2, XCircle } from "lucide-react"
 
-// Shared banners across every tab in the Data Sources page. Extracted here so
-// tabs (FileTab, GCPTab, AWSTab, AzureTab, SimulationTab) don't pull the whole
-// page bundle to render a status line.
+// Shared banners + error helpers used across data collection and cadrage flows.
+// Kept at ui/ level (not per-feature) so cross-cutting consumers such as the
+// credentials panel don't have to reach into a sibling route's private folder.
 
 export function ErrorBanner({ message }: { message: string }) {
   return (
@@ -33,8 +33,6 @@ export function WarnBanner({ message }: { message: string }) {
   )
 }
 
-// Helpers used by more than one tab to translate axios errors into a friendly
-// message. Kept here so the AWS + Azure tabs don't accidentally diverge.
 export function extractStatus(err: unknown): number | null {
   if (
     err && typeof err === "object" && "response" in err &&

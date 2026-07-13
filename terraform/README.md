@@ -124,13 +124,13 @@ Consommés par `deploy.sh` via `terraform output -raw <nom>` :
 
 | Output | Exemple |
 |---|---|
-| `alb_dns_name` | `finops-alb.example.com` |
-| `api_base_url` | `http://finops-dev-alb-…elb.amazonaws.com` (HTTP-only tant que cert non fourni) |
+| `apprunner_service_url` | `https://rtg5ndsskm.eu-west-1.awsapprunner.com` (HTTPS géré par App Runner) |
+| `api_base_url` | Alias de `apprunner_service_url` — consommé par `deploy.sh` et le front |
+| `apprunner_service_arn` | `arn:aws:apprunner:eu-west-1:<account>:service/finops-dev-svc/<id>` |
+| `apprunner_service_name` | `finops-dev-svc` |
 | `ecr_repository_url` | `<account>.dkr.ecr.eu-west-1.amazonaws.com/finops-dev-backend` |
-| `ecs_cluster_name` | `finops-dev-cluster` |
-| `ecs_service_name` | `finops-dev-service` |
-| `cloudwatch_log_group` | `/ecs/finops-dev` |
 | `ecr_push_policy_arn` | `arn:aws:iam::<account>:policy/finops-dev-ecr-push` |
+| `dynamodb_table_users` / `_conversations` / `_credentials` | `finops-dev-users` / `-conversations` / `-credentials` |
 | `aws_region` | `eu-west-1` |
 
 ---

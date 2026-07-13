@@ -3,18 +3,17 @@
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import {
-  BarChart3,
   LineChart,
-  Layers,
-  FlaskConical,
   DatabaseZap,
-  Microscope,
   MessageCircle,
   X,
   Sparkles,
   LogOut,
   User as UserIcon,
   Database,
+  Compass,
+  BarChartBig,
+  Lightbulb,
 } from "lucide-react"
 import { useQuery } from "@tanstack/react-query"
 import { cn } from "@/lib/utils"
@@ -29,20 +28,23 @@ interface NavItem {
   label: string
   icon: React.ElementType
   hint?: string
+  badge?: string
 }
 
 const PRIMARY: NavItem[] = [
-  { href: "/dashboard", label: "Vue d'ensemble", icon: BarChart3, hint: "KPIs & tendances" },
-  { href: "/forecast", label: "Prévision", icon: LineChart, hint: "6 modèles" },
-  { href: "/services", label: "Services", icon: Layers, hint: "Pareto 80/20" },
-  { href: "/analytics", label: "Analytique", icon: FlaskConical, hint: "STL · Anomalies" },
-  { href: "/diagnostics", label: "Diagnostics", icon: Microscope, hint: "Anomalies · Drift · Ensemble" },
-  { href: "/assistant", label: "Assistant", icon: MessageCircle, hint: "Chat FinOps" },
+  { href: "/cadrage", label: "Cadrage", icon: Compass, hint: "Simuler avant lancement" },
+  { href: "/collecte", label: "Collecte", icon: DatabaseZap, hint: "Fichier · Multi-cloud" },
+  { href: "/analyse", label: "Analyse", icon: BarChartBig, hint: "Flux & dépenses" },
+  { href: "/projection", label: "Projection", icon: LineChart, hint: "Prévision de dépenses" },
+  { href: "/optimiser", label: "Optimiser", icon: Lightbulb, hint: "Recommandations", badge: "Bientôt" },
 ]
 
-const SECONDARY: NavItem[] = [
-  { href: "/data-sources", label: "Sources de données", icon: DatabaseZap, hint: "Import · Cloud" },
-]
+const ASSISTANT: NavItem = {
+  href: "/assistant",
+  label: "Assistant",
+  icon: MessageCircle,
+  hint: "Chat FinOps",
+}
 
 export default function Sidebar() {
   const path = usePathname()
@@ -114,10 +116,10 @@ export default function Sidebar() {
 
         {/* Section title */}
         <p className="px-5 pt-2 pb-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-sidebar-foreground/70">
-          Analyse
+          Parcours FinOps
         </p>
 
-        {/* Primary nav */}
+        {/* Primary nav — 5 steps of the FinOps journey */}
         <nav className="flex-1 overflow-y-auto px-3 pb-4" aria-label="Sections principales">
           <ul className="space-y-0.5">
             {PRIMARY.map((item) => (
@@ -125,13 +127,12 @@ export default function Sidebar() {
             ))}
           </ul>
 
+          {/* Assistant sits apart — cross-cutting helper, not part of the 5 steps */}
           <p className="mt-6 px-2 pt-2 pb-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-sidebar-foreground/70">
-            Configuration
+            Aide
           </p>
           <ul className="space-y-0.5">
-            {SECONDARY.map((item) => (
-              <NavLink key={item.href} item={item} active={isActive(item.href)} onNavigate={close} />
-            ))}
+            <NavLink item={ASSISTANT} active={isActive(ASSISTANT.href)} onNavigate={close} />
           </ul>
         </nav>
 
@@ -241,6 +242,18 @@ function NavLink({
           )}
         />
         <span className="min-w-0 flex-1 whitespace-nowrap">{item.label}</span>
+        {item.badge && (
+          <span
+            className={cn(
+              "shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider",
+              active
+                ? "bg-[color:var(--accent-green)]/15 text-[color:var(--accent-green)]"
+                : "bg-sidebar-foreground/10 text-sidebar-foreground/70",
+            )}
+          >
+            {item.badge}
+          </span>
+        )}
       </Link>
     </li>
   )
