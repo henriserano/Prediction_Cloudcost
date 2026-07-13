@@ -123,7 +123,7 @@ function AnalyseContent() {
 export default function AnalysePage() {
   return (
     <PageShell
-      eyebrow="Étape 3 · Analyse"
+      eyebrow="Comprendre · Analyse"
       title="Visualiser les flux et suivre les dépenses"
       description="Tableau de bord, répartition des coûts, tendances statistiques et détection d'anomalies — tout ce dont vous avez besoin pour comprendre où part la facture."
     >

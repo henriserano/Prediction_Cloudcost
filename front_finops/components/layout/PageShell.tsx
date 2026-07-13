@@ -19,8 +19,9 @@ interface PageShellProps {
 }
 
 const ROUTE_LABELS: Record<string, string> = {
-  cadrage: "Cadrage",
+  cadrage: "Estimation projet",
   collecte: "Collecte",
+  portefeuille: "Portefeuille",
   analyse: "Analyse",
   projection: "Projection",
   optimiser: "Optimiser",

@@ -197,7 +197,7 @@ export default function ForecastPage() {
   if (hasError) {
     return (
       <PageShell
-        eyebrow="Étape 4 · Projection"
+        eyebrow="Comprendre · Projection"
         title="Projection des dépenses"
         description="Impossible de charger les prévisions"
       >
@@ -214,7 +214,7 @@ export default function ForecastPage() {
 
   return (
     <PageShell
-      eyebrow="Étape 4 · Projection"
+      eyebrow="Comprendre · Projection"
       title="Projection des dépenses"
       description={
         summary

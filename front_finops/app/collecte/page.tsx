@@ -1,17 +1,14 @@
 "use client"
 
-import { Suspense, useCallback, useRef, useMemo, useState } from "react"
+import { useRef, useMemo, useState } from "react"
 import Link from "next/link"
-import { useRouter, useSearchParams } from "next/navigation"
 import {
   UploadCloud,
   FileSpreadsheet,
   XCircle,
   ArrowUpRight,
   Trash2,
-  Briefcase,
   Cloud as CloudIcon,
-  Layers,
   Loader2,
   ChevronDown,
   ChevronRight,
@@ -33,9 +30,7 @@ import type {
 } from "@/lib/types"
 import { PinPrompt } from "@/components/auth/PinPrompt"
 import { ErrorBanner, SuccessBanner, WarnBanner } from "@/components/ui/banners"
-import { Skeleton } from "@/components/ui/skeleton"
 import { AzureTab } from "./_tabs/AzureTab"
-import { PortefeuilleView } from "./_views/PortefeuilleView"
 
 // ---------------------------------------------------------------------------
 // Tab definition
@@ -1289,51 +1284,26 @@ function AWSAccountsPanel() {
 // Main page
 // ---------------------------------------------------------------------------
 
-// Two orthogonal navigation dimensions:
-//   • view: how we look at the data (projet = per-source connect, portefeuille = consolidated across sources)
-//   • tab:  which source we're currently connecting (only visible in projet view)
-type ViewId = "projet" | "portefeuille"
-const VIEWS: { id: ViewId; label: string; icon: typeof Layers; hint: string }[] = [
-  { id: "projet",       label: "Vue projet",       icon: Layers,    hint: "Un compte à la fois" },
-  { id: "portefeuille", label: "Vue portefeuille", icon: Briefcase, hint: "Consolidation multi-cloud" },
-]
-
-function isViewId(v: string | null): v is ViewId {
-  return v === "projet" || v === "portefeuille"
-}
-
-function CollecteContent() {
-  const router = useRouter()
-  const searchParams = useSearchParams()
-  const view: ViewId = isViewId(searchParams.get("view")) ? (searchParams.get("view") as ViewId) : "projet"
+export default function CollectePage() {
   const [tab, setTab] = useState<TabId>("file")
 
-  const setView = useCallback(
-    (id: ViewId) => {
-      const next = new URLSearchParams(searchParams)
-      if (id === "projet") next.delete("view")
-      else next.set("view", id)
-      router.replace(next.size > 0 ? `/collecte?${next.toString()}` : "/collecte", {
-        scroll: false,
-      })
-    },
-    [router, searchParams],
-  )
-
   return (
-    <>
-      {/* View toggle — top-level switch between per-project and portfolio-wide */}
+    <PageShell
+      eyebrow="Collecte"
+      title="Collecte des données"
+      description="Connectez le modèle FinOps à vos flux de facturation : import de fichier, ou connexion directe à un fournisseur cloud."
+    >
       <nav
-        aria-label="Type de vue"
-        className="inline-flex rounded-xl border border-border bg-card p-1 gap-1 shadow-sm"
+        aria-label="Type de source"
+        className="inline-flex rounded-xl border border-border bg-card p-1 gap-1 flex-wrap shadow-sm"
       >
-        {VIEWS.map(({ id, label, icon: Icon, hint }) => {
-          const active = view === id
+        {TABS.map(({ id, label, icon: Icon, hint }) => {
+          const active = tab === id
           return (
             <button
               key={id}
               type="button"
-              onClick={() => setView(id)}
+              onClick={() => setTab(id)}
               aria-pressed={active}
               className={cn(
                 "group inline-flex items-center gap-2 rounded-lg px-3.5 py-2 text-sm font-medium transition-all",
@@ -1363,70 +1333,10 @@ function CollecteContent() {
         })}
       </nav>
 
-      {view === "projet" && (
-        <>
-          <nav
-            aria-label="Type de source"
-            className="inline-flex rounded-xl border border-border bg-card p-1 gap-1 flex-wrap shadow-sm"
-          >
-            {TABS.map(({ id, label, icon: Icon, hint }) => {
-              const active = tab === id
-              return (
-                <button
-                  key={id}
-                  type="button"
-                  onClick={() => setTab(id)}
-                  aria-pressed={active}
-                  className={cn(
-                    "group inline-flex items-center gap-2 rounded-lg px-3.5 py-2 text-sm font-medium transition-all",
-                    active
-                      ? "bg-brand text-brand-foreground shadow-sm"
-                      : "text-muted-foreground hover:bg-muted hover:text-foreground",
-                  )}
-                >
-                  <Icon
-                    className={cn(
-                      "h-3.5 w-3.5",
-                      active ? "text-[color:var(--accent-green)]" : "text-muted-foreground",
-                    )}
-                    aria-hidden
-                  />
-                  <span>{label}</span>
-                  <span
-                    className={cn(
-                      "text-[10px] font-medium",
-                      active ? "text-white/60" : "text-muted-foreground/60",
-                    )}
-                  >
-                    {hint}
-                  </span>
-                </button>
-              )
-            })}
-          </nav>
-
-          {tab === "file" && <FileTab />}
-          {tab === "gcp" && <GCPTab />}
-          {tab === "aws" && <AWSTab />}
-          {tab === "azure" && <AzureTab />}
-        </>
-      )}
-
-      {view === "portefeuille" && <PortefeuilleView />}
-    </>
-  )
-}
-
-export default function CollectePage() {
-  return (
-    <PageShell
-      eyebrow="Étape 2 · Collecte"
-      title="Collecte des données"
-      description="Connectez le modèle FinOps à vos flux de facturation : import de fichier, connexion à un fournisseur cloud, ou vision consolidée multi-cloud via les portefeuilles."
-    >
-      <Suspense fallback={<Skeleton className="h-[400px]" />}>
-        <CollecteContent />
-      </Suspense>
+      {tab === "file" && <FileTab />}
+      {tab === "gcp" && <GCPTab />}
+      {tab === "aws" && <AWSTab />}
+      {tab === "azure" && <AzureTab />}
     </PageShell>
   )
 }

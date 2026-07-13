@@ -13,6 +13,7 @@ import {
   Database,
   Compass,
   BarChartBig,
+  Briefcase,
   Lightbulb,
 } from "lucide-react"
 import { useQuery } from "@tanstack/react-query"
@@ -31,20 +32,43 @@ interface NavItem {
   badge?: string
 }
 
-const PRIMARY: NavItem[] = [
-  { href: "/cadrage", label: "Cadrage", icon: Compass, hint: "Simuler avant lancement" },
-  { href: "/collecte", label: "Collecte", icon: DatabaseZap, hint: "Fichier · Multi-cloud" },
-  { href: "/analyse", label: "Analyse", icon: BarChartBig, hint: "Flux & dépenses" },
-  { href: "/projection", label: "Projection", icon: LineChart, hint: "Prévision de dépenses" },
-  { href: "/optimiser", label: "Optimiser", icon: Lightbulb, hint: "Recommandations", badge: "Bientôt" },
-]
-
-const ASSISTANT: NavItem = {
-  href: "/assistant",
-  label: "Assistant",
-  icon: MessageCircle,
-  hint: "Chat FinOps",
+interface NavSection {
+  title: string
+  items: NavItem[]
 }
+
+// Sidebar navigation grouped in 4 semantic sections. The layout mirrors the
+// FinOps journey: define what you want (estimation), collect what you have,
+// understand the picture, then decide what to do about it.
+const SECTIONS: NavSection[] = [
+  {
+    title: "Estimation projet",
+    items: [
+      { href: "/cadrage", label: "Estimation projet", icon: Compass, hint: "Simuler avant lancement" },
+    ],
+  },
+  {
+    title: "Collecte",
+    items: [
+      { href: "/collecte", label: "Collecte", icon: DatabaseZap, hint: "Fichier · Multi-cloud" },
+      { href: "/portefeuille", label: "Portefeuille", icon: Briefcase, hint: "Vision consolidée" },
+    ],
+  },
+  {
+    title: "Comprendre",
+    items: [
+      { href: "/analyse", label: "Analyse", icon: BarChartBig, hint: "Flux & dépenses" },
+      { href: "/projection", label: "Projection", icon: LineChart, hint: "Prévision de dépenses" },
+    ],
+  },
+  {
+    title: "Diagnostic",
+    items: [
+      { href: "/assistant", label: "Assistant", icon: MessageCircle, hint: "Chat FinOps" },
+      { href: "/optimiser", label: "Optimiser", icon: Lightbulb, hint: "Recommandations", badge: "Bientôt" },
+    ],
+  },
+]
 
 export default function Sidebar() {
   const path = usePathname()
@@ -114,26 +138,26 @@ export default function Sidebar() {
           </button>
         </div>
 
-        {/* Section title */}
-        <p className="px-5 pt-2 pb-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-sidebar-foreground/70">
-          Parcours FinOps
-        </p>
-
-        {/* Primary nav — 5 steps of the FinOps journey */}
-        <nav className="flex-1 overflow-y-auto px-3 pb-4" aria-label="Sections principales">
-          <ul className="space-y-0.5">
-            {PRIMARY.map((item) => (
-              <NavLink key={item.href} item={item} active={isActive(item.href)} onNavigate={close} />
-            ))}
-          </ul>
-
-          {/* Assistant sits apart — cross-cutting helper, not part of the 5 steps */}
-          <p className="mt-6 px-2 pt-2 pb-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-sidebar-foreground/70">
-            Aide
-          </p>
-          <ul className="space-y-0.5">
-            <NavLink item={ASSISTANT} active={isActive(ASSISTANT.href)} onNavigate={close} />
-          </ul>
+        {/* Grouped navigation — each SECTIONS entry renders its own labelled
+            block so the FinOps journey stays readable at a glance. */}
+        <nav className="flex-1 overflow-y-auto px-3 pt-2 pb-4" aria-label="Sections principales">
+          {SECTIONS.map((section, i) => (
+            <div key={section.title} className={i > 0 ? "mt-5" : undefined}>
+              <p className="px-2 pt-1 pb-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-sidebar-foreground/70">
+                {section.title}
+              </p>
+              <ul className="space-y-0.5">
+                {section.items.map((item) => (
+                  <NavLink
+                    key={item.href}
+                    item={item}
+                    active={isActive(item.href)}
+                    onNavigate={close}
+                  />
+                ))}
+              </ul>
+            </div>
+          ))}
         </nav>
 
         {/* Footer info — depth via subtle Sia-card shadow, no borders. */}

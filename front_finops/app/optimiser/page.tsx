@@ -33,7 +33,7 @@ const TEASERS = [
 export default function OptimiserPage() {
   return (
     <PageShell
-      eyebrow="Étape 5 · Optimiser"
+      eyebrow="Diagnostic · Optimiser"
       title="Recommandations FinOps"
       description="Formulation de recommandations concrètes à partir de l'analyse et de la projection : modèles, projets, arbitrages d'infrastructure."
       actions={

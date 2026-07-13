@@ -1,7 +1,7 @@
 import type { Metadata } from "next"
 
 export const metadata: Metadata = {
-  title: "Cadrage",
+  title: "Estimation projet",
   description:
     "Simulez les coûts d'un projet avant son lancement : LLM, outils, cible de déploiement, risques et architecture recommandée.",
 }

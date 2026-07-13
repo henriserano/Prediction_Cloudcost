@@ -6,7 +6,7 @@ import { SimulationTab } from "./_components/SimulationTab"
 export default function CadragePage() {
   return (
     <PageShell
-      eyebrow="Étape 1 · Cadrage"
+      eyebrow="Estimation projet"
       title="Simuler les coûts d'un projet"
       description="Estimez la facture cloud d'un projet avant son lancement — LLM, outils, cible de déploiement, risques et recommandations d'architecture."
     >

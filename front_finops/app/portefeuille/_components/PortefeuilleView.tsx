@@ -288,10 +288,10 @@ function PortfolioEditor({
         {!loading && availableAccounts.length === 0 && (
           <p className="text-xs text-muted-foreground">
             Tous les comptes connus sont déjà dans ce portefeuille.{" "}
-            <Link href="?view=projet" className="underline underline-offset-2">
+            <Link href="/collecte" className="underline underline-offset-2">
               Connectez un autre compte
             </Link>{" "}
-            depuis la vue Projet.
+            depuis la page Collecte.
           </p>
         )}
         {!loading && availableAccounts.length > 0 && (
