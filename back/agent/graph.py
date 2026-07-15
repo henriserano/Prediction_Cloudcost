@@ -25,25 +25,27 @@ Bedrock message shape (``content`` is always a list of blocks):
 Callers may hand us simplified ``{"role","content": str}`` messages; we
 normalise them via :func:`_normalise_message`.
 """
+
 from __future__ import annotations
 
 import asyncio
 import json
 import os
+from collections.abc import AsyncIterator, Iterable
 from dataclasses import dataclass, field
 from functools import lru_cache
-from typing import Any, AsyncIterator, Iterable
+from typing import Any
 
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 
-from agent import registry
 # Importing agent.tools has the side effect of running every @register
 # decorator in that module, populating the shared tool registry. Without
 # this line, ``_tool_config()`` would return an empty list on cold start
 # and Bedrock's Converse call would reject the request with
 # ``Invalid length for parameter toolConfig.tools, value: 0``.
 import agent.tools  # noqa: F401
+from agent import registry
 from core.errors import AppError
 from core.logging import get_logger
 
@@ -76,6 +78,7 @@ _MAX_TOOL_ITERATIONS = 6
 # Public result types
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class ToolCallTrace:
     id: str
@@ -96,6 +99,7 @@ class ChatResult:
 # ---------------------------------------------------------------------------
 # Bedrock client + credential check
 # ---------------------------------------------------------------------------
+
 
 def _region() -> str:
     return os.getenv("BEDROCK_REGION") or os.getenv("AWS_REGION", "eu-west-1")
@@ -130,6 +134,7 @@ def _ensure_credentials() -> None:
 # ---------------------------------------------------------------------------
 # Converse request builders
 # ---------------------------------------------------------------------------
+
 
 def _tool_config() -> dict:
     """Bedrock ``toolConfig`` payload derived from the shared tool registry."""
@@ -210,6 +215,7 @@ def _converse_kwargs(model_id: str, system_prompt: str, messages: list[dict]) ->
 # Tool execution
 # ---------------------------------------------------------------------------
 
+
 def _execute_tool(name: str, arguments: dict) -> tuple[str, str]:
     """Run a registered tool. Return ``(full_text, preview_text)``.
 
@@ -221,14 +227,15 @@ def _execute_tool(name: str, arguments: dict) -> tuple[str, str]:
         text = registry.execute(name, arguments)
     except KeyError:
         text = json.dumps({"error": f"Unknown tool: {name}"})
-    except Exception as exc:  # noqa: BLE001 — deliberate broad catch
+    except Exception as exc:
         logger.warning(
             "tool_execute_failed",
             extra={"tool": name, "error": repr(exc)},
         )
         text = json.dumps({"error": f"{exc.__class__.__name__}: {exc}"})
     preview = (
-        text if len(text) <= _TOOL_RESULT_PREVIEW_CHARS
+        text
+        if len(text) <= _TOOL_RESULT_PREVIEW_CHARS
         else text[:_TOOL_RESULT_PREVIEW_CHARS] + "..."
     )
     return text, preview
@@ -237,6 +244,7 @@ def _execute_tool(name: str, arguments: dict) -> tuple[str, str]:
 # ---------------------------------------------------------------------------
 # Error mapping
 # ---------------------------------------------------------------------------
+
 
 def _wrap_bedrock_error(exc: Exception) -> AppError:
     """Convert a botocore exception into a user-friendly AppError."""
@@ -259,6 +267,7 @@ def _wrap_bedrock_error(exc: Exception) -> AppError:
 # ---------------------------------------------------------------------------
 # Streaming — parse Bedrock event stream into normalised events
 # ---------------------------------------------------------------------------
+
 
 async def stream_chat(
     messages: list[dict],
@@ -294,7 +303,7 @@ async def stream_chat(
                 **_converse_kwargs(model_id, system_prompt, working),
             )
         except (ClientError, BotoCoreError) as exc:
-            raise _wrap_bedrock_error(exc)
+            raise _wrap_bedrock_error(exc) from exc
 
         # Parse the event stream inline. Each chunk read from
         # ``response["stream"]`` blocks briefly on the network; that's fine
@@ -325,9 +334,7 @@ async def stream_chat(
                     text_by_idx[idx] = text_by_idx.get(idx, "") + delta["text"]
                     yield {"type": "token", "text": delta["text"]}
                 elif "toolUse" in delta and idx in tool_by_idx:
-                    tool_by_idx[idx]["input_fragments"].append(
-                        delta["toolUse"].get("input", "")
-                    )
+                    tool_by_idx[idx]["input_fragments"].append(delta["toolUse"].get("input", ""))
 
             elif "messageStop" in event:
                 stop_reason = event["messageStop"].get("stopReason", "end_turn")
@@ -350,17 +357,17 @@ async def stream_chat(
                     args = json.loads(raw) if raw else {}
                 except json.JSONDecodeError:
                     args = {}
-                assistant_content.append({
-                    "toolUse": {
-                        "toolUseId": tc["id"],
-                        "name": tc["name"],
-                        "input": args,
+                assistant_content.append(
+                    {
+                        "toolUse": {
+                            "toolUseId": tc["id"],
+                            "name": tc["name"],
+                            "input": args,
+                        }
                     }
-                })
-                parsed_tools.append({
-                    "id": tc["id"], "name": tc["name"], "arguments": args
-                })
-            elif i in text_by_idx and text_by_idx[i]:
+                )
+                parsed_tools.append({"id": tc["id"], "name": tc["name"], "arguments": args})
+            elif text_by_idx.get(i):
                 assistant_content.append({"text": text_by_idx[i]})
 
         working.append({"role": "assistant", "content": assistant_content})
@@ -379,20 +386,20 @@ async def stream_chat(
                 "name": tc["name"],
                 "arguments": tc["arguments"],
             }
-            full_text, preview = await asyncio.to_thread(
-                _execute_tool, tc["name"], tc["arguments"]
-            )
+            full_text, preview = await asyncio.to_thread(_execute_tool, tc["name"], tc["arguments"])
             yield {
                 "type": "tool_end",
                 "id": tc["id"],
                 "result_preview": preview,
             }
-            tool_results.append({
-                "toolResult": {
-                    "toolUseId": tc["id"],
-                    "content": [{"text": full_text}],
+            tool_results.append(
+                {
+                    "toolResult": {
+                        "toolUseId": tc["id"],
+                        "content": [{"text": full_text}],
+                    }
                 }
-            })
+            )
 
         working.append({"role": "user", "content": tool_results})
 
@@ -412,6 +419,7 @@ async def stream_chat(
 # ---------------------------------------------------------------------------
 # Sync variant — thin wrapper around the streaming path
 # ---------------------------------------------------------------------------
+
 
 def invoke_chat(
     messages: list[dict],
@@ -439,12 +447,14 @@ def invoke_chat(
                 current_start = ev
             elif kind == "tool_end":
                 if current_start:
-                    tool_calls.append(ToolCallTrace(
-                        id=current_start["id"],
-                        name=current_start["name"],
-                        arguments=current_start["arguments"],
-                        result_preview=ev["result_preview"],
-                    ))
+                    tool_calls.append(
+                        ToolCallTrace(
+                            id=current_start["id"],
+                            name=current_start["name"],
+                            arguments=current_start["arguments"],
+                            result_preview=ev["result_preview"],
+                        )
+                    )
                     current_start = None
             elif kind == "done":
                 total_tokens = ev.get("total_tokens")
@@ -463,6 +473,7 @@ def invoke_chat(
 # ---------------------------------------------------------------------------
 # Utilities exposed for routes_chat / conversations persistence
 # ---------------------------------------------------------------------------
+
 
 def extract_plain_transcript(messages: Iterable[dict]) -> list[dict]:
     """Flatten Bedrock-format messages into ``[{role, content: str}, ...]``.
@@ -484,9 +495,7 @@ def extract_plain_transcript(messages: Iterable[dict]) -> list[dict]:
         if not isinstance(content, list):
             continue
         text_parts = [
-            str(b.get("text", ""))
-            for b in content
-            if isinstance(b, dict) and "text" in b
+            str(b.get("text", "")) for b in content if isinstance(b, dict) and "text" in b
         ]
         joined = "".join(text_parts).strip()
         if joined:

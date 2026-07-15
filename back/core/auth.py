@@ -8,10 +8,11 @@ Contract:
   - In prod an empty ``API_KEY`` is a deployment error: main.py refuses to
     start. This dependency still denies as defence-in-depth.
 """
+
 from __future__ import annotations
 
 import secrets
-from typing import Annotated, Optional
+from typing import Annotated
 
 from fastapi import Header
 
@@ -20,7 +21,7 @@ from core.errors import Unauthorized
 
 
 def require_api_key(
-    x_api_key: Annotated[Optional[str], Header(alias="X-API-Key")] = None,
+    x_api_key: Annotated[str | None, Header(alias="X-API-Key")] = None,
 ) -> None:
     """FastAPI dependency guarding mutating/admin endpoints (SEC-013)."""
     settings = get_settings()

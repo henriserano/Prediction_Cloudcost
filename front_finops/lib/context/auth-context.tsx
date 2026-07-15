@@ -2,6 +2,8 @@
 
 import * as React from "react"
 
+import { clearAllStoredThreadKeys } from "@/components/assistant/constants"
+
 export interface AuthUser {
   userId: string
   displayName: string
@@ -129,6 +131,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const logout = React.useCallback(async () => {
     await fetch("/api/auth/logout", { method: "POST", credentials: "include" })
+    // SEC-028: purge every stored chat-thread key so a subsequent user on the
+    // same browser doesn't inherit the previous user's transcript pointer.
+    clearAllStoredThreadKeys()
     setState({ user: null, loading: false, error: null })
   }, [])
 

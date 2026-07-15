@@ -1,8 +1,12 @@
 # ── ECR Repository ─────────────────────────────────────────────────────────────
 
 resource "aws_ecr_repository" "app" {
-  name                 = "${local.prefix}-backend"
-  image_tag_mutability = "MUTABLE"
+  name = "${local.prefix}-backend"
+  # SEC-034: immutable tags. Once pushed, a tag can no longer be overwritten;
+  # forensic references (rollback target, "which image ran on 2026-01-15")
+  # stay unambiguous. deploy.sh pushes per-SHA tags — see the drop of the
+  # ``:latest`` alias there.
+  image_tag_mutability = "IMMUTABLE"
 
   image_scanning_configuration {
     scan_on_push = true

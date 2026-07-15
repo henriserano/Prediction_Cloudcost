@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
-from typing import Annotated, List, Optional
+from typing import Annotated
 
 from fastapi import APIRouter, Query, Request
 
@@ -10,7 +10,7 @@ from core.aws_session import get_user_boto3_session, get_user_region
 from core.config import get_settings
 from core.errors import AppError, BadRequest
 from core.logging import get_logger
-from core.session import get_current_user_id
+from core.session import get_current_user_id, require_current_user_id
 from schemas.aws import (
     AWSAccount,
     AWSAuthStatus,
@@ -60,7 +60,11 @@ def _import_boto3():
     """
     try:
         import boto3  # type: ignore
-        from botocore.exceptions import BotoCoreError, ClientError, NoCredentialsError  # type: ignore
+        from botocore.exceptions import (  # type: ignore
+            BotoCoreError,
+            ClientError,
+            NoCredentialsError,
+        )
 
         return boto3, BotoCoreError, ClientError, NoCredentialsError
     except Exception as exc:
@@ -69,7 +73,7 @@ def _import_boto3():
             "boto3 is not installed. Add it to back/requirements.txt.",
             code="DEPENDENCY_ERROR",
             status_code=500,
-        )
+        ) from exc
 
 
 def _sts_get_caller_identity(session=None) -> dict:
@@ -92,7 +96,7 @@ def _sts_get_caller_identity(session=None) -> dict:
             "AWS_SECRET_ACCESS_KEY, ~/.aws/credentials, or attach an IAM role.",
             code="UNAUTHORIZED",
             status_code=401,
-        )
+        ) from None
     except ClientError as exc:
         code = exc.response.get("Error", {}).get("Code", "AWSClientError")
         raise AppError(
@@ -100,13 +104,15 @@ def _sts_get_caller_identity(session=None) -> dict:
             code="AWS_API_ERROR",
             status_code=401 if code in {"InvalidClientTokenId", "SignatureDoesNotMatch"} else 502,
             details={"aws_error_code": code},
-        )
+        ) from exc
     except Exception as exc:
         logger.error("sts_call_failed", extra={"error": repr(exc)})
-        raise AppError("Upstream AWS connectivity error.", code="AWS_API_ERROR", status_code=502)
+        raise AppError(
+            "Upstream AWS connectivity error.", code="AWS_API_ERROR", status_code=502
+        ) from exc
 
 
-def _resolve_period(start: Optional[str], end: Optional[str], months_default: int = 6) -> tuple[str, str]:
+def _resolve_period(start: str | None, end: str | None, months_default: int = 6) -> tuple[str, str]:
     """Return (start, end) YYYY-MM-DD, defaulting to [today - months_default, tomorrow].
 
     Cost Explorer treats ``end`` as exclusive — we bump it by one day so the
@@ -132,6 +138,7 @@ def _resolve_period(start: Optional[str], end: Optional[str], months_default: in
 # ---------------------------------------------------------------------------
 # Auth status
 # ---------------------------------------------------------------------------
+
 
 @router.get("/status", response_model=AWSAuthStatus, summary="Check AWS credentials via STS")
 def aws_status(request: Request) -> AWSAuthStatus:
@@ -172,12 +179,13 @@ def aws_status(request: Request) -> AWSAuthStatus:
 # Accounts — Organizations API, with STS fallback for single-account setups
 # ---------------------------------------------------------------------------
 
+
 @router.get(
     "/accounts",
-    response_model=List[AWSAccount],
+    response_model=list[AWSAccount],
     summary="List AWS accounts the current user can see (Organizations + STS fallback)",
 )
-def aws_accounts(request: Request) -> List[AWSAccount]:
+def aws_accounts(request: Request) -> list[AWSAccount]:
     """Return the AWS accounts visible to the caller.
 
     Two paths, in priority order:
@@ -201,13 +209,15 @@ def aws_accounts(request: Request) -> List[AWSAccount]:
         accounts: list[AWSAccount] = []
         for page in paginator.paginate():
             for acc in page.get("Accounts", []):
-                accounts.append(AWSAccount(
-                    account_id=acc.get("Id", ""),
-                    name=acc.get("Name") or acc.get("Id", ""),
-                    email=acc.get("Email"),
-                    status=acc.get("Status"),
-                    source="organizations",
-                ))
+                accounts.append(
+                    AWSAccount(
+                        account_id=acc.get("Id", ""),
+                        name=acc.get("Name") or acc.get("Id", ""),
+                        email=acc.get("Email"),
+                        status=acc.get("Status"),
+                        source="organizations",
+                    )
+                )
         if accounts:
             return accounts
     except ClientError as exc:
@@ -234,17 +244,20 @@ def aws_accounts(request: Request) -> List[AWSAccount]:
     # STS fallback: return the current account only.
     identity = _sts_get_caller_identity(session=session)
     account_id = identity.get("Account", "")
-    return [AWSAccount(
-        account_id=account_id,
-        name=account_id,
-        status="ACTIVE",
-        source="sts",
-    )]
+    return [
+        AWSAccount(
+            account_id=account_id,
+            name=account_id,
+            status="ACTIVE",
+            source="sts",
+        )
+    ]
 
 
 # ---------------------------------------------------------------------------
 # Cost Explorer — real billing data
 # ---------------------------------------------------------------------------
+
 
 def _ce_client(session=None):
     """Return a Cost Explorer client on the per-user session (falls back to
@@ -266,7 +279,7 @@ def _ce_call(fn, **kwargs):
             "AWS credentials not found. See /api/aws/status for details.",
             code="UNAUTHORIZED",
             status_code=401,
-        )
+        ) from None
     except ClientError as exc:
         code = exc.response.get("Error", {}).get("Code", "AWSClientError")
         status = 401 if code in {"InvalidClientTokenId", "SignatureDoesNotMatch"} else 502
@@ -277,10 +290,12 @@ def _ce_call(fn, **kwargs):
             code="AWS_API_ERROR",
             status_code=status,
             details={"aws_error_code": code},
-        )
+        ) from exc
     except Exception as exc:
         logger.error("cost_explorer_error", extra={"error": repr(exc)})
-        raise AppError("Upstream AWS connectivity error.", code="AWS_API_ERROR", status_code=502)
+        raise AppError(
+            "Upstream AWS connectivity error.", code="AWS_API_ERROR", status_code=502
+        ) from exc
 
 
 @router.get(
@@ -290,11 +305,16 @@ def _ce_call(fn, **kwargs):
 )
 def aws_billing(
     request: Request,
-    start: Annotated[Optional[str], Query(description="YYYY-MM-DD, defaults to ~6 months ago")] = None,
-    end: Annotated[Optional[str], Query(description="YYYY-MM-DD (inclusive), defaults to today")] = None,
+    start: Annotated[str | None, Query(description="YYYY-MM-DD, defaults to ~6 months ago")] = None,
+    end: Annotated[
+        str | None, Query(description="YYYY-MM-DD (inclusive), defaults to today")
+    ] = None,
     months: Annotated[int, Query(ge=1, le=24)] = 6,
     granularity: Annotated[str, Query(description="DAILY | MONTHLY")] = "DAILY",
-    account_id: Annotated[Optional[str], Query(description="Filter Cost Explorer to a single linked account (Organizations only)")] = None,
+    account_id: Annotated[
+        str | None,
+        Query(description="Filter Cost Explorer to a single linked account (Organizations only)"),
+    ] = None,
 ) -> AWSBillingResponse:
     """Fetch aggregated AWS costs grouped by service.
 
@@ -306,7 +326,7 @@ def aws_billing(
         date.fromisoformat(start) if start else None
         date.fromisoformat(end) if end else None
     except ValueError as exc:
-        raise BadRequest(f"Invalid date format: {exc}. Use YYYY-MM-DD.")
+        raise BadRequest(f"Invalid date format: {exc}. Use YYYY-MM-DD.") from exc
 
     gran = granularity.upper()
     if gran not in {"DAILY", "MONTHLY"}:
@@ -331,9 +351,7 @@ def aws_billing(
     }
     if account_id:
         # Filter to one specific linked account (Organizations payer role).
-        ce_kwargs["Filter"] = {
-            "Dimensions": {"Key": "LINKED_ACCOUNT", "Values": [account_id]}
-        }
+        ce_kwargs["Filter"] = {"Dimensions": {"Key": "LINKED_ACCOUNT", "Values": [account_id]}}
 
     result = _ce_call(client.get_cost_and_usage, **ce_kwargs)
 
@@ -358,7 +376,9 @@ def aws_billing(
             month_key = period_start[:7]
             by_month_totals[month_key] = by_month_totals.get(month_key, 0.0) + day_total
         elif gran == "MONTHLY" and period_start:
-            by_month_totals[period_start[:7]] = by_month_totals.get(period_start[:7], 0.0) + day_total
+            by_month_totals[period_start[:7]] = (
+                by_month_totals.get(period_start[:7], 0.0) + day_total
+            )
         total += day_total
 
     by_service = [
@@ -371,13 +391,14 @@ def aws_billing(
         for svc, cost in sorted(by_service_totals.items(), key=lambda kv: kv[1], reverse=True)
     ]
     by_month = [
-        AWSBillingByMonth(month=m, cost=round(c, 4))
-        for m, c in sorted(by_month_totals.items())
+        AWSBillingByMonth(month=m, cost=round(c, 4)) for m, c in sorted(by_month_totals.items())
     ]
 
     return AWSBillingResponse(
         account_id=resolved_account_id,
-        period=DateRange(start=start_iso, end=(date.fromisoformat(end_iso) - timedelta(days=1)).isoformat()),
+        period=DateRange(
+            start=start_iso, end=(date.fromisoformat(end_iso) - timedelta(days=1)).isoformat()
+        ),
         total=round(total, 4),
         by_service=by_service,
         by_month=by_month,
@@ -390,13 +411,13 @@ def aws_billing(
 
 @router.get(
     "/services",
-    response_model=List[AWSService],
+    response_model=list[AWSService],
     summary="List AWS services with costs in the last N months",
 )
 def aws_services(
     request: Request,
     months: Annotated[int, Query(ge=1, le=12)] = 3,
-) -> List[AWSService]:
+) -> list[AWSService]:
     """Return AWS services observed in Cost Explorer over the last N months.
 
     This is a lightweight alternative to Service Quotas — it only returns
@@ -417,7 +438,9 @@ def aws_services(
     for chunk in result.get("ResultsByTime", []):
         for grp in chunk.get("Groups", []):
             svc = (grp.get("Keys") or ["Unknown"])[0]
-            amount = float(grp.get("Metrics", {}).get("UnblendedCost", {}).get("Amount", 0.0) or 0.0)
+            amount = float(
+                grp.get("Metrics", {}).get("UnblendedCost", {}).get("Amount", 0.0) or 0.0
+            )
             totals[svc] = totals.get(svc, 0.0) + amount
 
     services = [
@@ -434,6 +457,7 @@ def aws_services(
 # ---------------------------------------------------------------------------
 # Sync — copy AWS Cost Explorer data into the FinOps events store
 # ---------------------------------------------------------------------------
+
 
 @router.post(
     "/sync",
@@ -465,9 +489,7 @@ def aws_sync(request: Request, body: AWSSyncRequest) -> AWSSyncResponse:
         "GroupBy": [{"Type": "DIMENSION", "Key": "SERVICE"}],
     }
     if body.account_id:
-        ce_kwargs["Filter"] = {
-            "Dimensions": {"Key": "LINKED_ACCOUNT", "Values": [body.account_id]}
-        }
+        ce_kwargs["Filter"] = {"Dimensions": {"Key": "LINKED_ACCOUNT", "Values": [body.account_id]}}
     result = _ce_call(client.get_cost_and_usage, **ce_kwargs)
 
     events: list[BillingEvent] = []
@@ -490,12 +512,14 @@ def aws_sync(request: Request, body: AWSSyncRequest) -> AWSSyncResponse:
                 continue
             services.add(svc)
             total += amount
-            events.append(BillingEvent(
-                date=day,
-                service=svc,
-                cost=round(amount, 4),
-                description=f"AWS · {resolved_account_id or 'unknown-account'}",
-            ))
+            events.append(
+                BillingEvent(
+                    date=day,
+                    service=svc,
+                    cost=round(amount, 4),
+                    description=f"AWS · {resolved_account_id or 'unknown-account'}",
+                )
+            )
 
     if not events:
         raise BadRequest(
@@ -510,7 +534,16 @@ def aws_sync(request: Request, body: AWSSyncRequest) -> AWSSyncResponse:
 
     from routes.routes_events import ingest_events
 
-    resp = ingest_events(EventsIngestRequest(events=events, replace=body.replace))
+    # ingest_events is a FastAPI route: its ``user_id`` param is a Depends()
+    # sentinel that only gets resolved through the router. Calling it directly
+    # here means we MUST resolve the user ourselves — otherwise events land
+    # under the Depends object as a "phantom" key and every downstream reader
+    # (analytics/forecast/services/anomalies) sees an empty store.
+    user_id = require_current_user_id(request)
+    resp = ingest_events(
+        EventsIngestRequest(events=events, replace=body.replace),
+        user_id=user_id,
+    )
     logger.info(
         "aws_sync_ingested",
         extra={

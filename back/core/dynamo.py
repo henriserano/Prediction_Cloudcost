@@ -12,6 +12,7 @@ Every helper returns the raw boto3 table object; callers translate items to
 the Pydantic models they expose (see routes_auth, routes_conversations,
 routes_credentials).
 """
+
 from __future__ import annotations
 
 from functools import lru_cache
@@ -39,7 +40,7 @@ def _resource():
     return boto3.resource("dynamodb", **kwargs)
 
 
-def _require_table(name: str, purpose: str) -> "Table":
+def _require_table(name: str, purpose: str) -> Table:
     if not name:
         raise AppError(
             f"DynamoDB table for '{purpose}' is not configured. "
@@ -50,17 +51,17 @@ def _require_table(name: str, purpose: str) -> "Table":
     return _resource().Table(name)
 
 
-def users_table() -> "Table":
+def users_table() -> Table:
     return _require_table(get_settings().ddb_table_users, "users")
 
 
-def conversations_table() -> "Table":
+def conversations_table() -> Table:
     return _require_table(get_settings().ddb_table_conversations, "conversations")
 
 
-def credentials_table() -> "Table":
+def credentials_table() -> Table:
     return _require_table(get_settings().ddb_table_credentials, "credentials")
 
 
-def portfolios_table() -> "Table":
+def portfolios_table() -> Table:
     return _require_table(get_settings().ddb_table_portfolios, "portfolios")

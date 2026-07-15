@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from typing import Optional
+
 from pydantic import BaseModel, Field, field_validator
 
 from schemas.gcp import DateRange
@@ -12,7 +12,7 @@ _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 class AWSSyncRequest(BaseModel):
     """Ingest AWS Cost Explorer data into the FinOps store."""
 
-    account_id: Optional[str] = Field(
+    account_id: str | None = Field(
         default=None,
         description="Filter to a specific linked account (Organizations only). "
         "None = the whole payer account.",
@@ -27,7 +27,7 @@ class AWSSyncRequest(BaseModel):
 
 class AWSSyncResponse(BaseModel):
     ingested: int
-    account_id: Optional[str]
+    account_id: str | None
     period_start: str
     period_end: str
     services_count: int
@@ -47,8 +47,8 @@ class AWSAccount(BaseModel):
 
     account_id: str
     name: str
-    email: Optional[str] = None
-    status: Optional[str] = None
+    email: str | None = None
+    status: str | None = None
     source: str = Field(
         default="sts",
         description="'organizations' when discovered via ListAccounts, 'sts' when fallback",
@@ -64,11 +64,11 @@ class AWSAuthStatus(BaseModel):
     """
 
     authenticated: bool
-    account_id: Optional[str] = Field(default=None, description="12-digit AWS account ID")
-    arn: Optional[str] = Field(default=None, description="IAM ARN of the caller")
-    user_id: Optional[str] = Field(default=None)
-    region: Optional[str] = Field(default=None)
-    detail: Optional[str] = Field(
+    account_id: str | None = Field(default=None, description="12-digit AWS account ID")
+    arn: str | None = Field(default=None, description="IAM ARN of the caller")
+    user_id: str | None = Field(default=None)
+    region: str | None = Field(default=None)
+    detail: str | None = Field(
         default=None,
         description="Human-readable error/context when authenticated is False",
     )
@@ -96,7 +96,7 @@ class AWSBillingByDay(BaseModel):
 
 
 class AWSBillingResponse(BaseModel):
-    account_id: Optional[str]
+    account_id: str | None
     period: DateRange
     total: float
     by_service: list[AWSBillingByService]
@@ -120,13 +120,13 @@ class AWSService(BaseModel):
 class AWSBillingQuery(BaseModel):
     """Optional query params validated up-front to prevent invalid Cost Explorer calls."""
 
-    start: Optional[str] = Field(default=None, description="YYYY-MM-DD")
-    end: Optional[str] = Field(default=None, description="YYYY-MM-DD")
+    start: str | None = Field(default=None, description="YYYY-MM-DD")
+    end: str | None = Field(default=None, description="YYYY-MM-DD")
     granularity: str = Field(default="DAILY")
 
     @field_validator("start", "end")
     @classmethod
-    def _validate_date(cls, v: Optional[str]) -> Optional[str]:
+    def _validate_date(cls, v: str | None) -> str | None:
         if v is None:
             return v
         if not _DATE_RE.match(v):

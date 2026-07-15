@@ -89,8 +89,8 @@ export default function DimReductionTab() {
 
       {/* Scree plot */}
       <SectionCard
-        title="Variance expliquée par composante (scree plot)"
-        description="Barres = variance par PC · courbe = variance cumulée"
+        title="Part d'information portée par chaque composante"
+        description="Barres = part de variance capturée par chaque axe (PC) · courbe = cumul. Plus la barre est haute, plus l'axe résume les données. Aussi appelé « scree plot »."
       >
         <ResponsiveContainer width="100%" height={280}>
           <BarChart data={screeData} margin={{ left: -18, right: 32, top: 8 }}>

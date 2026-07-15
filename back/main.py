@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator
 
 try:
     from dotenv import load_dotenv
@@ -18,23 +18,25 @@ from fastapi.responses import JSONResponse
 from core.config import get_settings
 from core.errors import AppError
 from core.logging import get_logger, request_id_ctx, setup_logging
+from core.session import decode_session
+from core.user_context import reset_current_user_id, set_current_user_id
+from routes.routes_advanced import router as advanced_router
 from routes.routes_analytics import router as analytics_router
-from routes.routes_forecast import router as forecast_router
-from routes.routes_health import router as health_router
-from routes.routes_gcp import router as gcp_router
+from routes.routes_auth import router as auth_router
 from routes.routes_aws import router as aws_router
 from routes.routes_azure import router as azure_router
-from routes.routes_events import router as events_router
-from routes.routes_data import router as data_router
-from routes.routes_advanced import router as advanced_router
 from routes.routes_chat import router as chat_router
-from routes.routes_tools import router as tools_router
-from routes.routes_auth import router as auth_router
 from routes.routes_conversations import router as conversations_router
 from routes.routes_credentials import router as credentials_router
+from routes.routes_data import router as data_router
+from routes.routes_events import router as events_router
+from routes.routes_forecast import router as forecast_router
+from routes.routes_gcp import router as gcp_router
+from routes.routes_health import router as health_router
 from routes.routes_local_billing import router as local_billing_router
 from routes.routes_portfolios import router as portfolios_router
 from routes.routes_simulation import router as simulation_router
+from routes.routes_tools import router as tools_router
 
 logger = get_logger(__name__)
 
@@ -59,6 +61,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         ) from exc
 
     from data.loader import load_daily_costs, load_daily_per_service
+
     load_daily_costs()
     load_daily_per_service()
     logger.info("data_loaded")
@@ -71,8 +74,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
 
     from core.precompute import warm_cache
+
     precompute_summary = await warm_cache()
-    logger.info("cache_ready", extra={"ok": precompute_summary["ok"], "total": precompute_summary["total"]})
+    logger.info(
+        "cache_ready", extra={"ok": precompute_summary["ok"], "total": precompute_summary["total"]}
+    )
 
     yield
 
@@ -105,10 +111,23 @@ if settings.env == "prod" and not settings.api_key:
         "endpoints) and restart."
     )
 
-# SEC-011: Disable interactive API docs in production to avoid exposing the
-# full API surface and enabling direct endpoint invocation by attackers.
+# SEC-021 (H-5): the JWT signing key must be provided in prod. Without an
+# explicit ``SESSION_SECRET`` the auth layer falls back to an in-process
+# ephemeral secret — every worker or ECS task rotation silently invalidates
+# every session, and horizontal scaling produces per-worker key divergence.
+if settings.env == "prod" and not settings.session_secret:
+    raise RuntimeError(
+        "SECURITY (SEC-021): SESSION_SECRET is empty in production. Provision "
+        "a 32-byte random secret (see Secrets Manager) and restart."
+    )
+
+# SEC-011: Disable interactive API docs AND the raw OpenAPI schema in
+# production. Without ``openapi_url=None`` the schema itself is still
+# served at /openapi.json even when Swagger/Redoc are off, so an attacker
+# gets the full endpoint list for free.
 _docs_url = "/docs" if settings.env != "prod" else None
 _redoc_url = "/redoc" if settings.env != "prod" else None
+_openapi_url = "/openapi.json" if settings.env != "prod" else None
 
 app = FastAPI(
     title=settings.app_name,
@@ -117,6 +136,7 @@ app = FastAPI(
     lifespan=lifespan,
     docs_url=_docs_url,
     redoc_url=_redoc_url,
+    openapi_url=_openapi_url,
 )
 
 app.add_middleware(
@@ -134,12 +154,40 @@ async def security_headers_middleware(request: Request, call_next):
     response = await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
-    response.headers["X-XSS-Protection"] = "1; mode=block"
+    # SEC-022: X-XSS-Protection was removed. Modern browsers ignore or actively
+    # de-recommend it (older Chromium versions were subject to XS-Leaks via the
+    # filter). CSP below is the load-bearing defence.
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    # SEC-023: minimal CSP for a JSON API. ``default-src 'none'`` blocks any
+    # accidental HTML/JS execution should a route ever return non-JSON;
+    # ``frame-ancestors 'none'`` complements X-Frame-Options for older UAs.
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+    )
     if settings.env == "prod":
         response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains"
     return response
+
+
+@app.middleware("http")
+async def user_context_middleware(request: Request, call_next):
+    """SEC-020: populate the per-request user_id ContextVar from the session
+    cookie so downstream loaders/store lookups can scope per-user without
+    threading the id through every function signature.
+
+    This middleware never raises 401 — routes that require an authenticated
+    caller depend on ``require_current_user_id`` (which does). Anonymous
+    callers just get a None scope; per-user stores return empty slices.
+    """
+    cookie_name = settings.session_cookie_name
+    token = request.cookies.get(cookie_name)
+    user_id = decode_session(token) if token else None
+    ctx_token = set_current_user_id(user_id)
+    try:
+        return await call_next(request)
+    finally:
+        reset_current_user_id(ctx_token)
 
 
 @app.middleware("http")
@@ -169,7 +217,7 @@ async def api_version_alias_middleware(request: Request, call_next):
     """
     path = request.scope.get("path", "")
     if path.startswith("/api/v1/"):
-        request.scope["path"] = "/api/" + path[len("/api/v1/"):]
+        request.scope["path"] = "/api/" + path[len("/api/v1/") :]
         # Also rewrite the raw path so downstream logs / URL reconstruction
         # match the effective handler.
         request.scope["raw_path"] = request.scope["path"].encode("ascii")

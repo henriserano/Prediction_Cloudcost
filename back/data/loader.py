@@ -7,6 +7,7 @@ from typing import Any, Callable
 import pandas as pd
 
 from core.config import get_settings
+from core.user_context import current_user_scope
 
 _DATA_DIR = Path(__file__).parent
 
@@ -23,26 +24,38 @@ _MAX_PARQUET_BYTES = 32 * 1024 * 1024
 
 _mtimes: dict[str, float] = {}
 
-# PERF-001: single-flight cache. functools.lru_cache does NOT serialise the
-# wrapped call body — N concurrent callers on a cold cache each spawn their own
-# parquet parse. On startup, precompute() + the first user requests hit this
-# path concurrently; without the lock we parsed the parquet 4-6 times back to
-# back. Per-key threading.Lock + double-checked-read guarantees a single parse.
-_load_cache: dict[str, pd.DataFrame] = {}
-_load_locks: dict[str, threading.Lock] = {
-    "daily_costs": threading.Lock(),
-    "daily_per_service": threading.Lock(),
-}
+# PERF-001 / SEC-020: single-flight cache keyed by (user_scope, dataset).
+# Before SEC-020, the cache was a flat dataset→DataFrame map — the first user
+# to load parquet warmed it, and every subsequent request (even from a
+# different user with fresh events) reused that stale frame. Now every user
+# has their own slot; the parquet-fallback slot lives under the anonymous
+# scope so the demo path still hits its cache. Per-key lock avoids concurrent
+# parse floods (functools.lru_cache does not serialise the wrapped call body).
+_load_cache: dict[tuple[str, str], pd.DataFrame] = {}
+_cache_lock = threading.Lock()
+_load_locks: dict[tuple[str, str], threading.Lock] = {}
 
 
-def _single_flight(key: str, build: Callable[[], pd.DataFrame]) -> pd.DataFrame:
-    """Return the cached DataFrame for ``key``, calling ``build`` only if it
-    isn't cached yet — and only from one thread at a time (double-checked
-    locking). The build result is stored back in ``_load_cache``."""
+def _scoped_key(dataset: str) -> tuple[str, str]:
+    return current_user_scope(), dataset
+
+
+def _lock_for(key: tuple[str, str]) -> threading.Lock:
+    """Return (creating if needed) the lock for a given (scope, dataset) key.
+    Creation itself is serialised under _cache_lock so two threads can't race
+    on the ``setdefault`` and each publish their own lock instance."""
+    with _cache_lock:
+        return _load_locks.setdefault(key, threading.Lock())
+
+
+def _single_flight(dataset: str, build: Callable[[], pd.DataFrame]) -> pd.DataFrame:
+    """Return the cached DataFrame for the current-user (scope, dataset) key,
+    building it under a per-key lock if it's not cached yet (double-checked)."""
+    key = _scoped_key(dataset)
     cached = _load_cache.get(key)
     if cached is not None:
         return cached
-    with _load_locks[key]:
+    with _lock_for(key):
         cached = _load_cache.get(key)
         if cached is not None:
             return cached
@@ -52,8 +65,12 @@ def _single_flight(key: str, build: Callable[[], pd.DataFrame]) -> pd.DataFrame:
 
 # Track which data source the most recent load resolved to so the /api/data/status
 # endpoint (and callers who need to display provenance) can report it. Cleared
-# by invalidate_cache() alongside the LRU caches.
-_last_source: dict[str, str] = {}
+# by invalidate_cache() alongside the LRU caches. SEC-020: keyed by user scope.
+_last_source: dict[tuple[str, str], str] = {}
+
+
+def _set_last_source(dataset: str, value: str) -> None:
+    _last_source[_scoped_key(dataset)] = value
 
 
 # ---------------------------------------------------------------------------
@@ -131,7 +148,7 @@ def _read_events_df() -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 def load_daily_costs() -> pd.DataFrame:
-    """Daily aggregated costs (ds, y).
+    """Daily aggregated costs (ds, y) for the current user.
 
     Resolution order:
       1. Live data ingested via /api/events or /api/gcp/sync (real GCP data).
@@ -142,7 +159,7 @@ def load_daily_costs() -> pd.DataFrame:
     def _build() -> pd.DataFrame:
         events_df = _read_events_df()
         if len(events_df) > 0:
-            _last_source["daily_costs"] = "events"
+            _set_last_source("daily_costs", "events")
             return _daily_from_events(events_df)
 
         if get_settings().data_allow_parquet_fallback:
@@ -152,10 +169,10 @@ def load_daily_costs() -> pd.DataFrame:
                 if df is not None:
                     df["ds"] = pd.to_datetime(df["ds"])
                     _mtimes["daily_costs"] = path.stat().st_mtime
-                    _last_source["daily_costs"] = "parquet_fallback"
+                    _set_last_source("daily_costs", "parquet_fallback")
                     return df.sort_values("ds").reset_index(drop=True)
 
-        _last_source["daily_costs"] = "empty"
+        _set_last_source("daily_costs", "empty")
         return pd.DataFrame(columns=["ds", "y"])
 
     return _single_flight("daily_costs", _build)
@@ -170,7 +187,7 @@ def load_daily_per_service() -> pd.DataFrame:
     def _build() -> pd.DataFrame:
         events_df = _read_events_df()
         if len(events_df) > 0:
-            _last_source["daily_per_service"] = "events"
+            _set_last_source("daily_per_service", "events")
             return _per_service_from_events(events_df)
 
         if get_settings().data_allow_parquet_fallback:
@@ -180,33 +197,38 @@ def load_daily_per_service() -> pd.DataFrame:
                 if df is not None:
                     df["ds"] = pd.to_datetime(df["ds"])
                     _mtimes["daily_per_service"] = path.stat().st_mtime
-                    _last_source["daily_per_service"] = "parquet_fallback"
+                    _set_last_source("daily_per_service", "parquet_fallback")
                     return df.sort_values("ds").reset_index(drop=True)
 
-        _last_source["daily_per_service"] = "empty"
+        _set_last_source("daily_per_service", "empty")
         return pd.DataFrame(columns=["ds"])
 
     return _single_flight("daily_per_service", _build)
 
 
 def invalidate_cache() -> None:
-    """Clear the single-flight cache for both loaders and reset provenance."""
-    # Acquire both locks so a concurrent load_* call cannot slip a stale value
-    # into the cache while we clear it.
-    with _load_locks["daily_costs"], _load_locks["daily_per_service"]:
+    """Clear the single-flight cache across every user and reset provenance.
+
+    Called from ingest endpoints so newly-uploaded data replaces the stale
+    frame at the next read. Global by design — an event ingest for user A
+    only needs to invalidate A's slot, but the mtime map is shared, so we
+    clear all slots and let each user rebuild on demand.
+    """
+    with _cache_lock:
         _load_cache.clear()
         _mtimes.clear()
         _last_source.clear()
 
 
 def get_last_source() -> dict[str, str]:
-    """Return the source of the most recent successful load per dataset.
-
-    Values: ``"events"`` (live data), ``"parquet_fallback"`` (bundled demo),
-    ``"empty"`` (nothing loaded), or missing key if the loader hasn't been
-    called since the last cache invalidation.
-    """
-    return dict(_last_source)
+    """Return the source of the most recent successful load per dataset,
+    scoped to the current user."""
+    scope = current_user_scope()
+    return {
+        dataset: value
+        for (user, dataset), value in _last_source.items()
+        if user == scope
+    }
 
 
 def get_data_fingerprint() -> dict[str, Any]:

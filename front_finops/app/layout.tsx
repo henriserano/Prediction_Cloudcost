@@ -94,6 +94,10 @@ export default function RootLayout({
     <html
       lang="fr"
       className={`${sora.variable} ${mono.variable} h-full antialiased`}
+      // Opt into the Next.js 15+ acknowledgement that ``scroll-behavior: smooth``
+      // is deliberate (declared in globals.css). Without this the dev overlay
+      // warns about smooth scrolling during route transitions.
+      data-scroll-behavior="smooth"
       suppressHydrationWarning
     >
       <body className="h-full flex bg-background text-foreground">

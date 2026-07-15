@@ -80,9 +80,15 @@ resource "aws_iam_role_policy_attachment" "apprunner_dynamodb" {
 # resolves `runtime_environment_secrets` with the *instance* role (unlike ECS
 # where it was the execution role).
 locals {
+  # SEC-029 (I-H1): every ARN listed here is granted GetSecretValue to the
+  # App Runner instance role. Keep it minimal — one entry per resolved-at-
+  # runtime secret. Plain-text fallbacks in variables.tf are for local dev
+  # only; do not add them here.
   apprunner_secret_arns = compact([
     var.bedrock_api_key_secret_arn,
     var.google_client_secret_arn,
+    var.api_key_secret_arn,
+    var.session_secret_arn,
   ])
 }
 
@@ -150,6 +156,10 @@ resource "aws_apprunner_service" "app" {
       image_configuration {
         port = tostring(var.app_port)
 
+        # SEC-029 (I-H1): API_KEY and SESSION_SECRET are only injected in
+        # plain-text when their Secrets-Manager ARN counterpart is unset.
+        # In prod the ARN branch runs and the plain values stay empty (and
+        # therefore out of terraform.tfstate + out of DescribeService).
         runtime_environment_variables = merge(
           {
             ENV                       = var.env
@@ -165,8 +175,10 @@ resource "aws_apprunner_service" "app" {
             BEDROCK_GUARDRAIL_VERSION = var.bedrock_guardrail_version
             BEDROCK_MAX_TOKENS        = tostring(var.bedrock_max_tokens)
           },
-          var.api_key != "" ? { API_KEY = var.api_key } : {},
-          var.session_secret != "" ? { SESSION_SECRET = var.session_secret } : {},
+          (var.api_key != "" && var.api_key_secret_arn == "")
+          ? { API_KEY = var.api_key } : {},
+          (var.session_secret != "" && var.session_secret_arn == "")
+          ? { SESSION_SECRET = var.session_secret } : {},
           var.google_client_id != "" ? { GOOGLE_CLIENT_ID = var.google_client_id } : {},
           var.google_redirect_uri != "" ? { GOOGLE_REDIRECT_URI = var.google_redirect_uri } : {},
           var.frontend_url != "" ? { FRONTEND_URL = var.frontend_url } : {},
@@ -180,6 +192,12 @@ resource "aws_apprunner_service" "app" {
           } : {},
           var.google_client_secret_arn != "" ? {
             GOOGLE_CLIENT_SECRET = var.google_client_secret_arn
+          } : {},
+          var.api_key_secret_arn != "" ? {
+            API_KEY = var.api_key_secret_arn
+          } : {},
+          var.session_secret_arn != "" ? {
+            SESSION_SECRET = var.session_secret_arn
           } : {},
         )
       }

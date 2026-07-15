@@ -1,12 +1,16 @@
 """Security regression tests.
 
-Covers the SEC-01x fixes:
+Covers the SEC-01x / SEC-02x fixes:
   - SEC-013: X-API-Key required on mutating endpoints when API_KEY is set.
-  - SEC-014: GCP OAuth tokens are bound to a per-browser session (sid cookie);
-    two sessions never see each other's token, logout only clears the caller.
+  - SEC-014: GCP OAuth tokens are bound to a per-browser session (sid cookie)
+    AND to the authenticated JWT user (SEC-020 tightening — cross-user replay
+    of gcp_sid is refused).
   - SEC-016: multipart uploads are size- and count-capped.
   - SEC-017: empty/short series produce a clean 422, not a 500 traceback.
+  - SEC-020: per-user events store — anonymous callers never see any user's
+    ingested data, and analytics/forecast routes require authentication.
 """
+
 from __future__ import annotations
 
 import pandas as pd
@@ -14,10 +18,22 @@ import pytest
 
 pytest_plugins = ("asyncio",)
 
+_TEST_USER_ID = "test-user"
+
+
+def _issue_test_session(user_id: str = _TEST_USER_ID) -> str:
+    """Return a valid JWT signed with the current SESSION_SECRET so httpx
+    ASGI requests carry an authenticated identity through the middleware.
+    """
+    from core.session import issue_session
+
+    return issue_session(user_id)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Fixtures
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 @pytest.fixture(autouse=True)
 def mock_data_loader(monkeypatch):
@@ -30,6 +46,7 @@ def mock_data_loader(monkeypatch):
     def _stub(df):
         def _loader():
             return df
+
         # invalidate_cache() calls .cache_clear() on the (normally lru_cached)
         # loaders — the stub must expose it too.
         _loader.cache_clear = lambda: None
@@ -49,18 +66,18 @@ def mock_data_loader(monkeypatch):
 @pytest.fixture(autouse=True)
 def clean_state():
     """Isolate the shared in-memory state between tests."""
-    from routes import routes_events, routes_gcp
     from core.cache import app_cache
     from data.loader import invalidate_cache
+    from routes import routes_events, routes_gcp
 
-    routes_events._injected_events = []
+    routes_events._injected_events.clear()
     with routes_gcp._state_lock:
         routes_gcp._token_store.clear()
         routes_gcp._oauth_states.clear()
     app_cache.clear()
     invalidate_cache()
     yield
-    routes_events._injected_events = []
+    routes_events._injected_events.clear()
     with routes_gcp._state_lock:
         routes_gcp._token_store.clear()
         routes_gcp._oauth_states.clear()
@@ -68,12 +85,33 @@ def clean_state():
     invalidate_cache()
 
 
+@pytest.fixture
+def user_context(monkeypatch):
+    """Set the per-request ContextVar so functions that read events pick up
+    the test user's slice. Only needed for tests calling analysis functions
+    directly — HTTP tests get the ContextVar populated by the middleware
+    when the ``sid`` cookie is present.
+    """
+    from core.user_context import reset_current_user_id, set_current_user_id
+
+    tok = set_current_user_id(_TEST_USER_ID)
+    yield _TEST_USER_ID
+    reset_current_user_id(tok)
+
+
 def _client():
     import httpx
     from httpx import ASGITransport
+
     from main import app
 
     return httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
+
+
+def _auth_cookies() -> dict:
+    from core.config import get_settings
+
+    return {get_settings().session_cookie_name: _issue_test_session()}
 
 
 _EVENT_PAYLOAD = {
@@ -86,9 +124,11 @@ _EVENT_PAYLOAD = {
 # SEC-013 — require_api_key
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_events_open_when_no_api_key_configured_in_dev(monkeypatch):
-    """Empty API_KEY + env=dev → mutating endpoints stay open (local dev)."""
+    """Empty API_KEY + env=dev → mutating endpoints stay open to authenticated
+    callers (local dev). Anonymous still rejected by SEC-020."""
     from core.config import get_settings
 
     settings = get_settings()
@@ -96,7 +136,7 @@ async def test_events_open_when_no_api_key_configured_in_dev(monkeypatch):
     monkeypatch.setattr(settings, "env", "dev")
 
     async with _client() as client:
-        response = await client.post("/api/events", json=_EVENT_PAYLOAD)
+        response = await client.post("/api/events", json=_EVENT_PAYLOAD, cookies=_auth_cookies())
     assert response.status_code == 200
 
 
@@ -107,7 +147,7 @@ async def test_events_401_without_key_when_api_key_configured(monkeypatch):
     monkeypatch.setattr(get_settings(), "api_key", "sekret-key")
 
     async with _client() as client:
-        response = await client.post("/api/events", json=_EVENT_PAYLOAD)
+        response = await client.post("/api/events", json=_EVENT_PAYLOAD, cookies=_auth_cookies())
     assert response.status_code == 401
     assert response.json()["error"]["code"] == "UNAUTHORIZED"
 
@@ -120,7 +160,10 @@ async def test_events_401_with_wrong_key(monkeypatch):
 
     async with _client() as client:
         response = await client.post(
-            "/api/events", json=_EVENT_PAYLOAD, headers={"X-API-Key": "wrong"}
+            "/api/events",
+            json=_EVENT_PAYLOAD,
+            headers={"X-API-Key": "wrong"},
+            cookies=_auth_cookies(),
         )
     assert response.status_code == 401
 
@@ -133,9 +176,38 @@ async def test_events_200_with_correct_key(monkeypatch):
 
     async with _client() as client:
         response = await client.post(
-            "/api/events", json=_EVENT_PAYLOAD, headers={"X-API-Key": "sekret-key"}
+            "/api/events",
+            json=_EVENT_PAYLOAD,
+            headers={"X-API-Key": "sekret-key"},
+            cookies=_auth_cookies(),
         )
     assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_events_401_anonymous_even_with_valid_api_key(monkeypatch):
+    """SEC-020: mutating events endpoint additionally requires an authenticated
+    session — an X-API-Key alone (no ``sid`` cookie) is not enough."""
+    from core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "api_key", "sekret-key")
+
+    async with _client() as client:
+        response = await client.post(
+            "/api/events",
+            json=_EVENT_PAYLOAD,
+            headers={"X-API-Key": "sekret-key"},
+        )
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_analytics_endpoint_requires_authentication():
+    """SEC-020: analytics routes now reject anonymous callers so they cannot
+    read another user's most-recent events store."""
+    async with _client() as client:
+        response = await client.get("/api/kpi")
+    assert response.status_code == 401
 
 
 @pytest.mark.asyncio
@@ -155,20 +227,45 @@ async def test_admin_cache_clear_requires_key(monkeypatch):
 # SEC-014 — GCP session isolation
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_gcp_status_isolated_between_sessions():
-    """A token stored for sid A must be invisible to sid B and to anonymous."""
+    """A token stored for sid A + user A must be invisible to sid B and to
+    an authenticated user other than A (SEC-014 + SEC-020 tightening)."""
     from routes import routes_gcp
 
-    routes_gcp._store_session_token("sid-aaa", {"access_token": "tok", "email": "a@example.com"})
+    routes_gcp._store_session_token(
+        "sid-aaa",
+        {"access_token": "tok", "email": "a@example.com"},
+        user_id=_TEST_USER_ID,
+    )
+    other_jwt = _issue_test_session("other-user")
 
     async with _client() as client:
-        as_a = (await client.get("/api/gcp/status", headers={"Cookie": "gcp_sid=sid-aaa"})).json()
-        as_b = (await client.get("/api/gcp/status", headers={"Cookie": "gcp_sid=sid-bbb"})).json()
+        as_a = (
+            await client.get(
+                "/api/gcp/status",
+                headers={"Cookie": f"gcp_sid=sid-aaa; sid={_issue_test_session()}"},
+            )
+        ).json()
+        # Same gcp_sid but different JWT user — must fall back to "unauthenticated".
+        as_other = (
+            await client.get(
+                "/api/gcp/status",
+                headers={"Cookie": f"gcp_sid=sid-aaa; sid={other_jwt}"},
+            )
+        ).json()
+        as_b = (
+            await client.get(
+                "/api/gcp/status",
+                headers={"Cookie": f"gcp_sid=sid-bbb; sid={_issue_test_session()}"},
+            )
+        ).json()
         anon = (await client.get("/api/gcp/status")).json()
 
     assert as_a["authenticated"] is True
     assert as_a["email"] == "a@example.com"
+    assert as_other["authenticated"] is False
     assert as_b["authenticated"] is False
     assert anon["authenticated"] is False
 
@@ -177,11 +274,12 @@ async def test_gcp_status_isolated_between_sessions():
 async def test_gcp_authenticated_endpoints_401_for_other_session():
     from routes import routes_gcp
 
-    routes_gcp._store_session_token("sid-aaa", {"access_token": "tok"})
+    routes_gcp._store_session_token("sid-aaa", {"access_token": "tok"}, user_id=_TEST_USER_ID)
 
     async with _client() as client:
         response = await client.get(
-            "/api/gcp/billing-accounts", headers={"Cookie": "gcp_sid=sid-bbb"}
+            "/api/gcp/billing-accounts",
+            headers={"Cookie": f"gcp_sid=sid-bbb; sid={_issue_test_session()}"},
         )
     assert response.status_code == 401
     assert response.json()["error"]["code"] == "UNAUTHORIZED"
@@ -191,11 +289,14 @@ async def test_gcp_authenticated_endpoints_401_for_other_session():
 async def test_gcp_logout_only_clears_requester_session():
     from routes import routes_gcp
 
-    routes_gcp._store_session_token("sid-aaa", {"access_token": "tok-a"})
-    routes_gcp._store_session_token("sid-bbb", {"access_token": "tok-b"})
+    routes_gcp._store_session_token("sid-aaa", {"access_token": "tok-a"}, user_id=_TEST_USER_ID)
+    routes_gcp._store_session_token("sid-bbb", {"access_token": "tok-b"}, user_id="other-user")
 
     async with _client() as client:
-        response = await client.get("/api/gcp/logout", headers={"Cookie": "gcp_sid=sid-aaa"})
+        response = await client.get(
+            "/api/gcp/logout",
+            headers={"Cookie": f"gcp_sid=sid-aaa; sid={_issue_test_session()}"},
+        )
     assert response.status_code == 200
 
     with routes_gcp._state_lock:
@@ -207,7 +308,9 @@ def test_gcp_session_store_cap_evicts_oldest():
     from routes import routes_gcp
 
     for i in range(routes_gcp._MAX_SESSIONS + 5):
-        routes_gcp._store_session_token(f"sid-{i:04d}", {"access_token": f"tok-{i}"})
+        routes_gcp._store_session_token(
+            f"sid-{i:04d}", {"access_token": f"tok-{i}"}, user_id=f"u-{i}"
+        )
 
     with routes_gcp._state_lock:
         assert len(routes_gcp._token_store) <= routes_gcp._MAX_SESSIONS
@@ -219,6 +322,7 @@ def test_gcp_session_store_cap_evicts_oldest():
 # ─────────────────────────────────────────────────────────────────────────────
 # SEC-017 — empty/short series guards
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def test_get_forecast_raises_not_enough_data_on_empty_series(monkeypatch):
     import forecast.engine as engine
@@ -251,9 +355,7 @@ def test_stl_raises_on_short_series(monkeypatch):
     import analysis.timeseries as ts
     from core.errors import AppError
 
-    short = pd.DataFrame(
-        {"ds": pd.date_range("2026-01-01", periods=10, freq="D"), "y": range(10)}
-    )
+    short = pd.DataFrame({"ds": pd.date_range("2026-01-01", periods=10, freq="D"), "y": range(10)})
     monkeypatch.setattr(ts, "load_daily_costs", lambda: short)
 
     with pytest.raises(AppError) as exc_info:
@@ -269,7 +371,7 @@ async def test_stats_route_returns_400_not_500_on_empty_series(monkeypatch):
     monkeypatch.setattr(ts, "load_daily_costs", lambda: pd.DataFrame(columns=["ds", "y"]))
 
     async with _client() as client:
-        response = await client.get("/api/stats")
+        response = await client.get("/api/stats", cookies=_auth_cookies())
     # 400 + NOT_ENOUGH_DATA code — see NotEnoughData docstring in core/errors.py.
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "NOT_ENOUGH_DATA"
@@ -278,6 +380,7 @@ async def test_stats_route_returns_400_not_500_on_empty_series(monkeypatch):
 # ─────────────────────────────────────────────────────────────────────────────
 # SEC-016 — upload caps
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_upload_rejects_too_many_files():
@@ -288,7 +391,7 @@ async def test_upload_rejects_too_many_files():
         for i in range(_MAX_FILES_PER_REQUEST + 1)
     ]
     async with _client() as client:
-        response = await client.post("/api/events/upload", files=files)
+        response = await client.post("/api/events/upload", files=files, cookies=_auth_cookies())
     assert response.status_code == 400
 
 
@@ -303,6 +406,7 @@ async def test_upload_rejects_oversized_file_with_413(monkeypatch):
         response = await client.post(
             "/api/events/upload",
             files=[("files", ("big.csv", big, "text/csv"))],
+            cookies=_auth_cookies(),
         )
     assert response.status_code == 413
     assert response.json()["error"]["code"] == "PAYLOAD_TOO_LARGE"
@@ -312,8 +416,9 @@ async def test_upload_rejects_oversized_file_with_413(monkeypatch):
 # Model registry — legacy aliases still resolve
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def test_legacy_model_aliases_resolve():
-    from forecast.engine import MODELS, MODEL_ALIASES, resolve_model
+    from forecast.engine import MODEL_ALIASES, MODELS, resolve_model
 
     for legacy, honest in MODEL_ALIASES.items():
         assert resolve_model(legacy) == honest

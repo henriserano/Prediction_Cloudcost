@@ -14,12 +14,12 @@ The plaintext keys never leave this module:
 Restart of the process = every user must re-activate. That's on purpose — no
 plaintext AWS keys persist on disk, only the AES-GCM ciphertext in DynamoDB.
 """
+
 from __future__ import annotations
 
 import threading
 import time
 from dataclasses import dataclass
-from typing import Optional
 
 import boto3
 
@@ -38,7 +38,7 @@ _TTL_SECONDS = 60 * 60
 class _CachedSession:
     session: boto3.session.Session
     region: str
-    account_id: Optional[str]
+    account_id: str | None
     expires_at: float
 
 
@@ -58,8 +58,8 @@ def activate_user_aws(
     access_key_id: str,
     secret_access_key: str,
     region: str,
-    session_token: Optional[str] = None,
-    account_id: Optional[str] = None,
+    session_token: str | None = None,
+    account_id: str | None = None,
 ) -> None:
     """Cache a boto3 Session built from the user's plaintext credentials.
 
@@ -90,7 +90,7 @@ def activate_user_aws(
     )
 
 
-def get_user_boto3_session(user_id: Optional[str]) -> Optional[boto3.session.Session]:
+def get_user_boto3_session(user_id: str | None) -> boto3.session.Session | None:
     """Return the cached boto3 Session for ``user_id`` (or None if none/expired)."""
     if not user_id:
         return None
@@ -100,7 +100,7 @@ def get_user_boto3_session(user_id: Optional[str]) -> Optional[boto3.session.Ses
         return entry.session if entry else None
 
 
-def get_user_region(user_id: Optional[str]) -> Optional[str]:
+def get_user_region(user_id: str | None) -> str | None:
     """Return the cached region for ``user_id`` (or None)."""
     if not user_id:
         return None
@@ -116,5 +116,5 @@ def deactivate_user_aws(user_id: str) -> None:
         _cache.pop(user_id, None)
 
 
-def is_active(user_id: Optional[str]) -> bool:
+def is_active(user_id: str | None) -> bool:
     return get_user_boto3_session(user_id) is not None

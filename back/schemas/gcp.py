@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Optional
-from pydantic import BaseModel, Field, field_validator, model_validator
 
-_DATE_RE = re.compile(r'^\d{4}-\d{2}-\d{2}$')
+from pydantic import BaseModel, Field, field_validator
+
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _MAX_EVENTS_PER_REQUEST = 10_000
 _MAX_COST = 1_000_000.0  # implausibly large value ceiling (€)
 
@@ -12,11 +12,12 @@ _MAX_COST = 1_000_000.0  # implausibly large value ceiling (€)
 # Events ingestion
 # ---------------------------------------------------------------------------
 
+
 class BillingEvent(BaseModel):
     date: str = Field(description="ISO date string YYYY-MM-DD")
     service: str = Field(max_length=200, description="GCP service name")
     cost: float = Field(description="Cost in euros")
-    description: Optional[str] = Field(default=None, description="Optional line-item description")
+    description: str | None = Field(default=None, description="Optional line-item description")
 
     @field_validator("date")
     @classmethod
@@ -40,7 +41,9 @@ class EventsIngestRequest(BaseModel):
         description="List of billing events to ingest",
         max_length=_MAX_EVENTS_PER_REQUEST,
     )
-    replace: bool = Field(default=False, description="If True, replace existing in-memory data; else append")
+    replace: bool = Field(
+        default=False, description="If True, replace existing in-memory data; else append"
+    )
 
 
 class PreviewKPI(BaseModel):
@@ -64,15 +67,17 @@ class EventsIngestResponse(BaseModel):
 # GCP auth status
 # ---------------------------------------------------------------------------
 
+
 class GCPAuthStatus(BaseModel):
     authenticated: bool
-    email: Optional[str] = None
-    project_id: Optional[str] = None
+    email: str | None = None
+    project_id: str | None = None
 
 
 # ---------------------------------------------------------------------------
 # GCP projects
 # ---------------------------------------------------------------------------
+
 
 class GCPProject(BaseModel):
     project_id: str
@@ -83,6 +88,7 @@ class GCPProject(BaseModel):
 # ---------------------------------------------------------------------------
 # GCP billing
 # ---------------------------------------------------------------------------
+
 
 class GCPBillingByService(BaseModel):
     service: str
@@ -108,7 +114,7 @@ class GCPBillingResponse(BaseModel):
         "export), 'injected_events' (client-uploaded CSV), or 'parquet_fallback' "
         "(local demo data). Clients should surface this to the user.",
     )
-    billing_account_id: Optional[str] = Field(
+    billing_account_id: str | None = Field(
         default=None,
         description="GCP billing account ID linked to the project, when resolvable.",
     )
@@ -136,12 +142,13 @@ class GCPBillingAccount(BaseModel):
     account_id: str = Field(description="Bare account ID (last segment of name)")
     display_name: str = Field(default="")
     open: bool = Field(default=False, description="Whether the account is open (not closed)")
-    master_billing_account: Optional[str] = Field(default=None)
+    master_billing_account: str | None = Field(default=None)
 
 
 # ---------------------------------------------------------------------------
 # GCP Cloud Logging
 # ---------------------------------------------------------------------------
+
 
 class GCPLogEntry(BaseModel):
     timestamp: str
@@ -155,6 +162,7 @@ class GCPLogEntry(BaseModel):
 # ---------------------------------------------------------------------------
 # GCP Service Usage
 # ---------------------------------------------------------------------------
+
 
 class GCPService(BaseModel):
     service_id: str

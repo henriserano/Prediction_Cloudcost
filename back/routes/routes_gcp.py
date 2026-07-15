@@ -6,15 +6,19 @@ import secrets
 import threading
 import time
 import urllib.parse
-from typing import Annotated, List, Optional
+from typing import Annotated
 
 import httpx
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import RedirectResponse
 
+from core.config import get_settings
 from core.errors import AppError, BadRequest
 from core.logging import get_logger
+from core.session import require_current_user_id
+from core.user_context import get_current_user_id as ctx_get_current_user_id
 from schemas.gcp import (
+    DateRange,
     GCPAuthStatus,
     GCPBillingAccount,
     GCPBillingByMonth,
@@ -24,9 +28,7 @@ from schemas.gcp import (
     GCPProject,
     GCPService,
     GCPSyncResponse,
-    DateRange,
 )
-from core.config import get_settings
 
 logger = get_logger(__name__)
 
@@ -54,43 +56,67 @@ _OAUTH_STATE_TTL = 600  # seconds — states older than this are rejected
 # whenever /api/gcp/auth was hit, and vice-versa. This cookie carries only the
 # GCP-OAuth session identifier and is scoped to the GCP flow.
 _SESSION_COOKIE = "gcp_sid"
-_SESSION_TTL = 7 * 24 * 3600       # seconds — sessions older than this are evicted
-_MAX_SESSIONS = 100                # hard cap; oldest session evicted beyond this
+_SESSION_TTL = 7 * 24 * 3600  # seconds — sessions older than this are evicted
+_MAX_SESSIONS = 100  # hard cap; oldest session evicted beyond this
 
 # SEC-015: these dicts are mutated from sync endpoints running in the
 # threadpool — every read-modify-write must hold _state_lock.
 _state_lock = threading.Lock()
 
 _oauth_states: dict[str, dict] = {}  # state_token → {"created_at": float, "sid": str}
-_token_store: dict[str, dict] = {}   # sid → {"created_at": float, "token": dict}
+_token_store: dict[str, dict] = {}  # sid → {"created_at": float, "token": dict}
 
 
 # Allowed OAuth error values returned by Google — anything else is mapped to
 # a generic code to prevent log injection and reflected XSS via the ?error=
 # query parameter.
-_ALLOWED_OAUTH_ERRORS = frozenset({
-    "access_denied",
-    "invalid_scope",
-    "invalid_request",
-    "unauthorized_client",
-    "unsupported_response_type",
-    "server_error",
-    "temporarily_unavailable",
-    "interaction_required",
-    "login_required",
-    "account_selection_required",
-    "consent_required",
-})
+_ALLOWED_OAUTH_ERRORS = frozenset(
+    {
+        "access_denied",
+        "invalid_scope",
+        "invalid_request",
+        "unauthorized_client",
+        "unsupported_response_type",
+        "server_error",
+        "temporarily_unavailable",
+        "interaction_required",
+        "login_required",
+        "account_selection_required",
+        "consent_required",
+    }
+)
 
 # Allowed GCP log severity values (used to validate the ?severity= parameter
 # to prevent log-filter injection).
-_ALLOWED_SEVERITIES = frozenset({
-    "DEFAULT", "DEBUG", "INFO", "NOTICE", "WARNING",
-    "ERROR", "CRITICAL", "ALERT", "EMERGENCY",
-})
+_ALLOWED_SEVERITIES = frozenset(
+    {
+        "DEFAULT",
+        "DEBUG",
+        "INFO",
+        "NOTICE",
+        "WARNING",
+        "ERROR",
+        "CRITICAL",
+        "ALERT",
+        "EMERGENCY",
+    }
+)
 
 # Regex for valid GCP project IDs per GCP naming rules.
-_PROJECT_ID_RE = re.compile(r'^[a-z][a-z0-9\-]{4,28}[a-z0-9]$')
+_PROJECT_ID_RE = re.compile(r"^[a-z][a-z0-9\-]{4,28}[a-z0-9]$")
+
+# SEC-035: tighter timeouts on outbound Google API calls. Previous default
+# ``timeout=15`` on a 10-page loop meant a single request could hold the
+# uvicorn worker for 150 s — with ``--workers 1`` (see Dockerfile), a handful
+# of concurrent /api/gcp/services requests could starve the whole app. 5 s
+# connect / 10 s read is well beyond Google's usual response time and the
+# ``_PAGINATED_MAX_WALL_S`` ceiling caps the total loop cost.
+_GCP_HTTP_TIMEOUT = httpx.Timeout(connect=5.0, read=10.0, write=10.0, pool=5.0)
+_PAGINATED_MAX_WALL_S = 30.0
+
+
+def _wall_exceeded(started_at: float) -> bool:
+    return (time.monotonic() - started_at) > _PAGINATED_MAX_WALL_S
 
 
 def _cleanup_expired_states() -> None:
@@ -104,7 +130,7 @@ def _cleanup_expired_states() -> None:
         _oauth_states.pop(k, None)
 
 
-def _consume_oauth_state(state: Optional[str]) -> Optional[dict]:
+def _consume_oauth_state(state: str | None) -> dict | None:
     """Atomically pop-and-validate the OAuth state token.
 
     SEC-015: pop + TTL check must both happen under _state_lock in a single
@@ -134,19 +160,35 @@ def _cleanup_expired_sessions() -> None:
         _token_store.pop(k, None)
 
 
-def _store_session_token(sid: str, token_data: dict) -> None:
-    """Bind token_data to ``sid`` with TTL cleanup + oldest-session eviction (SEC-014)."""
+def _store_session_token(sid: str, token_data: dict, user_id: str | None) -> None:
+    """Bind token_data to ``sid`` with TTL cleanup + oldest-session eviction.
+
+    SEC-014 (session hijack): the token entry now carries the authenticated
+    ``user_id`` (JWT ``sub``) the GCP session was minted for. Every read via
+    :func:`_get_session_token` re-checks that the current caller's JWT matches
+    that owner, so an attacker who lifts a ``gcp_sid`` cookie into another
+    browser cannot use it against the API.
+    """
     with _state_lock:
         _cleanup_expired_sessions()
         # Cap the number of concurrent sessions; evict the oldest first.
         while len(_token_store) >= _MAX_SESSIONS:
             oldest_sid = min(_token_store, key=lambda k: _token_store[k]["created_at"])
             _token_store.pop(oldest_sid, None)
-        _token_store[sid] = {"created_at": time.time(), "token": token_data}
+        _token_store[sid] = {
+            "created_at": time.time(),
+            "token": token_data,
+            "user_id": user_id,
+        }
 
 
-def _get_session_token(request: Request) -> Optional[dict]:
-    """Return the requester's token dict (via the ``sid`` cookie), or None."""
+def _get_session_token(request: Request) -> dict | None:
+    """Return the requester's GCP token, or None.
+
+    SEC-014: rejects the token when the ``gcp_sid`` cookie's stored owner
+    doesn't match the current JWT-authenticated user. A session minted by
+    user A cannot be replayed by user B, even if B holds the cookie.
+    """
     sid = request.cookies.get(_SESSION_COOKIE)
     if not sid:
         return None
@@ -156,6 +198,12 @@ def _get_session_token(request: Request) -> Optional[dict]:
             return None
         if time.time() - entry["created_at"] > _SESSION_TTL:
             _token_store.pop(sid, None)
+            return None
+        owner = entry.get("user_id")
+        current = ctx_get_current_user_id()
+        # Legacy entries without a bound owner are treated as invalid — force
+        # a re-auth to attach the JWT identity.
+        if not owner or owner != current:
             return None
         return entry["token"]
 
@@ -187,6 +235,7 @@ def _validate_project_id(project_id: str) -> None:
             details={"field": "project_id"},
         )
 
+
 _SCOPES = [
     "https://www.googleapis.com/auth/cloud-billing.readonly",
     "https://www.googleapis.com/auth/logging.read",
@@ -211,7 +260,9 @@ def _get_credentials(request: Request) -> dict:
     """Return the requester's stored token dict or raise 401 (SEC-014)."""
     token = _get_session_token(request)
     if not token:
-        raise AppError("Not authenticated. Call /api/gcp/auth first.", code="UNAUTHORIZED", status_code=401)
+        raise AppError(
+            "Not authenticated. Call /api/gcp/auth first.", code="UNAUTHORIZED", status_code=401
+        )
     return token
 
 
@@ -221,7 +272,9 @@ def _build_auth_headers(token: dict) -> dict[str, str]:
     return {"Authorization": f"Bearer {access_token}"}
 
 
-def _raise_gcp_upstream_error(exc: httpx.HTTPStatusError, api_name: str, project_id: Optional[str] = None) -> None:
+def _raise_gcp_upstream_error(
+    exc: httpx.HTTPStatusError, api_name: str, project_id: str | None = None
+) -> None:
     """Map a GCP HTTPStatusError onto the closest matching AppError.
 
     Preserves 401/403 so the client can act on them (re-auth vs. enable
@@ -233,7 +286,7 @@ def _raise_gcp_upstream_error(exc: httpx.HTTPStatusError, api_name: str, project
 
     # Extract the upstream error message when Google returned JSON — it usually
     # tells us exactly which permission is missing or which API is disabled.
-    upstream_detail: Optional[str] = None
+    upstream_detail: str | None = None
     try:
         body = exc.response.json()
         upstream_detail = body.get("error", {}).get("message")
@@ -271,8 +324,12 @@ def _raise_gcp_upstream_error(exc: httpx.HTTPStatusError, api_name: str, project
 # OAuth2 routes
 # ---------------------------------------------------------------------------
 
+
 @router.get("/auth", summary="Redirect to Google OAuth2 consent screen")
-def gcp_auth(request: Request) -> RedirectResponse:
+def gcp_auth(
+    request: Request,
+    user_id: str = Depends(require_current_user_id),
+) -> RedirectResponse:
     settings = get_settings()
     client_id = settings.google_client_id or _get_env("GOOGLE_CLIENT_ID")
     redirect_uri = settings.google_redirect_uri or _get_env(
@@ -287,15 +344,19 @@ def gcp_auth(request: Request) -> RedirectResponse:
             status_code=500,
         )
 
-    # SEC-014: bind the CSRF state to the requester's session so the callback
-    # can store the token under the right sid even though the OAuth redirect
-    # comes back on the backend origin (where the cookie may be absent).
+    # SEC-014: bind the CSRF state to the requester's JWT-authenticated user
+    # AND to the session cookie. The callback stores the token under the sid
+    # and stamps it with user_id — no un-owned or cross-user reuse.
     sid = request.cookies.get(_SESSION_COOKIE) or secrets.token_urlsafe(32)
 
     state = secrets.token_urlsafe(16)
     with _state_lock:
         _cleanup_expired_states()
-        _oauth_states[state] = {"created_at": time.time(), "sid": sid}
+        _oauth_states[state] = {
+            "created_at": time.time(),
+            "sid": sid,
+            "user_id": user_id,
+        }
 
     params = {
         "client_id": client_id,
@@ -315,17 +376,16 @@ def gcp_auth(request: Request) -> RedirectResponse:
 
 @router.get("/callback", summary="Handle Google OAuth2 callback")
 def gcp_callback(
-    code: Annotated[Optional[str], Query()] = None,
-    state: Annotated[Optional[str], Query()] = None,
-    error: Annotated[Optional[str], Query()] = None,
+    code: Annotated[str | None, Query()] = None,
+    state: Annotated[str | None, Query()] = None,
+    error: Annotated[str | None, Query()] = None,
 ) -> RedirectResponse:
     settings = get_settings()
     # Normalise: strip trailing slash so ``f"{frontend_url}/..."`` never
     # produces ``//path``. Falls back to the Vercel deployment URL when
     # nothing is configured — matches the operator's canonical entry point.
     frontend_url = (
-        settings.frontend_url
-        or _get_env("FRONTEND_URL", "https://finopsgcp.vercel.app")
+        settings.frontend_url or _get_env("FRONTEND_URL", "https://finopsgcp.vercel.app")
     ).rstrip("/")
 
     if error:
@@ -346,8 +406,11 @@ def gcp_callback(
         redirect_url = f"{frontend_url}/dashboard?gcp_error=invalid_state"
         return RedirectResponse(url=redirect_url, status_code=302)
 
-    # SEC-014: the session the token will be bound to.
+    # SEC-014: the session the token will be bound to, and the JWT-authenticated
+    # user who initiated the flow — stamped on the stored token so a stolen
+    # ``gcp_sid`` cookie replayed by another user is rejected.
     sid = state_entry["sid"]
+    initiating_user_id = state_entry.get("user_id")
 
     client_id = settings.google_client_id or _get_env("GOOGLE_CLIENT_ID")
     client_secret = settings.google_client_secret or _get_env("GOOGLE_CLIENT_SECRET")
@@ -390,8 +453,9 @@ def gcp_callback(
     except Exception:
         token_data["email"] = None
 
-    # SEC-014: store the token under the requester's session, never globally.
-    _store_session_token(sid, token_data)
+    # SEC-014: store the token under the requester's session, stamped with the
+    # initiating JWT ``sub`` so cross-user replay is refused at read time.
+    _store_session_token(sid, token_data, initiating_user_id)
 
     redirect_url = f"{frontend_url}/dashboard?gcp=connected"
     response = RedirectResponse(url=redirect_url, status_code=302)
@@ -427,8 +491,9 @@ def gcp_logout(request: Request) -> dict:
 # GCP Resource Manager — projects
 # ---------------------------------------------------------------------------
 
-@router.get("/projects", response_model=List[GCPProject], summary="List accessible GCP projects")
-def gcp_projects(request: Request) -> List[GCPProject]:
+
+@router.get("/projects", response_model=list[GCPProject], summary="List accessible GCP projects")
+def gcp_projects(request: Request) -> list[GCPProject]:
     token = _get_credentials(request)
     headers = _build_auth_headers(token)
 
@@ -445,9 +510,11 @@ def gcp_projects(request: Request) -> List[GCPProject]:
         _raise_gcp_upstream_error(exc, api_name="Resource Manager API")
     except Exception as exc:
         logger.error("gcp_projects_error", extra={"error": repr(exc)})
-        raise AppError("Upstream connectivity error.", code="GCP_API_ERROR", status_code=502)
+        raise AppError(
+            "Upstream connectivity error.", code="GCP_API_ERROR", status_code=502
+        ) from exc
 
-    projects: List[GCPProject] = []
+    projects: list[GCPProject] = []
     for p in data.get("projects", []):
         projects.append(
             GCPProject(
@@ -463,7 +530,8 @@ def gcp_projects(request: Request) -> List[GCPProject]:
 # GCP Cloud Billing — billing info + cost breakdown
 # ---------------------------------------------------------------------------
 
-def _fetch_billing_account_id(project_id: str, headers: dict[str, str]) -> Optional[str]:
+
+def _fetch_billing_account_id(project_id: str, headers: dict[str, str]) -> str | None:
     """Return the billing account ID linked to a project, or None on failure.
 
     Raises AppError(401) if the OAuth token is rejected — auth errors must not
@@ -482,20 +550,22 @@ def _fetch_billing_account_id(project_id: str, headers: dict[str, str]) -> Optio
         return None
     except httpx.HTTPStatusError as exc:
         if exc.response.status_code == 401:
-            raise AppError("GCP token expired or invalid.", code="UNAUTHORIZED", status_code=401)
+            raise AppError(
+                "GCP token expired or invalid.", code="UNAUTHORIZED", status_code=401
+            ) from None
         logger.warning(
             "gcp_billing_info_upstream_error",
             extra={"upstream_status": exc.response.status_code, "project_id": project_id},
         )
         return None
     except Exception as exc:
-        logger.warning("gcp_billing_info_error", extra={"error": repr(exc), "project_id": project_id})
+        logger.warning(
+            "gcp_billing_info_error", extra={"error": repr(exc), "project_id": project_id}
+        )
         return None
 
 
-def _query_bigquery_billing_export(
-    project_id: str, months: int
-) -> Optional[GCPBillingResponse]:
+def _query_bigquery_billing_export(project_id: str, months: int) -> GCPBillingResponse | None:
     """Query the GCP Billing BigQuery Export for real cost data.
 
     Returns None when the export is not configured or the BigQuery client
@@ -512,11 +582,17 @@ def _query_bigquery_billing_export(
     try:
         from google.cloud import bigquery  # type: ignore
     except Exception:
-        logger.info("bigquery_library_unavailable — install google-cloud-bigquery to enable real billing export queries")
+        logger.info(
+            "bigquery_library_unavailable — install google-cloud-bigquery to enable real billing export queries"
+        )
         return None
 
     try:
         client = bigquery.Client(project=bq_project)
+        # nosec B608 — BigQuery does not bind table identifiers as parameters;
+        # project/dataset/table come from settings validated at startup, not
+        # from user input. The two runtime values (@project_id, @months) are
+        # parameterised below via ScalarQueryParameter.
         table_fqn = f"`{bq_project}.{bq_dataset}.{bq_table}`"
 
         query = f"""
@@ -530,7 +606,7 @@ def _query_bigquery_billing_export(
               AND usage_start_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @months MONTH)
             GROUP BY day, service, currency
             ORDER BY day
-        """
+        """  # nosec B608
         job = client.query(
             query,
             job_config=bigquery.QueryJobConfig(
@@ -549,7 +625,11 @@ def _query_bigquery_billing_export(
         df = pd.DataFrame(rows)
         df["day"] = pd.to_datetime(df["day"])
         df["cost"] = df["cost"].astype(float)
-        currency = df["currency"].dropna().iloc[0] if "currency" in df.columns and not df["currency"].dropna().empty else "EUR"
+        currency = (
+            df["currency"].dropna().iloc[0]
+            if "currency" in df.columns and not df["currency"].dropna().empty
+            else "EUR"
+        )
 
         total = float(df["cost"].sum())
         period_start = df["day"].min().strftime("%Y-%m-%d")
@@ -568,8 +648,7 @@ def _query_bigquery_billing_export(
         df["month"] = df["day"].dt.to_period("M").astype(str)
         month_agg = df.groupby("month")["cost"].sum().sort_index()
         by_month = [
-            GCPBillingByMonth(month=m, cost=round(float(c), 2))
-            for m, c in month_agg.items()
+            GCPBillingByMonth(month=m, cost=round(float(c), 2)) for m, c in month_agg.items()
         ]
 
         return GCPBillingResponse(
@@ -586,11 +665,12 @@ def _query_bigquery_billing_export(
         return None
 
 
-def _billing_from_injected_events(project_id: str, months: int) -> Optional[GCPBillingResponse]:
+def _billing_from_injected_events(project_id: str, months: int) -> GCPBillingResponse | None:
     """Build a billing response from client-injected events, or None if empty."""
     try:
-        from routes.routes_events import get_injected_events_df
         import pandas as pd
+
+        from routes.routes_events import get_injected_events_df
 
         events_df = get_injected_events_df()
         if len(events_df) == 0:
@@ -607,9 +687,7 @@ def _billing_from_injected_events(project_id: str, months: int) -> Optional[GCPB
 
         if "service" in filtered.columns:
             svc_agg = (
-                filtered.groupby("service")["Sous-total (€)"]
-                .sum()
-                .sort_values(ascending=False)
+                filtered.groupby("service")["Sous-total (€)"].sum().sort_values(ascending=False)
             )
             by_service = [
                 GCPBillingByService(
@@ -625,8 +703,7 @@ def _billing_from_injected_events(project_id: str, months: int) -> Optional[GCPB
         filtered["month"] = filtered["ds"].dt.to_period("M").astype(str)
         month_agg = filtered.groupby("month")["Sous-total (€)"].sum().sort_index()
         by_month = [
-            GCPBillingByMonth(month=m, cost=round(float(c), 2))
-            for m, c in month_agg.items()
+            GCPBillingByMonth(month=m, cost=round(float(c), 2)) for m, c in month_agg.items()
         ]
 
         return GCPBillingResponse(
@@ -645,8 +722,9 @@ def _billing_from_injected_events(project_id: str, months: int) -> Optional[GCPB
 
 def _billing_from_parquet(project_id: str, months: int) -> GCPBillingResponse:
     """Last-resort fallback using bundled parquet demo data."""
-    from data.loader import load_daily_costs, load_daily_per_service
     import pandas as pd
+
+    from data.loader import load_daily_costs, load_daily_per_service
 
     daily_df = load_daily_costs()
     per_svc_df = load_daily_per_service()
@@ -657,7 +735,9 @@ def _billing_from_parquet(project_id: str, months: int) -> GCPBillingResponse:
     if len(d_filtered) == 0:
         d_filtered = daily_df.copy()
 
-    total = float(d_filtered["y"].sum()) if "y" in d_filtered.columns and len(d_filtered) > 0 else 0.0
+    total = (
+        float(d_filtered["y"].sum()) if "y" in d_filtered.columns and len(d_filtered) > 0 else 0.0
+    )
     if len(d_filtered) > 0:
         period_start = d_filtered["ds"].min().strftime("%Y-%m-%d")
         period_end = d_filtered["ds"].max().strftime("%Y-%m-%d")
@@ -668,15 +748,18 @@ def _billing_from_parquet(project_id: str, months: int) -> GCPBillingResponse:
         d_filtered["month"] = d_filtered["ds"].dt.to_period("M").astype(str)
         month_agg = d_filtered.groupby("month")["y"].sum().sort_index()
         by_month = [
-            GCPBillingByMonth(month=m, cost=round(float(c), 2))
-            for m, c in month_agg.items()
+            GCPBillingByMonth(month=m, cost=round(float(c), 2)) for m, c in month_agg.items()
         ]
     else:
         by_month = []
 
     svc_cols = [c for c in per_svc_df.columns if c != "ds"]
-    ps_filtered = per_svc_df[per_svc_df["ds"] >= cutoff].copy() if len(per_svc_df) > 0 else per_svc_df.copy()
-    svc_totals = {svc: float(ps_filtered[svc].sum()) for svc in svc_cols if svc in ps_filtered.columns}
+    ps_filtered = (
+        per_svc_df[per_svc_df["ds"] >= cutoff].copy() if len(per_svc_df) > 0 else per_svc_df.copy()
+    )
+    svc_totals = {
+        svc: float(ps_filtered[svc].sum()) for svc in svc_cols if svc in ps_filtered.columns
+    }
     sorted_svc = sorted(svc_totals.items(), key=lambda x: x[1], reverse=True)
     by_service = [
         GCPBillingByService(
@@ -700,10 +783,10 @@ def _billing_from_parquet(project_id: str, months: int) -> GCPBillingResponse:
 
 @router.get(
     "/billing-accounts",
-    response_model=List[GCPBillingAccount],
+    response_model=list[GCPBillingAccount],
     summary="List Cloud Billing accounts accessible with the current OAuth token",
 )
-def gcp_billing_accounts(request: Request) -> List[GCPBillingAccount]:
+def gcp_billing_accounts(request: Request) -> list[GCPBillingAccount]:
     """Verify the OAuth token can read Cloud Billing by listing accounts.
 
     This is the fastest way to confirm the ``cloud-billing.readonly`` scope was
@@ -712,9 +795,13 @@ def gcp_billing_accounts(request: Request) -> List[GCPBillingAccount]:
     token = _get_credentials(request)
     headers = _build_auth_headers(token)
 
-    accounts: List[GCPBillingAccount] = []
-    page_token: Optional[str] = None
+    accounts: list[GCPBillingAccount] = []
+    page_token: str | None = None
+    started = time.monotonic()
     for _ in range(10):
+        if _wall_exceeded(started):
+            logger.warning("gcp_billing_accounts_wall_exceeded")
+            break
         params: dict = {"pageSize": 200}
         if page_token:
             params["pageToken"] = page_token
@@ -723,7 +810,7 @@ def gcp_billing_accounts(request: Request) -> List[GCPBillingAccount]:
                 "https://cloudbilling.googleapis.com/v1/billingAccounts",
                 headers=headers,
                 params=params,
-                timeout=15,
+                timeout=_GCP_HTTP_TIMEOUT,
             )
             resp.raise_for_status()
             data = resp.json()
@@ -731,7 +818,9 @@ def gcp_billing_accounts(request: Request) -> List[GCPBillingAccount]:
             _raise_gcp_upstream_error(exc, api_name="Cloud Billing API")
         except Exception as exc:
             logger.error("gcp_billing_accounts_error", extra={"error": repr(exc)})
-            raise AppError("Upstream connectivity error.", code="GCP_API_ERROR", status_code=502)
+            raise AppError(
+                "Upstream connectivity error.", code="GCP_API_ERROR", status_code=502
+            ) from exc
 
         for acc in data.get("billingAccounts", []):
             name = acc.get("name", "")
@@ -793,14 +882,15 @@ def gcp_billing(
             "Could not retrieve billing data.",
             code="GCP_BILLING_ERROR",
             status_code=502,
-        )
+        ) from exc
 
 
 # ---------------------------------------------------------------------------
 # Sync — pull real GCP data into the in-memory store
 # ---------------------------------------------------------------------------
 
-def _bq_rows_for_project(project_id: str, months: int) -> Optional[list[dict]]:
+
+def _bq_rows_for_project(project_id: str, months: int) -> list[dict] | None:
     """Query the Billing BigQuery export and return per-day, per-service rows.
 
     Returns None when the export is not configured or the library is missing —
@@ -821,6 +911,8 @@ def _bq_rows_for_project(project_id: str, months: int) -> Optional[list[dict]]:
         return None
 
     client = bigquery.Client(project=settings.gcp_billing_export_project)
+    # nosec B608 — see comment on the sibling query above; identifiers come
+    # from validated settings, runtime values are parameterised.
     table_fqn = (
         f"`{settings.gcp_billing_export_project}."
         f"{settings.gcp_billing_export_dataset}."
@@ -839,7 +931,7 @@ def _bq_rows_for_project(project_id: str, months: int) -> Optional[list[dict]]:
         GROUP BY day, service
         HAVING cost > 0
         ORDER BY day
-    """
+    """  # nosec B608
     job = client.query(
         query,
         job_config=bigquery.QueryJobConfig(
@@ -861,6 +953,7 @@ def gcp_sync(
     request: Request,
     project_id: Annotated[str, Query(description="GCP project ID to sync")],
     months: Annotated[int, Query(ge=1, le=24)] = 6,
+    user_id: str = Depends(require_current_user_id),
 ) -> GCPSyncResponse:
     """Fetch cost data from the BigQuery Billing Export and load it into the
     in-memory events store, then invalidate every downstream cache so /kpi,
@@ -891,9 +984,9 @@ def gcp_sync(
             details={"project_id": project_id, "months": months},
         )
 
-    from routes.routes_events import replace_injected_events
     from core.cache import app_cache
     from data.loader import invalidate_cache
+    from routes.routes_events import replace_injected_events
 
     normalized: list[dict] = []
     currency = "EUR"
@@ -910,8 +1003,8 @@ def gcp_sync(
             }
         )
 
-    # SEC-015: replace the shared store atomically under its lock.
-    replace_injected_events(normalized)
+    # SEC-015 / SEC-020: replace the caller's slice atomically under the lock.
+    replace_injected_events(normalized, user_id=user_id)
 
     app_cache.clear()
     invalidate_cache()
@@ -950,13 +1043,14 @@ def gcp_sync(
 # Cloud Logging
 # ---------------------------------------------------------------------------
 
-@router.get("/logs", response_model=List[GCPLogEntry], summary="Fetch Cloud Logging entries")
+
+@router.get("/logs", response_model=list[GCPLogEntry], summary="Fetch Cloud Logging entries")
 def gcp_logs(
     request: Request,
     project_id: Annotated[str, Query(description="GCP project ID")],
     limit: Annotated[int, Query(ge=1, le=500)] = 50,
-    severity: Annotated[Optional[str], Query(description="Minimum severity filter e.g. ERROR")] = None,
-) -> List[GCPLogEntry]:
+    severity: Annotated[str | None, Query(description="Minimum severity filter e.g. ERROR")] = None,
+) -> list[GCPLogEntry]:
     # SEC-004: Validate inputs before interpolating into the GCP filter string.
     _validate_project_id(project_id)
     if severity is not None:
@@ -976,7 +1070,7 @@ def gcp_logs(
 
     filter_parts = [f'resource.labels.project_id="{project_id}"']
     if severity_upper:
-        filter_parts.append(f'severity>={severity_upper}')
+        filter_parts.append(f"severity>={severity_upper}")
 
     body = {
         "resourceNames": [f"projects/{project_id}"],
@@ -998,9 +1092,11 @@ def gcp_logs(
         _raise_gcp_upstream_error(exc, api_name="Cloud Logging API", project_id=project_id)
     except Exception as exc:
         logger.error("gcp_logs_error", extra={"error": repr(exc)})
-        raise AppError("Upstream connectivity error.", code="GCP_API_ERROR", status_code=502)
+        raise AppError(
+            "Upstream connectivity error.", code="GCP_API_ERROR", status_code=502
+        ) from exc
 
-    entries: List[GCPLogEntry] = []
+    entries: list[GCPLogEntry] = []
     for entry in data.get("entries", []):
         resource = entry.get("resource", {})
         resource_type = resource.get("type", "")
@@ -1040,11 +1136,14 @@ def gcp_logs(
 # Service Usage API
 # ---------------------------------------------------------------------------
 
-@router.get("/services", response_model=List[GCPService], summary="List enabled GCP services for a project")
+
+@router.get(
+    "/services", response_model=list[GCPService], summary="List enabled GCP services for a project"
+)
 def gcp_services(
     request: Request,
     project_id: Annotated[str, Query(description="GCP project ID")],
-) -> List[GCPService]:
+) -> list[GCPService]:
     _validate_project_id(project_id)
     token = _get_credentials(request)
     headers = _build_auth_headers(token)
@@ -1083,10 +1182,14 @@ def gcp_services(
                 return cat
         return "Other"
 
-    services_list: List[GCPService] = []
-    page_token: Optional[str] = None
+    services_list: list[GCPService] = []
+    page_token: str | None = None
+    started = time.monotonic()
 
     for _ in range(10):  # max 10 pages
+        if _wall_exceeded(started):
+            logger.warning("gcp_services_wall_exceeded", extra={"project_id": project_id})
+            break
         params: dict = {
             "filter": "state:ENABLED",
             "pageSize": 200,
@@ -1099,7 +1202,7 @@ def gcp_services(
                 f"https://serviceusage.googleapis.com/v1/projects/{project_id}/services",
                 headers=headers,
                 params=params,
-                timeout=20,
+                timeout=_GCP_HTTP_TIMEOUT,
             )
             resp.raise_for_status()
             data = resp.json()
@@ -1107,7 +1210,9 @@ def gcp_services(
             _raise_gcp_upstream_error(exc, api_name="Service Usage API", project_id=project_id)
         except Exception as exc:
             logger.error("gcp_services_error", extra={"error": repr(exc)})
-            raise AppError("Upstream connectivity error.", code="GCP_API_ERROR", status_code=502)
+            raise AppError(
+                "Upstream connectivity error.", code="GCP_API_ERROR", status_code=502
+            ) from exc
 
         for svc in data.get("services", []):
             config = svc.get("config", {})

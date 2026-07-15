@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-from typing import Optional
-
 from pydantic import BaseModel, Field
-
 
 # ---------------------------------------------------------------------------
 # Outliers
 # ---------------------------------------------------------------------------
+
 
 class OutlierRow(BaseModel):
     date: str
@@ -15,7 +13,9 @@ class OutlierRow(BaseModel):
     zscore: float = Field(description="Standard Z-score")
     modified_zscore: float = Field(description="Iglewicz-Hoaglin MAD-based Z")
     iqr_flag: bool = Field(description="True if outside Tukey 1.5*IQR fences")
-    isolation_score: float = Field(description="Isolation Forest anomaly score (higher = more anomalous)")
+    isolation_score: float = Field(
+        description="Isolation Forest anomaly score (higher = more anomalous)"
+    )
     isolation_flag: bool
     lof_score: float = Field(description="Local Outlier Factor score (higher = more anomalous)")
     lof_flag: bool
@@ -32,7 +32,7 @@ class OutlierSummary(BaseModel):
     method: str
     flagged_count: int
     flagged_pct: float
-    threshold: Optional[float] = None
+    threshold: float | None = None
 
 
 class OutliersResponse(BaseModel):
@@ -48,6 +48,7 @@ class OutliersResponse(BaseModel):
 # ---------------------------------------------------------------------------
 # Drift
 # ---------------------------------------------------------------------------
+
 
 class KSResult(BaseModel):
     statistic: float
@@ -92,6 +93,7 @@ class DriftResponse(BaseModel):
 # Distribution
 # ---------------------------------------------------------------------------
 
+
 class NormalityTest(BaseModel):
     name: str
     statistic: float
@@ -102,7 +104,9 @@ class NormalityTest(BaseModel):
 class DistributionResponse(BaseModel):
     skewness: float
     kurtosis: float = Field(description="Excess kurtosis (0 for normal)")
-    boxcox_lambda: Optional[float] = Field(default=None, description="MLE Box-Cox lambda; None if series has non-positive values")
+    boxcox_lambda: float | None = Field(
+        default=None, description="MLE Box-Cox lambda; None if series has non-positive values"
+    )
     normality_tests: list[NormalityTest]
     qq_points: list[list[float]] = Field(
         description="Pairs of (theoretical_quantile, sample_quantile) for QQ plot"
@@ -112,6 +116,7 @@ class DistributionResponse(BaseModel):
 # ---------------------------------------------------------------------------
 # Scaling
 # ---------------------------------------------------------------------------
+
 
 class ScaledSeriesPoint(BaseModel):
     date: str
@@ -130,6 +135,7 @@ class ScalingResponse(BaseModel):
 # ---------------------------------------------------------------------------
 # Missing data / gaps
 # ---------------------------------------------------------------------------
+
 
 class GapRow(BaseModel):
     start: str
@@ -151,6 +157,7 @@ class MissingnessResponse(BaseModel):
 # ---------------------------------------------------------------------------
 # Dimensionality reduction
 # ---------------------------------------------------------------------------
+
 
 class PCAComponent(BaseModel):
     component: int
@@ -176,9 +183,10 @@ class DimReductionResponse(BaseModel):
 # Ensemble forecast + bias/variance
 # ---------------------------------------------------------------------------
 
+
 class EnsembleForecastPoint(BaseModel):
     date: str
-    actual: Optional[float] = None
+    actual: float | None = None
     mean_ensemble: float = Field(description="Simple average across all base models")
     weighted_ensemble: float = Field(description="Inverse-MAE-weighted average across base models")
     lo80: float

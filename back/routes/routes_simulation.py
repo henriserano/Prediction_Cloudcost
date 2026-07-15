@@ -9,9 +9,8 @@ Endpoints:
 The estimator itself lives in :mod:`analysis.simulation`; this module is a thin
 routing layer + the FinOps ingestion glue.
 """
-from __future__ import annotations
 
-from typing import Annotated
+from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
@@ -19,6 +18,7 @@ from analysis.simulation import get_reference_catalog, simulate
 from core.auth import require_api_key
 from core.errors import BadRequest
 from core.logging import get_logger
+from core.session import require_current_user_id
 from schemas.gcp import BillingEvent, EventsIngestRequest
 from schemas.simulation import (
     ReferenceCatalog,
@@ -57,7 +57,10 @@ def estimate(inputs: SimulationInputs) -> SimulationResult:
     dependencies=[Depends(require_api_key)],
     summary="Ingest the projected monthly events into the FinOps model (append mode)",
 )
-def push(body: SimulationPushRequest) -> SimulationPushResponse:
+def push(
+    body: SimulationPushRequest,
+    user_id: str = Depends(require_current_user_id),
+) -> SimulationPushResponse:
     """Push the ``projected_monthly_events`` from an estimate into /api/events.
 
     Reuses the existing events ingest so the projection lands in the same
@@ -70,12 +73,17 @@ def push(body: SimulationPushRequest) -> SimulationPushResponse:
     try:
         events = [BillingEvent(**e) for e in body.events]
     except Exception as exc:
-        raise BadRequest(f"Invalid event payload: {exc}")
+        raise BadRequest(f"Invalid event payload: {exc}") from exc
 
-    # Delegate to the canonical ingest — same locking / cap / warnings.
+    # Delegate to the canonical ingest — pass user_id explicitly since Depends
+    # sentinels don't resolve on direct Python calls (would drop rows in a
+    # phantom slot no downstream reader can see).
     from routes.routes_events import ingest_events
 
-    resp = ingest_events(EventsIngestRequest(events=events, replace=False))
+    resp = ingest_events(
+        EventsIngestRequest(events=events, replace=False),
+        user_id=user_id,
+    )
     logger.info(
         "simulation_pushed",
         extra={

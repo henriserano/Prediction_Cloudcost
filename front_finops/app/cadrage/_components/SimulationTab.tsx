@@ -9,6 +9,7 @@ import {
   Info,
   Lightbulb,
   ShieldAlert,
+  Sliders,
   Target,
   Wrench,
 } from "lucide-react"
@@ -17,6 +18,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { SectionCard } from "@/components/ui/section-card"
+import { EmptyState } from "@/components/ui/empty-state"
 import { cn } from "@/lib/utils"
 import { api } from "@/lib/api"
 import { ErrorBanner, SuccessBanner, extractMessage } from "@/components/ui/banners"
@@ -302,6 +304,31 @@ function countBy<T, K extends string | number>(arr: T[], keyFn: (t: T) => K): Re
   return out
 }
 
+// Sub-tabs shown at the top of the cadrage page. Same visual grammar as the
+// Optimiser / Collecte navs: icon + label + technical hint underneath.
+const TABS = [
+  {
+    id: "cadrage",
+    label: "Cadrage",
+    icon: Sliders,
+    hint: "Volumétrie · LLM · outils",
+  },
+  {
+    id: "costs",
+    label: "Coûts",
+    icon: Compass,
+    hint: "Bill mensuel · risques · impact",
+  },
+  {
+    id: "architecture",
+    label: "Architecture",
+    icon: Wrench,
+    hint: "Composants · phases · priorités",
+  },
+] as const
+
+type TabId = (typeof TABS)[number]["id"]
+
 export function SimulationTab() {
   const queryClient = useQueryClient()
   const { data: catalog } = useSimReference()
@@ -323,6 +350,8 @@ export function SimulationTab() {
     hasCaching: false,
   })
 
+  const [tab, setTab] = useState<TabId>("cadrage")
+
   function update<K extends keyof SimInputs>(key: K, value: SimInputs[K]) {
     setInputs((s) => ({ ...s, [key]: value }))
     resetPush()
@@ -338,7 +367,11 @@ export function SimulationTab() {
 
   function handleEstimate() {
     if (!catalog) return
-    estimate(inputs)
+    // Auto-switch to the Coûts tab so the user immediately sees the projection
+    // rather than staring at the form after clicking "Lancer l'estimation".
+    estimate(inputs, {
+      onSuccess: () => setTab("costs"),
+    })
   }
 
   function handlePush() {
@@ -356,15 +389,74 @@ export function SimulationTab() {
     )
   }
 
+  const noResultYet = (
+    <EmptyState
+      icon={Info}
+      title="Lance d'abord une estimation"
+      description="Retourne sur l'onglet Cadrage pour remplir la volumétrie puis clique sur « Lancer l'estimation »."
+      action={
+        <Button variant="outline" onClick={() => setTab("cadrage")}>
+          Aller au Cadrage
+        </Button>
+      }
+    />
+  )
+
   return (
-    <SectionCard
-      title="Cadrage d'un projet agentique"
-      description="Réponds aux questions de scoping et compare la projection au baseline FinOps. Le résultat peut être poussé dans le modèle pour alimenter la prévision."
-      accent="green"
-      contentClassName="space-y-5"
-    >
-      {/* --- Form: scoping questions ------------------------------------ */}
-      <div className="grid gap-4 md:grid-cols-2">
+    <>
+      {/* Sub-tab nav — same visual language as the Optimiser / Collecte navs
+          so users learn the pattern once and read it everywhere. */}
+      <nav
+        aria-label="Étape du cadrage"
+        className="inline-flex rounded-xl border border-border bg-card p-1 gap-1 flex-wrap shadow-sm"
+      >
+        {TABS.map(({ id, label, icon: Icon, hint }) => {
+          const active = tab === id
+          return (
+            <button
+              key={id}
+              type="button"
+              onClick={() => setTab(id)}
+              aria-pressed={active}
+              className={cn(
+                "group inline-flex items-center gap-2 rounded-lg px-3.5 py-2 text-sm font-medium transition-all",
+                active
+                  ? "bg-brand text-brand-foreground shadow-sm"
+                  : "text-muted-foreground hover:bg-muted hover:text-foreground",
+              )}
+            >
+              <Icon
+                className={cn(
+                  "h-3.5 w-3.5",
+                  active
+                    ? "text-[color:var(--accent-green)]"
+                    : "text-muted-foreground",
+                )}
+                aria-hidden
+              />
+              <span>{label}</span>
+              <span
+                className={cn(
+                  "text-[10px] font-medium",
+                  active ? "text-white/60" : "text-muted-foreground/60",
+                )}
+              >
+                {hint}
+              </span>
+            </button>
+          )
+        })}
+      </nav>
+
+      {tab === "cadrage" && (
+        <SectionCard
+          title="Cadrage d'un projet agentique"
+          description="Réponds aux questions de scoping et compare la projection au baseline FinOps. Le résultat peut être poussé dans le modèle pour alimenter la prévision."
+          accent="green"
+          contentClassName="space-y-5"
+        >
+          {/* --- Form: scoping questions ------------------------------------ */}
+          <div className="grid gap-4 md:grid-cols-2">
         <div className="space-y-1.5">
           <label className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
             Nom du projet
@@ -510,83 +602,137 @@ export function SimulationTab() {
         </div>
       </div>
 
-      <Button onClick={handleEstimate} disabled={estimating || !catalog}>
-        {estimating ? "Estimation…" : "Lancer l'estimation"}
-      </Button>
-      {estimateError && <ErrorBanner message="L'estimation a échoué. Vérifie que le backend est démarré." />}
-
-      {/* --- Result ----------------------------------------------------- */}
-      {result && (
-        <div className="space-y-6">
-          <ExecutiveSummaryCard summary={result.executiveSummary} />
-
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <StatCard
-              label="Coût mensuel projeté"
-              value={formatUsd(result.cost.totalMonthly)}
-              hint={`sur 12 mois : ${formatUsd(result.cost.totalMonthly * 12)}`}
-              accent
-            />
-            <StatCard
-              label="Coût / interaction"
-              value={
-                result.executiveSummary.unitCostPerInteractionUsd > 0
-                  ? `$${result.executiveSummary.unitCostPerInteractionUsd.toFixed(4)}`
-                  : "—"
-              }
-              hint={`$${result.executiveSummary.unitCostPerUserUsd.toFixed(2)}/user actif`}
-            />
-            <StatCard
-              label="Impact sur la facture"
-              value={
-                result.baseline.monthlyAvg > 0
-                  ? `${result.deltaVsBaselinePct > 0 ? "+" : ""}${result.deltaVsBaselinePct.toFixed(1)}%`
-                  : "N/A"
-              }
-              hint={
-                result.baseline.source === "ingested_data"
-                  ? `vs baseline ${formatUsd(result.baseline.monthlyAvg)}`
-                  : "Pas de baseline ingérée"
-              }
-            />
-            <StatCard
-              label="Driver principal"
-              value={`${DOMINANT_LABELS[result.executiveSummary.dominantCostDriver]} · ${result.executiveSummary.dominantCostDriverPct.toFixed(0)}%`}
-              hint={`LLM ${((result.cost.llmInput + result.cost.llmOutput) / Math.max(result.cost.totalMonthly, 0.01) * 100).toFixed(0)}% · Tools ${(result.cost.tools / Math.max(result.cost.totalMonthly, 0.01) * 100).toFixed(0)}% · Infra ${(result.cost.infrastructure / Math.max(result.cost.totalMonthly, 0.01) * 100).toFixed(0)}%`}
-            />
-          </div>
-
-          <CostBreakdownBar cost={result.cost} />
-
-          <ArchitectureSection recommendations={result.architecture} />
-
-          <RisksSection risks={result.risks} />
-
-          <AnalysisAxesSection axes={result.analysisAxes} />
-
-          {/* Push to FinOps */}
-          <div className="rounded-xl border border-[color:var(--accent-green)]/30 bg-[color:var(--accent-green)]/5 p-4 space-y-3">
-            <div>
-              <p className="text-sm font-semibold text-foreground">Injecter la projection dans le modèle FinOps</p>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                Ajoute {result.projectedMonthlyEvents.length} événements (12 mois × {new Set(result.projectedMonthlyEvents.map((e) => e.service)).size} composants) au store actuel (mode append).
-              </p>
-            </div>
-            {pushed && pushData && (
-              <SuccessBanner message={`${pushData.ingested.toLocaleString("fr-FR")} événements ingérés. Période mise à jour: ${pushData.periodStart} → ${pushData.periodEnd}. Toutes les pages sont à jour.`} />
-            )}
-            {pushError && (
-              <ErrorBanner
-                message={extractMessage(pushError) ?? "Push refusé par le backend."}
-              />
-            )}
-            <Button onClick={handlePush} disabled={pushing || pushed}>
-              {pushing ? "Injection…" : pushed ? "Injecté" : "Pousser vers le modèle FinOps"}
-            </Button>
-          </div>
-        </div>
+          <Button onClick={handleEstimate} disabled={estimating || !catalog}>
+            {estimating ? "Estimation…" : "Lancer l'estimation"}
+          </Button>
+          {estimateError && (
+            <ErrorBanner message="L'estimation a échoué. Vérifie que le backend est démarré." />
+          )}
+          {result && (
+            <p className="text-xs text-muted-foreground">
+              Estimation prête — bascule sur{" "}
+              <button
+                type="button"
+                onClick={() => setTab("costs")}
+                className="underline underline-offset-2 hover:text-foreground"
+              >
+                Coûts
+              </button>{" "}
+              ou{" "}
+              <button
+                type="button"
+                onClick={() => setTab("architecture")}
+                className="underline underline-offset-2 hover:text-foreground"
+              >
+                Architecture
+              </button>{" "}
+              pour voir la projection.
+            </p>
+          )}
+        </SectionCard>
       )}
-    </SectionCard>
+
+      {tab === "costs" &&
+        (result ? (
+          <SectionCard
+            title="Projection financière"
+            description="Résumé exécutif, décomposition du coût mensuel et matrice de risques associés à la volumétrie déclarée."
+            accent="green"
+            contentClassName="space-y-6"
+          >
+            <ExecutiveSummaryCard summary={result.executiveSummary} />
+
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <StatCard
+                label="Coût mensuel projeté"
+                value={formatUsd(result.cost.totalMonthly)}
+                hint={`sur 12 mois : ${formatUsd(result.cost.totalMonthly * 12)}`}
+                accent
+              />
+              <StatCard
+                label="Coût / interaction"
+                value={
+                  result.executiveSummary.unitCostPerInteractionUsd > 0
+                    ? `$${result.executiveSummary.unitCostPerInteractionUsd.toFixed(4)}`
+                    : "—"
+                }
+                hint={`$${result.executiveSummary.unitCostPerUserUsd.toFixed(2)}/user actif`}
+              />
+              <StatCard
+                label="Impact sur la facture"
+                value={
+                  result.baseline.monthlyAvg > 0
+                    ? `${result.deltaVsBaselinePct > 0 ? "+" : ""}${result.deltaVsBaselinePct.toFixed(1)}%`
+                    : "N/A"
+                }
+                hint={
+                  result.baseline.source === "ingested_data"
+                    ? `vs baseline ${formatUsd(result.baseline.monthlyAvg)}`
+                    : "Pas de baseline ingérée"
+                }
+              />
+              <StatCard
+                label="Driver principal"
+                value={`${DOMINANT_LABELS[result.executiveSummary.dominantCostDriver]} · ${result.executiveSummary.dominantCostDriverPct.toFixed(0)}%`}
+                hint={`LLM ${((result.cost.llmInput + result.cost.llmOutput) / Math.max(result.cost.totalMonthly, 0.01) * 100).toFixed(0)}% · Tools ${(result.cost.tools / Math.max(result.cost.totalMonthly, 0.01) * 100).toFixed(0)}% · Infra ${(result.cost.infrastructure / Math.max(result.cost.totalMonthly, 0.01) * 100).toFixed(0)}%`}
+              />
+            </div>
+
+            <CostBreakdownBar cost={result.cost} />
+
+            <RisksSection risks={result.risks} />
+
+            <AnalysisAxesSection axes={result.analysisAxes} />
+
+            {/* Push to FinOps — kept on the Coûts tab because it commits the
+                projection into the shared events store. */}
+            <div className="rounded-xl border border-[color:var(--accent-green)]/30 bg-[color:var(--accent-green)]/5 p-4 space-y-3">
+              <div>
+                <p className="text-sm font-semibold text-foreground">
+                  Injecter la projection dans le modèle FinOps
+                </p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Ajoute {result.projectedMonthlyEvents.length} événements (12 mois ×{" "}
+                  {new Set(result.projectedMonthlyEvents.map((e) => e.service)).size}{" "}
+                  composants) au store actuel (mode append).
+                </p>
+              </div>
+              {pushed && pushData && (
+                <SuccessBanner
+                  message={`${pushData.ingested.toLocaleString("fr-FR")} événements ingérés. Période mise à jour: ${pushData.periodStart} → ${pushData.periodEnd}. Toutes les pages sont à jour.`}
+                />
+              )}
+              {pushError && (
+                <ErrorBanner
+                  message={extractMessage(pushError) ?? "Push refusé par le backend."}
+                />
+              )}
+              <Button onClick={handlePush} disabled={pushing || pushed}>
+                {pushing ? "Injection…" : pushed ? "Injecté" : "Pousser vers le modèle FinOps"}
+              </Button>
+            </div>
+          </SectionCard>
+        ) : (
+          <SectionCard title="Projection financière" accent="green">
+            {noResultYet}
+          </SectionCard>
+        ))}
+
+      {tab === "architecture" &&
+        (result ? (
+          <SectionCard
+            title="Architecture cible"
+            description="Composants recommandés, phasés (MVP / Scale / Hardening) avec priorité et effort. Base pour cadrer une feuille de route technique."
+            accent="green"
+          >
+            <ArchitectureSection recommendations={result.architecture} />
+          </SectionCard>
+        ) : (
+          <SectionCard title="Architecture cible" accent="green">
+            {noResultYet}
+          </SectionCard>
+        ))}
+    </>
   )
 }
 

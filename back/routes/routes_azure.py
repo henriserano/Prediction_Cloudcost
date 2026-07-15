@@ -10,10 +10,11 @@ and ``azure-mgmt-costmanagement`` packages. Imports are lazy so the app
 still starts if they are missing — ``/status`` reports the missing
 dependency cleanly instead of crashing at import time.
 """
+
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone
-from typing import Annotated, List, Optional
+from datetime import UTC, date, datetime, timedelta
+from typing import Annotated
 
 from fastapi import APIRouter, Query, Request
 
@@ -42,10 +43,14 @@ router = APIRouter(prefix="/api/azure", tags=["azure"])
 # Lazy Azure SDK imports
 # ---------------------------------------------------------------------------
 
+
 def _import_identity():
     """Return the azure-identity module, or raise a 500 AppError with guidance."""
     try:
-        from azure.core.exceptions import ClientAuthenticationError, HttpResponseError  # type: ignore
+        from azure.core.exceptions import (  # type: ignore
+            ClientAuthenticationError,
+            HttpResponseError,
+        )
         from azure.identity import ClientSecretCredential  # type: ignore
 
         return ClientSecretCredential, ClientAuthenticationError, HttpResponseError
@@ -57,7 +62,7 @@ def _import_identity():
             "'azure-mgmt-costmanagement>=4' to back/requirements.txt.",
             code="DEPENDENCY_ERROR",
             status_code=500,
-        )
+        ) from exc
 
 
 def _import_resource_client():
@@ -71,7 +76,7 @@ def _import_resource_client():
             "azure-mgmt-resource is not installed. Add it to back/requirements.txt.",
             code="DEPENDENCY_ERROR",
             status_code=500,
-        )
+        ) from exc
 
 
 def _import_cost_client():
@@ -100,12 +105,13 @@ def _import_cost_client():
             "azure-mgmt-costmanagement is not installed. Add it to back/requirements.txt.",
             code="DEPENDENCY_ERROR",
             status_code=500,
-        )
+        ) from exc
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _entry_or_401(request: Request):
     """Return the cached Azure credential entry for the caller or raise 401."""
@@ -123,7 +129,7 @@ def _entry_or_401(request: Request):
     return entry
 
 
-def _resolve_period(start: Optional[str], end: Optional[str], months_default: int = 6) -> tuple[str, str]:
+def _resolve_period(start: str | None, end: str | None, months_default: int = 6) -> tuple[str, str]:
     """Return (start, end) as ISO YYYY-MM-DD, defaulting to the last N months.
 
     Azure Cost Management treats the period ``to`` as inclusive — we do NOT
@@ -190,7 +196,10 @@ def _wrap_azure_exception(exc: Exception, resource: str) -> AppError:
 # Auth status
 # ---------------------------------------------------------------------------
 
-@router.get("/status", response_model=AzureAuthStatus, summary="Check Azure Service Principal via AAD")
+
+@router.get(
+    "/status", response_model=AzureAuthStatus, summary="Check Azure Service Principal via AAD"
+)
 def azure_status(request: Request) -> AzureAuthStatus:
     """Report whether the Service Principal in cache can obtain an AAD token.
 
@@ -244,12 +253,13 @@ def azure_status(request: Request) -> AzureAuthStatus:
 # Subscriptions
 # ---------------------------------------------------------------------------
 
+
 @router.get(
     "/subscriptions",
-    response_model=List[AzureSubscription],
+    response_model=list[AzureSubscription],
     summary="List Azure subscriptions the Service Principal can see",
 )
-def azure_subscriptions(request: Request) -> List[AzureSubscription]:
+def azure_subscriptions(request: Request) -> list[AzureSubscription]:
     """Return the subscriptions the SP has any RBAC role on.
 
     Requires either ``Reader`` at management-group level or an explicit
@@ -274,12 +284,13 @@ def azure_subscriptions(request: Request) -> List[AzureSubscription]:
     except AppError:
         raise
     except Exception as exc:
-        raise _wrap_azure_exception(exc, "Subscriptions.List")
+        raise _wrap_azure_exception(exc, "Subscriptions.List") from exc
 
 
 # ---------------------------------------------------------------------------
 # Cost Management — real billing data
 # ---------------------------------------------------------------------------
+
 
 def _run_cost_query(
     entry,
@@ -307,8 +318,8 @@ def _run_cost_query(
             type="ActualCost",
             timeframe="Custom",
             time_period=QueryTimePeriod(
-                from_property=datetime.fromisoformat(start_iso).replace(tzinfo=timezone.utc),
-                to=datetime.fromisoformat(end_iso).replace(tzinfo=timezone.utc),
+                from_property=datetime.fromisoformat(start_iso).replace(tzinfo=UTC),
+                to=datetime.fromisoformat(end_iso).replace(tzinfo=UTC),
             ),
             dataset=QueryDataset(
                 granularity=granularity,
@@ -325,7 +336,7 @@ def _run_cost_query(
     except AppError:
         raise
     except Exception as exc:
-        raise _wrap_azure_exception(exc, "CostManagement.Query.Usage")
+        raise _wrap_azure_exception(exc, "CostManagement.Query.Usage") from exc
 
 
 def _parse_cost_rows(payload: dict) -> tuple[list[dict], str]:
@@ -378,11 +389,15 @@ def _parse_cost_rows(payload: dict) -> tuple[list[dict], str]:
 )
 def azure_billing(
     request: Request,
-    start: Annotated[Optional[str], Query(description="YYYY-MM-DD, defaults to ~6 months ago")] = None,
-    end: Annotated[Optional[str], Query(description="YYYY-MM-DD (inclusive), defaults to today")] = None,
+    start: Annotated[str | None, Query(description="YYYY-MM-DD, defaults to ~6 months ago")] = None,
+    end: Annotated[
+        str | None, Query(description="YYYY-MM-DD (inclusive), defaults to today")
+    ] = None,
     months: Annotated[int, Query(ge=1, le=24)] = 6,
     granularity: Annotated[str, Query(description="Daily | Monthly")] = "Daily",
-    subscription_id: Annotated[Optional[str], Query(description="Override the cached subscription")] = None,
+    subscription_id: Annotated[
+        str | None, Query(description="Override the cached subscription")
+    ] = None,
 ) -> AzureBillingResponse:
     """Fetch aggregated Azure costs grouped by service.
 
@@ -393,7 +408,7 @@ def azure_billing(
         date.fromisoformat(start) if start else None
         date.fromisoformat(end) if end else None
     except ValueError as exc:
-        raise BadRequest(f"Invalid date format: {exc}. Use YYYY-MM-DD.")
+        raise BadRequest(f"Invalid date format: {exc}. Use YYYY-MM-DD.") from exc
 
     if granularity not in {"Daily", "Monthly"}:
         raise BadRequest(
@@ -433,13 +448,13 @@ def azure_billing(
         )
         for svc, cost in sorted(by_service_totals.items(), key=lambda kv: kv[1], reverse=True)
     ]
-    by_day = [
-        AzureBillingByDay(date=d, cost=round(c, 4))
-        for d, c in sorted(by_day_totals.items())
-    ] if granularity == "Daily" else []
+    by_day = (
+        [AzureBillingByDay(date=d, cost=round(c, 4)) for d, c in sorted(by_day_totals.items())]
+        if granularity == "Daily"
+        else []
+    )
     by_month = [
-        AzureBillingByMonth(month=m, cost=round(c, 4))
-        for m, c in sorted(by_month_totals.items())
+        AzureBillingByMonth(month=m, cost=round(c, 4)) for m, c in sorted(by_month_totals.items())
     ]
 
     return AzureBillingResponse(
@@ -458,6 +473,7 @@ def azure_billing(
 # ---------------------------------------------------------------------------
 # Sync — copy Azure Cost Management data into the FinOps events store
 # ---------------------------------------------------------------------------
+
 
 @router.post(
     "/sync",
@@ -511,8 +527,18 @@ def azure_sync(request: Request, body: AzureSyncRequest) -> AzureSyncResponse:
         )
 
     from routes.routes_events import ingest_events
+    from core.session import require_current_user_id
 
-    resp = ingest_events(EventsIngestRequest(events=events, replace=body.replace))
+    # ingest_events is a FastAPI route: its ``user_id`` param is a Depends()
+    # sentinel that only gets resolved through the router. Calling it directly
+    # here means we MUST resolve the user ourselves — otherwise events land
+    # under the Depends object as a "phantom" key and every downstream reader
+    # (analytics/forecast/services/anomalies) sees an empty store.
+    user_id = require_current_user_id(request)
+    resp = ingest_events(
+        EventsIngestRequest(events=events, replace=body.replace),
+        user_id=user_id,
+    )
     logger.info(
         "azure_sync_ingested",
         extra={

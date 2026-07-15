@@ -50,9 +50,7 @@ class Settings(BaseSettings):
     # ``GOOGLE_REDIRECT_URI=http://localhost:8080/api/gcp/callback``).
     google_client_id: str = Field(default="")
     google_client_secret: str = Field(default="")
-    google_redirect_uri: str = Field(
-        default="https://finopsgcp.vercel.app/api/gcp/callback"
-    )
+    google_redirect_uri: str = Field(default="https://finopsgcp.vercel.app/api/gcp/callback")
     frontend_url: str = Field(default="https://finopsgcp.vercel.app")
 
     # GCP BigQuery Billing Export (optional). When both are set, /api/gcp/billing

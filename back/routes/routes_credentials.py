@@ -5,10 +5,11 @@ sitting on the user row, then AES-GCM (de)crypt the payload. The server
 never persists the PIN or the raw KEK; both live only for the duration of
 the request.
 """
+
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Annotated
 
 from boto3.dynamodb.conditions import Key
@@ -19,11 +20,15 @@ from core.aws_session import activate_user_aws, deactivate_user_aws, is_active
 from core.azure_session import (
     activate_user_azure,
     deactivate_user_azure,
+)
+from core.azure_session import (
     is_active as azure_is_active,
 )
 from core.credentials_flow import (
     CredentialsProvider,
     activate_from_payload,
+)
+from core.credentials_flow import (
     register as register_provider,
 )
 from core.crypto import (
@@ -38,7 +43,13 @@ from core.dynamo import credentials_table, users_table
 from core.errors import BadRequest, NotFound, Unauthorized
 from core.logging import get_logger
 from core.session import require_current_user_id
-
+from schemas.credentials import (
+    CredentialMetadata,
+    CredentialReveal,
+    CredentialRevealResponse,
+    CredentialUpsert,
+    Provider,
+)
 
 # ---------------------------------------------------------------------------
 # Register the AWS + Azure activation recipes in the shared flow registry.
@@ -99,17 +110,11 @@ def _safe_json_loads(plaintext: str, provider: str) -> dict:
     try:
         parsed = json.loads(plaintext)
     except json.JSONDecodeError:
-        raise Unauthorized("Corrupted credential payload.")
+        raise Unauthorized("Corrupted credential payload.") from None
     if not isinstance(parsed, dict):
         raise Unauthorized("Corrupted credential payload.")
     return parsed
-from schemas.credentials import (
-    CredentialMetadata,
-    CredentialReveal,
-    CredentialRevealResponse,
-    CredentialUpsert,
-    Provider,
-)
+
 
 logger = get_logger(__name__)
 
@@ -179,10 +184,10 @@ def upsert(
     plaintext = json.dumps(body.payload, ensure_ascii=False)
     blob = encrypt_with_kek(kek, plaintext, associated_data=provider.encode("ascii"))
 
-    now = datetime.now(tz=timezone.utc).isoformat()
-    existing = credentials_table().get_item(
-        Key={"user_id": user_id, "provider": provider}
-    ).get("Item")
+    now = datetime.now(tz=UTC).isoformat()
+    existing = (
+        credentials_table().get_item(Key={"user_id": user_id, "provider": provider}).get("Item")
+    )
     created_at = existing["created_at"] if existing else now
 
     credentials_table().put_item(
@@ -226,9 +231,7 @@ def reveal(
     user = _load_user_or_401(user_id)
     kek = _unwrap_or_401(user, body.pin)
 
-    item = credentials_table().get_item(
-        Key={"user_id": user_id, "provider": provider}
-    ).get("Item")
+    item = credentials_table().get_item(Key={"user_id": user_id, "provider": provider}).get("Item")
     if not item:
         raise NotFound(f"No credentials stored for provider '{provider}'")
 
@@ -265,9 +268,7 @@ def activate_aws(
     user = _load_user_or_401(user_id)
     kek = _unwrap_or_401(user, body.pin)
 
-    item = credentials_table().get_item(
-        Key={"user_id": user_id, "provider": "aws"}
-    ).get("Item")
+    item = credentials_table().get_item(Key={"user_id": user_id, "provider": "aws"}).get("Item")
     if not item:
         raise NotFound("No AWS credentials stored for this user.")
 
@@ -318,9 +319,7 @@ def activate_azure(
     user = _load_user_or_401(user_id)
     kek = _unwrap_or_401(user, body.pin)
 
-    item = credentials_table().get_item(
-        Key={"user_id": user_id, "provider": "azure"}
-    ).get("Item")
+    item = credentials_table().get_item(Key={"user_id": user_id, "provider": "azure"}).get("Item")
     if not item:
         raise NotFound("No Azure credentials stored for this user.")
 

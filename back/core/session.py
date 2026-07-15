@@ -11,19 +11,17 @@ Design:
   key at process start. It means every uvicorn restart invalidates all
   sessions — acceptable trade-off vs shipping a default-known key.
 """
+
 from __future__ import annotations
 
-import os
 import secrets
-from datetime import datetime, timedelta, timezone
-from typing import Optional
+from datetime import UTC, datetime, timedelta
 
 import jwt
-from fastapi import Cookie, Request
+from fastapi import Request
 
 from core.config import get_settings
 from core.errors import Unauthorized
-
 
 _ALGO = "HS256"
 
@@ -46,7 +44,7 @@ def _signing_key() -> str:
 def issue_session(user_id: str) -> str:
     """Return a signed JWT for ``user_id``."""
     settings = get_settings()
-    now = datetime.now(tz=timezone.utc)
+    now = datetime.now(tz=UTC)
     payload = {
         "sub": user_id,
         "iat": int(now.timestamp()),
@@ -55,7 +53,7 @@ def issue_session(user_id: str) -> str:
     return jwt.encode(payload, _signing_key(), algorithm=_ALGO)
 
 
-def decode_session(token: str) -> Optional[str]:
+def decode_session(token: str) -> str | None:
     """Return the user_id in the JWT, or None if invalid / expired."""
     try:
         payload = jwt.decode(token, _signing_key(), algorithms=[_ALGO])
@@ -67,7 +65,7 @@ def decode_session(token: str) -> Optional[str]:
         return None
 
 
-def get_current_user_id(request: Request) -> Optional[str]:
+def get_current_user_id(request: Request) -> str | None:
     """Read the sid cookie and return the associated user_id, or None."""
     cookie_name = get_settings().session_cookie_name
     token = request.cookies.get(cookie_name)

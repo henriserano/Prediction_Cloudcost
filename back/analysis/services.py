@@ -1,21 +1,19 @@
 from __future__ import annotations
 
-from typing import List
-
 import numpy as np
 import pandas as pd
 
+from analysis.service_taxonomy import categorize
+from core.cache import app_cache
 from data.loader import load_daily_costs, load_daily_per_service
 from schemas.analytics import KPIData, ServiceShare
-from core.cache import app_cache
-from analysis.service_taxonomy import categorize
 
 
-def _service_cols(df: pd.DataFrame) -> List[str]:
+def _service_cols(df: pd.DataFrame) -> list[str]:
     return [c for c in df.columns if c != "ds"]
 
 
-def get_service_shares() -> List[ServiceShare]:
+def get_service_shares() -> list[ServiceShare]:
     cached = app_cache.get("analytics:services")
     if cached is not None:
         return cached
@@ -36,7 +34,7 @@ def get_service_shares() -> List[ServiceShare]:
         cvs[svc] = float(np.std(daily, ddof=1) / np.mean(daily) * 100)
 
     ranked = sorted(totals.items(), key=lambda x: x[1], reverse=True)
-    result: List[ServiceShare] = []
+    result: list[ServiceShare] = []
     cum = 0.0
     for svc, total in ranked:
         pct = round(total / grand_total * 100, 2) if grand_total else 0.0

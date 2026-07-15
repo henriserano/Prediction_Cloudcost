@@ -5,6 +5,7 @@ Mirrors the shape returned by the three cloud billing endpoints
 portfolio aggregator can merge local-store data alongside cloud data without
 a provider-specific branch.
 """
+
 from __future__ import annotations
 
 from pydantic import BaseModel, Field

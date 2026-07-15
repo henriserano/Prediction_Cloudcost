@@ -1,27 +1,24 @@
 from __future__ import annotations
 
 import math
-from typing import List
 
 import numpy as np
 import pandas as pd
 from scipy import stats
-from scipy.signal import periodogram
 
+from core.cache import app_cache
+from core.errors import NotEnoughData
 from data.loader import load_daily_costs
 from schemas.analytics import (
     ACFPoint,
     AnomalyPoint,
-    DescriptiveStats,
     DailyPoint,
-    STLPoint,
-    STLStrengths,
+    DescriptiveStats,
     StationarityResult,
     StationarityTest,
+    STLPoint,
+    STLStrengths,
 )
-from core.cache import app_cache
-from core.errors import NotEnoughData
-
 
 # ---------------------------------------------------------------------------
 # Daily series helpers
@@ -63,7 +60,8 @@ def _trend_ci(s: pd.Series, z: float = 1.96) -> tuple[pd.Series, pd.Series]:
 # Public API
 # ---------------------------------------------------------------------------
 
-def get_daily_series(last_n: int | None = None) -> List[DailyPoint]:
+
+def get_daily_series(last_n: int | None = None) -> list[DailyPoint]:
     _cache_key = "analytics:daily" if last_n is None else f"analytics:daily:{last_n}"
     _cached = app_cache.get(_cache_key)
     if _cached is not None:
@@ -147,7 +145,7 @@ def get_stationarity() -> StationarityResult:
     return result
 
 
-def get_stl_decomposition() -> tuple[List[STLPoint], STLStrengths]:
+def get_stl_decomposition() -> tuple[list[STLPoint], STLStrengths]:
     cached = app_cache.get("analytics:stl")
     if cached is not None:
         return cached
@@ -182,7 +180,7 @@ def get_stl_decomposition() -> tuple[List[STLPoint], STLStrengths]:
     return result
 
 
-def get_anomalies(z_threshold: float = 2.0) -> List[AnomalyPoint]:
+def get_anomalies(z_threshold: float = 2.0) -> list[AnomalyPoint]:
     # SEC: quantize the float in the cache key so ?z_threshold=2.0000001 and
     # 2.0000002 collide instead of each spawning a new entry.
     _cache_key = f"analytics:anomalies:{round(z_threshold, 2):.2f}"
@@ -226,7 +224,7 @@ def get_anomalies(z_threshold: float = 2.0) -> List[AnomalyPoint]:
     return result
 
 
-def get_acf_pacf(nlags: int = 28) -> List[ACFPoint]:
+def get_acf_pacf(nlags: int = 28) -> list[ACFPoint]:
     _cache_key = f"analytics:acf:{nlags}"
     cached = app_cache.get(_cache_key)
     if cached is not None:

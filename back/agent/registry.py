@@ -10,14 +10,15 @@ Adding a new tool = write a function + register it via ``@register(...)``.
 No further plumbing required: it appears in ``/api/tools``, in ``ALL_TOOLS``,
 and becomes callable via ``execute()``.
 """
+
 from __future__ import annotations
 
 import functools
 import inspect
 import json
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional
-
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # Serialisation helper (shared with the direct-invoke path)
@@ -51,6 +52,7 @@ def serialise(obj: Any) -> str:
 # Registry data types
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class ToolSpec:
     """One entry in the registry — enough to render an MCP-compatible descriptor.
@@ -83,8 +85,12 @@ def _infer_input_schema(func: Callable) -> dict:
     properties: dict[str, dict] = {}
     required: list[str] = []
     python_to_json = {
-        str: "string", int: "integer", float: "number", bool: "boolean",
-        list: "array", dict: "object",
+        str: "string",
+        int: "integer",
+        float: "number",
+        bool: "boolean",
+        list: "array",
+        dict: "object",
     }
     for name, param in sig.parameters.items():
         annotation = param.annotation
@@ -108,8 +114,8 @@ def register(
     description: str,
     category: str,
     read_only: bool = True,
-    tags: Optional[list[str]] = None,
-    input_schema: Optional[dict] = None,
+    tags: list[str] | None = None,
+    input_schema: dict | None = None,
 ):
     """Decorator that registers a callable as an agent tool.
 
@@ -145,7 +151,7 @@ def list_specs() -> list[ToolSpec]:
     return sorted(_REGISTRY.values(), key=lambda t: (t.category, t.name))
 
 
-def execute(name: str, arguments: Optional[dict] = None) -> str:
+def execute(name: str, arguments: dict | None = None) -> str:
     """Invoke a tool by name with keyword arguments. Returns a bounded string."""
     spec = get(name)
     args = arguments or {}
@@ -164,6 +170,7 @@ def as_langchain_tools() -> list:
 
     lc_tools = []
     for spec in list_specs():
+
         def _make_runner(_spec: ToolSpec):
             # functools.wraps sets __wrapped__ so inspect.signature (used by
             # LangChain to derive the args_schema) reports the wrapped

@@ -6,7 +6,9 @@ from typing import Any
 class AppError(Exception):
     """Base application error."""
 
-    def __init__(self, message: str, *, code: str = "APP_ERROR", status_code: int = 400, details: Any = None):
+    def __init__(
+        self, message: str, *, code: str = "APP_ERROR", status_code: int = 400, details: Any = None
+    ):
         super().__init__(message)
         self.message = message
         self.code = code

@@ -77,16 +77,28 @@ variable "health_check_path" {
 # ── Secrets / auth ────────────────────────────────────────────────────────────
 
 variable "api_key" {
-  description = "API key protecting the mutating backend endpoints (POST /api/events, /api/events/upload, /api/aws/connect, /admin/cache/clear). Required in prod. Injected as the API_KEY env var only when non-empty."
+  description = "API key protecting the mutating backend endpoints (POST /api/events, /api/events/upload, /api/aws/connect, /admin/cache/clear). DEPRECATED for production — set api_key_secret_arn instead and let App Runner resolve it from Secrets Manager at startup. Leaving this in plain tfvars persists the secret in terraform.tfstate."
   type        = string
   sensitive   = true
   default     = ""
 }
 
+variable "api_key_secret_arn" {
+  description = "ARN of a Secrets Manager secret storing the API_KEY. When set, App Runner resolves it at startup via the instance role and injects it as an env var; leave the plain api_key empty in that case. Recommended for prod so the secret never lands in terraform.tfstate."
+  type        = string
+  default     = ""
+}
+
 variable "session_secret" {
-  description = "Random string used to sign the session JWT cookie. Must be ≥32 chars in prod. Rotating it invalidates every logged-in session. Set via TF_VAR_session_secret or terraform.tfvars — never hardcode."
+  description = "Random string used to sign the session JWT cookie. Must be ≥32 chars in prod. DEPRECATED for production — set session_secret_arn instead. Rotating it invalidates every logged-in session. Set via TF_VAR_session_secret or terraform.tfvars — never hardcode."
   type        = string
   sensitive   = true
+  default     = ""
+}
+
+variable "session_secret_arn" {
+  description = "ARN of a Secrets Manager secret storing the SESSION_SECRET. When set, App Runner resolves it at startup via the instance role and injects it as an env var; leave the plain session_secret empty in that case. Recommended for prod so the secret never lands in terraform.tfstate."
+  type        = string
   default     = ""
 }
 

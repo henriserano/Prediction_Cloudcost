@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import io
 import threading
-from typing import Annotated, List, Optional
+from typing import Annotated
 
 import pandas as pd
 from fastapi import APIRouter, Depends, File, Form, UploadFile
@@ -11,21 +11,27 @@ from pydantic import BaseModel, Field
 from core.auth import require_api_key
 from core.errors import BadRequest, PayloadTooLarge
 from core.logging import get_logger
-from schemas.gcp import EventsIngestRequest, EventsIngestResponse, DateRange, PreviewKPI
+from core.session import require_current_user_id
+from core.user_context import current_user_scope
+from schemas.gcp import DateRange, EventsIngestRequest, EventsIngestResponse, PreviewKPI
 
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api", tags=["events"])
 
-# Module-level store: list of normalised row dicts
-_injected_events: list[dict] = []
+# SEC-020: per-user in-memory store. Before this refactor, a single global
+# list was shared across every request — one user's GCP sync leaked into
+# every unauthenticated analytics call. The key is the JWT ``sub`` returned
+# by ``require_current_user_id``. Anonymous callers never reach an ingest
+# endpoint (dependency raises 401) so they can't create entries here.
+_injected_events: dict[str, list[dict]] = {}
 
-# SEC-015: the store is mutated from sync endpoints running in the threadpool
-# and from async upload handlers — every read-modify-write (including the
+# SEC-015: mutated from sync endpoints running in the threadpool and from
+# async upload handlers — every read-modify-write (including the per-user
 # _MAX_STORE_SIZE check, which is otherwise a TOCTOU) must hold this lock.
 _events_lock = threading.Lock()
 
-# Absolute upper bound on total rows kept in the in-memory store (SEC-005).
+# Per-user upper bound on rows kept in the in-memory store (SEC-005).
 _MAX_STORE_SIZE = 100_000
 
 # Per-file size cap to avoid memory blow-ups on hostile uploads (10 MB).
@@ -58,17 +64,25 @@ async def _read_upload_limited(uf: UploadFile) -> bytes:
     return b"".join(chunks)
 
 
-def replace_injected_events(rows: list[dict]) -> None:
-    """Atomically replace the whole store (used by /api/gcp/sync). SEC-015."""
-    global _injected_events
+def replace_injected_events(rows: list[dict], user_id: str | None = None) -> None:
+    """Atomically replace the caller's slice of the store (used by /api/gcp/sync).
+
+    SEC-015 / SEC-020: writes are scoped by user_id — either the explicit
+    argument, or (when None) the current-request ContextVar value. Passing
+    ``ANONYMOUS_SCOPE`` is a programming error and is refused so anonymous
+    ingestion can never happen.
+    """
     if len(rows) > _MAX_STORE_SIZE:
         raise BadRequest(
-            f"Ingesting {len(rows)} rows would exceed the maximum store size "
-            f"of {_MAX_STORE_SIZE}.",
+            f"Ingesting {len(rows)} rows would exceed the maximum store size of {_MAX_STORE_SIZE}.",
             details={"incoming": len(rows), "max": _MAX_STORE_SIZE},
         )
+    scope = user_id or current_user_scope()
+    if not scope or scope.startswith("_anon"):
+        raise BadRequest("Cannot ingest events without an authenticated user.")
     with _events_lock:
-        _injected_events = list(rows)
+        _injected_events[scope] = list(rows)
+
 
 # Column aliases we accept in uploaded CSVs. First value that matches wins.
 _DATE_COLUMN_ALIASES = ("Mois", "Date", "Usage Start Date", "usage_start_time", "day", "ds")
@@ -93,7 +107,7 @@ def _build_dataframe(rows: list[dict]) -> pd.DataFrame:
     return df.sort_values("ds").reset_index(drop=True)
 
 
-def _first_matching_column(df: pd.DataFrame, aliases: tuple[str, ...]) -> Optional[str]:
+def _first_matching_column(df: pd.DataFrame, aliases: tuple[str, ...]) -> str | None:
     """Return the first column of ``df`` whose name matches an alias (case-insensitive)."""
     lower_map = {c.lower(): c for c in df.columns}
     for alias in aliases:
@@ -105,7 +119,7 @@ def _first_matching_column(df: pd.DataFrame, aliases: tuple[str, ...]) -> Option
     return None
 
 
-def _to_iso_date(value) -> Optional[str]:
+def _to_iso_date(value) -> str | None:
     """Normalise a cell value to YYYY-MM-DD. Accepts YYYY-MM (→ first of month)."""
     if value is None or (isinstance(value, float) and pd.isna(value)):
         return None
@@ -120,7 +134,7 @@ def _to_iso_date(value) -> Optional[str]:
         return None
 
 
-def _to_float_eu(value) -> Optional[float]:
+def _to_float_eu(value) -> float | None:
     """Parse a European-locale number: '224,59' or '1 234,56' → float."""
     if value is None or (isinstance(value, float) and pd.isna(value)):
         return None
@@ -148,9 +162,7 @@ def _parse_billing_file(filename: str, raw_bytes: bytes) -> tuple[list[dict], li
     """
     warnings: list[str] = []
     if len(raw_bytes) > _MAX_FILE_BYTES:
-        warnings.append(
-            f"{filename}: file exceeds the {_MAX_FILE_BYTES // (1024 * 1024)} MB limit"
-        )
+        warnings.append(f"{filename}: file exceeds the {_MAX_FILE_BYTES // (1024 * 1024)} MB limit")
         return [], warnings
 
     lower = (filename or "").lower()
@@ -176,8 +188,9 @@ def _parse_billing_file(filename: str, raw_bytes: bytes) -> tuple[list[dict], li
         for sheet_name, candidate in book.items():
             if candidate is None or candidate.empty:
                 continue
-            if _first_matching_column(candidate, _DATE_COLUMN_ALIASES) and \
-               _first_matching_column(candidate, _COST_COLUMN_ALIASES):
+            if _first_matching_column(candidate, _DATE_COLUMN_ALIASES) and _first_matching_column(
+                candidate, _COST_COLUMN_ALIASES
+            ):
                 candidates.append((len(candidate), sheet_name, candidate))
         if not candidates:
             warnings.append(f"{filename}: no sheet contained recognisable billing columns")
@@ -204,7 +217,7 @@ def _parse_billing_file(filename: str, raw_bytes: bytes) -> tuple[list[dict], li
         # Trying the three common billing delimiters in order and taking the
         # one that yields the most columns is deterministic and debuggable.
         df = None
-        last_exc: Optional[Exception] = None
+        last_exc: Exception | None = None
         best: tuple[int, pd.DataFrame] | None = None
         for delimiter in (",", ";", "\t"):
             try:
@@ -232,13 +245,13 @@ def _parse_billing_file(filename: str, raw_bytes: bytes) -> tuple[list[dict], li
     cost_col = _first_matching_column(df, _COST_COLUMN_ALIASES)
 
     missing = [
-        label for label, col in [("date", date_col), ("service", service_col), ("cost", cost_col)]
+        label
+        for label, col in [("date", date_col), ("service", service_col), ("cost", cost_col)]
         if col is None
     ]
     if missing:
         warnings.append(
-            f"{filename}: missing column(s) {missing}. "
-            f"Found headers: {list(df.columns)[:10]}"
+            f"{filename}: missing column(s) {missing}. Found headers: {list(df.columns)[:10]}"
         )
         return [], warnings
 
@@ -279,16 +292,23 @@ class MultiFileUploadResponse(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
-@router.post("/events", response_model=EventsIngestResponse, dependencies=[Depends(require_api_key)])
-def ingest_events(body: EventsIngestRequest) -> EventsIngestResponse:
+@router.post(
+    "/events",
+    response_model=EventsIngestResponse,
+    dependencies=[Depends(require_api_key)],
+)
+def ingest_events(
+    body: EventsIngestRequest,
+    user_id: str = Depends(require_current_user_id),
+) -> EventsIngestResponse:
     """
     Ingest billing events into the in-memory store.
 
-    - replace=True  → clear the store first, then add new events
-    - replace=False → append new events to the existing store
-    """
-    global _injected_events
+    - replace=True  → clear the caller's slice first, then add new events
+    - replace=False → append new events to the caller's slice
 
+    SEC-020: writes are scoped to ``user_id`` — no cross-tenant append.
+    """
     if not body.events:
         raise BadRequest("events list must not be empty")
 
@@ -311,9 +331,10 @@ def ingest_events(body: EventsIngestRequest) -> EventsIngestResponse:
             }
         )
 
-    # SEC-005 / SEC-015: cap check + mutation are atomic under the lock, and
-    # the cap applies to BOTH the replace and the append paths.
+    # SEC-005 / SEC-015 / SEC-020: cap check + mutation are atomic under the
+    # lock, applied per-user, and cap applies to BOTH the replace and append paths.
     with _events_lock:
+        current = _injected_events.get(user_id, [])
         if body.replace:
             if len(new_rows) > _MAX_STORE_SIZE:
                 raise BadRequest(
@@ -321,27 +342,34 @@ def ingest_events(body: EventsIngestRequest) -> EventsIngestResponse:
                     f"size of {_MAX_STORE_SIZE} rows.",
                     details={"incoming": len(new_rows), "max": _MAX_STORE_SIZE},
                 )
-            _injected_events = new_rows
+            _injected_events[user_id] = list(new_rows)
         else:
-            if len(_injected_events) + len(new_rows) > _MAX_STORE_SIZE:
+            if len(current) + len(new_rows) > _MAX_STORE_SIZE:
                 raise BadRequest(
                     f"Appending {len(new_rows)} events would exceed the maximum store size "
                     f"of {_MAX_STORE_SIZE} rows. Use replace=True to reset the store first.",
-                    details={"current_size": len(_injected_events), "incoming": len(new_rows), "max": _MAX_STORE_SIZE},
+                    details={
+                        "current_size": len(current),
+                        "incoming": len(new_rows),
+                        "max": _MAX_STORE_SIZE,
+                    },
                 )
             # Use extend instead of concatenation to avoid O(N) list copy (SEC-005).
-            _injected_events.extend(new_rows)
-        store_snapshot = list(_injected_events)
+            current.extend(new_rows)
+            _injected_events[user_id] = current
+        store_snapshot = list(_injected_events[user_id])
 
     # Invalidate downstream caches so analytics/forecast see fresh data
     try:
         from core.cache import app_cache
+
         app_cache.clear()
     except Exception:
         pass
 
     try:
         from data.loader import invalidate_cache
+
         invalidate_cache()
     except Exception:
         pass
@@ -373,8 +401,14 @@ def ingest_events(body: EventsIngestRequest) -> EventsIngestResponse:
     dependencies=[Depends(require_api_key)],
 )
 async def upload_billing_files(
-    files: Annotated[List[UploadFile], File(description="One or more billing CSV or Excel files (.csv, .xlsx, .xls, .ods)")],
-    replace: Annotated[bool, Form(description="If true, wipe the store before ingesting")] = False,
+    files: Annotated[
+        list[UploadFile],
+        File(description="One or more billing CSV or Excel files (.csv, .xlsx, .xls, .ods)"),
+    ],
+    user_id: str = Depends(require_current_user_id),
+    replace: Annotated[
+        bool, Form(description="If true, wipe the caller's slice before ingesting")
+    ] = False,
 ) -> MultiFileUploadResponse:
     """Upload one or more billing files (CSV or Excel; multipart/form-data).
 
@@ -383,9 +417,9 @@ async def upload_billing_files(
     one with recognisable columns is used. Per-row parsing failures are silently
     skipped and surfaced in the ``warnings`` field so a bad row in one file
     doesn't fail the whole batch.
-    """
-    global _injected_events
 
+    SEC-020: writes are scoped to ``user_id`` — no cross-tenant append.
+    """
     if not files:
         raise BadRequest("No files provided.")
     if len(files) > _MAX_FILES_PER_REQUEST:
@@ -412,9 +446,10 @@ async def upload_billing_files(
             details={"warnings": warnings, "per_file": per_file},
         )
 
-    # SEC-005 / SEC-015: cap check + mutation are atomic, and the cap applies
-    # to BOTH the replace and the append paths.
+    # SEC-005 / SEC-015 / SEC-020: cap check + mutation are atomic under the
+    # lock, applied per-user.
     with _events_lock:
+        current = _injected_events.get(user_id, [])
         if replace:
             if len(all_rows) > _MAX_STORE_SIZE:
                 raise BadRequest(
@@ -422,20 +457,21 @@ async def upload_billing_files(
                     f"of {_MAX_STORE_SIZE}.",
                     details={"incoming": len(all_rows), "max": _MAX_STORE_SIZE},
                 )
-            _injected_events = list(all_rows)
+            _injected_events[user_id] = list(all_rows)
         else:
-            if len(_injected_events) + len(all_rows) > _MAX_STORE_SIZE:
+            if len(current) + len(all_rows) > _MAX_STORE_SIZE:
                 raise BadRequest(
                     f"Appending {len(all_rows)} rows would exceed the store cap "
                     f"of {_MAX_STORE_SIZE}. Retry with replace=true.",
                     details={
-                        "current_size": len(_injected_events),
+                        "current_size": len(current),
                         "incoming": len(all_rows),
                         "max": _MAX_STORE_SIZE,
                     },
                 )
-            _injected_events.extend(all_rows)
-        store_snapshot = list(_injected_events)
+            current.extend(all_rows)
+            _injected_events[user_id] = current
+        store_snapshot = list(_injected_events[user_id])
 
     # Invalidate downstream caches so analytics/forecast see the fresh data.
     try:
@@ -489,18 +525,20 @@ class PreviewResponse(BaseModel):
         default_factory=list,
         description="Up to 100 parsed rows for the frontend to preview.",
     )
-    date_range: Optional[DateRange] = None
-    preview_kpi: Optional[PreviewKPI] = None
+    date_range: DateRange | None = None
+    preview_kpi: PreviewKPI | None = None
 
 
 @router.post(
     "/events/preview",
     response_model=PreviewResponse,
     summary="Parse one or several billing files WITHOUT storing them",
-    dependencies=[Depends(require_api_key)],
+    dependencies=[Depends(require_api_key), Depends(require_current_user_id)],
 )
 async def preview_billing_files(
-    files: Annotated[List[UploadFile], File(description="One or more billing files (.csv, .xlsx, .xls, .ods)")],
+    files: Annotated[
+        list[UploadFile], File(description="One or more billing files (.csv, .xlsx, .xls, .ods)")
+    ],
 ) -> PreviewResponse:
     """Dry-run of ``/events/upload``. Returns parsed rows without mutating the
     in-memory store — used by the frontend to render a preview before the user
@@ -558,12 +596,26 @@ async def preview_billing_files(
     )
 
 
-def get_injected_events_df() -> pd.DataFrame:
-    """Return the current injected events as a DataFrame (used by other modules).
+def get_injected_events_df(user_id: str | None = None) -> pd.DataFrame:
+    """Return the caller's injected events as a DataFrame (used by other modules).
 
-    SEC-015: the store is snapshotted under the lock; the (potentially slow)
-    DataFrame construction happens outside it.
+    SEC-015 / SEC-020: reads are scoped by user_id — either the explicit
+    argument, or (when None) the current-request ContextVar value. Anonymous
+    scope returns an empty DataFrame so a route that forgets to require auth
+    can never leak another user's data.
+    """
+    scope = user_id or current_user_scope()
+    with _events_lock:
+        snapshot = list(_injected_events.get(scope, []))
+    return _build_dataframe(snapshot)
+
+
+def clear_injected_events(user_id: str | None = None) -> None:
+    """Testing/admin helper: wipe the caller's slice (or every slice if
+    ``user_id`` is None). Never called from a production code path.
     """
     with _events_lock:
-        snapshot = list(_injected_events)
-    return _build_dataframe(snapshot)
+        if user_id is None:
+            _injected_events.clear()
+        else:
+            _injected_events.pop(user_id, None)

@@ -27,11 +27,15 @@ jobs:
         working-directory: back
 
     steps:
+      # SEC-036: third-party actions pinned to full commit SHA. A moving @v4
+      # tag lets a compromised publisher inject code with GITHUB_TOKEN access
+      # into every run (see tj-actions/changed-files, March 2025). SHAs make
+      # the exact bytes we execute reviewable; Dependabot bumps handle drift.
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Set up Python 3.11
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
         with:
           python-version: "3.11"
           cache: pip
@@ -41,9 +45,16 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          # Test-only deps: keep them out of requirements.txt so the runtime
-          # image stays lean, but install them here for the test job.
-          pip install pytest pytest-asyncio
+          # Test/lint-only deps: keep them out of requirements.txt so the runtime
+          # image stays lean, but install them here for the CI job.
+          pip install pytest pytest-asyncio ruff
+
+      # Style + likely-bug lint (config in back/pyproject.toml).
+      - name: Ruff lint
+        run: ruff check .
+
+      - name: Ruff format check
+        run: ruff format --check .
 
       # Correctness tests + smoke tests. Loaders are monkeypatched so the tests
       # do not depend on the bundled demo parquet files (tracked in back/data/).
@@ -63,10 +74,10 @@ jobs:
 
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Set up Node.js 20
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
         with:
           node-version: "20"
           cache: npm
@@ -99,7 +110,7 @@ jobs:
 
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       # Build the multi-stage Dockerfile; tag locally for testing only
       - name: Build Docker image
@@ -117,3 +128,16 @@ jobs:
           from core.errors import AppError
           print('OK — all core imports succeeded')
           "
+
+      # SEC-031 (I-H3): fail the build on any HIGH or CRITICAL vulnerability
+      # in the built image. Blocks known-CVE deploys from ever reaching ECR.
+      # ``ignore-unfixed`` avoids noise from advisories with no available fix.
+      - name: Trivy image scan
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: finops-backend:test
+          format: table
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          vuln-type: os,library

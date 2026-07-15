@@ -13,9 +13,11 @@ import {
   Wallet,
 } from "lucide-react"
 import {
+  BarChart,
   ComposedChart,
   Bar,
   Line,
+  Legend,
   Cell,
   XAxis,
   YAxis,
@@ -72,6 +74,30 @@ const PROVIDER_COLOR: Record<Provider, string> = {
 
 function currencyFmt(v: number, currency = "EUR"): string {
   return `${v.toLocaleString("fr-FR", { maximumFractionDigits: 0 })} ${currency === "USD" ? "$" : "€"}`
+}
+
+// Returns YYYY-MM for the current month in the user's timezone. Used to spot
+// (and exclude) the partial in-progress month from month-over-month comparisons.
+function currentYearMonth(): string {
+  const now = new Date()
+  const yyyy = now.getFullYear()
+  const mm = String(now.getMonth() + 1).padStart(2, "0")
+  return `${yyyy}-${mm}`
+}
+
+// Drop the current in-progress month if it's the latest entry. Billing APIs
+// often surface it with only a partial cost, biasing trend comparisons
+// downward. Returns a copy so callers can keep the raw series untouched.
+function withoutPartialCurrentMonth(
+  monthly: { month: string; cost: number }[],
+): { month: string; cost: number }[] {
+  if (monthly.length === 0) return monthly
+  const last = monthly[monthly.length - 1]
+  // ``month`` can arrive as ``2026-07`` or ``2026-07-01`` depending on the
+  // provider — normalise to ``YYYY-MM`` for the equality check.
+  const lastYearMonth = last.month.slice(0, 7)
+  if (lastYearMonth === currentYearMonth()) return monthly.slice(0, -1)
+  return monthly
 }
 
 // ---------------------------------------------------------------------------
@@ -395,23 +421,54 @@ function ConsolidatedKPIs({
   providerCount: number
   monthly: { month: string; cost: number }[]
 }) {
-  // Month-over-month comparison, taking the last two closed months
+  // Trend comparison uses the last two *complete* months so the partial
+  // current month never drags the delta down. When only one full month is
+  // available, we return null rather than a misleading 0 %.
+  const fullMonths = withoutPartialCurrentMonth(monthly)
   let trendPct: number | null = null
-  if (monthly.length >= 2) {
-    const [prev, curr] = monthly.slice(-2)
+  if (fullMonths.length >= 2) {
+    const [prev, curr] = fullMonths.slice(-2)
     if (prev.cost > 0) {
       trendPct = ((curr.cost - prev.cost) / prev.cost) * 100
     }
   }
 
+  // Average cost per completed month — smoothed baseline that survives a
+  // single-month spike better than the last-month value alone.
+  const avgMonthly =
+    fullMonths.length > 0
+      ? fullMonths.reduce((s, m) => s + m.cost, 0) / fullMonths.length
+      : 0
+
   return (
-    <section aria-label="KPI portefeuille" className="grid grid-cols-1 sm:grid-cols-4 gap-3 lg:gap-4">
+    <section
+      aria-label="KPI portefeuille"
+      className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 lg:gap-4"
+    >
       <KpiCard
         label="Coût consolidé"
         value={currencyFmt(totalCost, currency)}
-        sub={`${monthly.length || 0} mois d'historique`}
+        sub={`${fullMonths.length || monthly.length} mois d'historique · ${currency}`}
         icon={Wallet}
         tone="green"
+      />
+      <KpiCard
+        label="Moyenne mensuelle"
+        value={avgMonthly > 0 ? currencyFmt(avgMonthly, currency) : "—"}
+        sub={avgMonthly > 0 ? "sur les mois complets" : "Historique insuffisant"}
+        icon={Wallet}
+        tone="default"
+      />
+      <KpiCard
+        label="Tendance M/M-1"
+        value={trendPct == null ? "—" : `${trendPct >= 0 ? "+" : ""}${trendPct.toFixed(1)} %`}
+        sub={
+          trendPct == null
+            ? "2 mois complets requis"
+            : "Dernier mois complet vs. précédent"
+        }
+        icon={Wallet}
+        tone={trendPct == null ? "default" : trendPct > 5 ? "destructive" : "success"}
       />
       <KpiCard
         label="Comptes agrégés"
@@ -420,21 +477,115 @@ function ConsolidatedKPIs({
         icon={Layers}
         tone="default"
       />
-      <KpiCard
-        label="Tendance M/M-1"
-        value={trendPct == null ? "—" : `${trendPct >= 0 ? "+" : ""}${trendPct.toFixed(1)} %`}
-        sub={trendPct == null ? "Données insuffisantes" : "Dernier mois vs. précédent"}
-        icon={Wallet}
-        tone={trendPct == null ? "default" : trendPct > 5 ? "destructive" : "success"}
-      />
-      <KpiCard
-        label="Devise"
-        value={currency}
-        sub="Provider primaire"
-        icon={CloudIcon}
-        tone="default"
-      />
     </section>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Monthly evolution — stacked bars by provider
+// ---------------------------------------------------------------------------
+
+interface MemberMonthly {
+  provider: Provider
+  byMonth: { month: string; cost: number }[]
+}
+
+function MonthlyTrendByProvider({
+  members,
+  currency,
+  byProvider,
+}: {
+  members: MemberMonthly[]
+  currency: string
+  byProvider: { provider: Provider; cost: number }[]
+}) {
+  // Aggregate the raw per-member byMonth into a single flat series keyed by
+  // month. The chart uses one series per active provider so the user sees
+  // both the total (bar height) and the multi-cloud composition (segments).
+  const providers = byProvider.map((b) => b.provider)
+  const monthMap = new Map<string, Record<string, number>>()
+  for (const m of members) {
+    for (const row of m.byMonth) {
+      // Some backends return ``2026-01-01``, others ``2026-01`` — normalise so
+      // the two shapes don't produce duplicate bars for the same period.
+      const key = row.month.slice(0, 7)
+      const acc = monthMap.get(key) ?? {}
+      acc[m.provider] = (acc[m.provider] ?? 0) + row.cost
+      monthMap.set(key, acc)
+    }
+  }
+  const data = Array.from(monthMap.entries())
+    .map(([month, providerCosts]) => ({
+      month,
+      total: providers.reduce((s, p) => s + (providerCosts[p] ?? 0), 0),
+      ...Object.fromEntries(providers.map((p) => [p, providerCosts[p] ?? 0])),
+    }))
+    .sort((a, b) => a.month.localeCompare(b.month))
+
+  const currentYm = currentYearMonth()
+
+  return (
+    <SectionCard
+      title="Évolution mensuelle consolidée"
+      description="Empilement par provider. Le dernier mois est marqué « partiel » quand il correspond au mois en cours."
+      accent="green"
+    >
+      {data.length === 0 ? (
+        <EmptyState title="Pas encore d'historique mensuel" />
+      ) : (
+        <ResponsiveContainer width="100%" height={300}>
+          <BarChart data={data} margin={{ left: -12, right: 24, top: 8, bottom: 8 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="oklch(0 0 0 / 0.06)" />
+            <XAxis
+              dataKey="month"
+              tick={{ fontSize: 11, fill: COLOR_MUTED }}
+              tickLine={false}
+              axisLine={false}
+              tickFormatter={(v: string) => (v === currentYm ? `${v} *` : v)}
+            />
+            <YAxis
+              tick={{ fontSize: 10, fill: COLOR_MUTED }}
+              tickLine={false}
+              axisLine={false}
+              unit={currency === "USD" ? " $" : " €"}
+              width={72}
+            />
+            <Tooltip
+              cursor={{ fill: "oklch(0 0 0 / 0.03)" }}
+              contentStyle={{
+                borderRadius: 10,
+                border: "1px solid oklch(0.90 0.010 250)",
+                fontSize: 12,
+              }}
+              formatter={(v: unknown, name: string) => {
+                const label =
+                  name === "total"
+                    ? "Total"
+                    : PROVIDER_LABEL[name as Provider] ?? name
+                return [currencyFmt(v as number, currency), label]
+              }}
+              labelFormatter={(m: string) =>
+                m === currentYm ? `${m} (mois en cours)` : m
+              }
+            />
+            <Legend
+              wrapperStyle={{ fontSize: 11 }}
+              formatter={(v: string) => PROVIDER_LABEL[v as Provider] ?? v}
+            />
+            {providers.map((p) => (
+              <Bar
+                key={p}
+                dataKey={p}
+                stackId="cost"
+                fill={PROVIDER_COLOR[p]}
+                radius={[0, 0, 0, 0]}
+                isAnimationActive={false}
+              />
+            ))}
+          </BarChart>
+        </ResponsiveContainer>
+      )}
+    </SectionCard>
   )
 }
 
@@ -474,7 +625,17 @@ function SplitByProvider({
               />
             ))}
           </div>
-          <ul className="grid gap-2 sm:grid-cols-3">
+          <ul
+            className={cn(
+              "grid gap-2",
+              // Adaptive columns: 1 provider stays full-width so the KPI
+              // stays readable; 2/3/4 providers each get their fair share.
+              byProvider.length === 1 && "sm:grid-cols-1",
+              byProvider.length === 2 && "sm:grid-cols-2",
+              byProvider.length === 3 && "sm:grid-cols-3",
+              byProvider.length >= 4 && "sm:grid-cols-2 lg:grid-cols-4",
+            )}
+          >
             {byProvider.map((row) => (
               <li key={row.provider} className="rounded-lg border border-border bg-card p-3">
                 <div className="flex items-center gap-2 mb-1">
@@ -766,6 +927,12 @@ export function PortefeuilleView() {
                   memberCount={selected.members.length}
                   providerCount={aggregate.byProvider.length}
                   monthly={aggregate.monthly}
+                />
+
+                <MonthlyTrendByProvider
+                  members={aggregate.members}
+                  currency={aggregate.currency}
+                  byProvider={aggregate.byProvider}
                 />
 
                 <SplitByProvider

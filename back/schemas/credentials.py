@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
-from typing import Literal, Optional
+from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
-
 
 Provider = Literal["gcp", "aws", "azure"]
 
@@ -27,14 +26,14 @@ class AzureCredentialsPayload(BaseModel):
     tenant_id: str = Field(min_length=36, max_length=36)
     client_id: str = Field(min_length=36, max_length=36)
     client_secret: str = Field(min_length=8, max_length=512)
-    subscription_id: Optional[str] = Field(default=None, min_length=36, max_length=36)
-    location: Optional[str] = Field(default=None, max_length=64, pattern=r"^[a-z0-9\-]+$")
-    display_name: Optional[str] = Field(default=None, max_length=200)
+    subscription_id: str | None = Field(default=None, min_length=36, max_length=36)
+    location: str | None = Field(default=None, max_length=64, pattern=r"^[a-z0-9\-]+$")
+    display_name: str | None = Field(default=None, max_length=200)
 
     model_config = {"extra": "forbid"}
 
     @model_validator(mode="after")
-    def _validate_guids(self) -> "AzureCredentialsPayload":
+    def _validate_guids(self) -> AzureCredentialsPayload:
         for field, value in (
             ("tenant_id", self.tenant_id),
             ("client_id", self.client_id),
@@ -57,14 +56,14 @@ class CredentialUpsert(BaseModel):
     provider: Provider
     pin: str = Field(pattern=r"^\d{6}$")
     payload: dict = Field(description="Arbitrary provider-specific JSON payload.")
-    label: Optional[str] = Field(
+    label: str | None = Field(
         default=None,
         max_length=120,
         description="Human-friendly label (project name, account alias).",
     )
 
     @model_validator(mode="after")
-    def _validate_provider_specific_payload(self) -> "CredentialUpsert":
+    def _validate_provider_specific_payload(self) -> CredentialUpsert:
         # Azure is the only provider with a strict schema. GCP/AWS remain open
         # because their SDKs accept several shapes we don't want to codify here.
         if self.provider == "azure":
@@ -76,7 +75,7 @@ class CredentialMetadata(BaseModel):
     """What we return to the frontend without decrypting."""
 
     provider: Provider
-    label: Optional[str] = None
+    label: str | None = None
     created_at: datetime
     updated_at: datetime
 

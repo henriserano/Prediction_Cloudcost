@@ -5,13 +5,13 @@ user's grouping choices follow them across browsers. Each member points to a
 concrete billing scope (AWS account, GCP project, Azure subscription); the
 server only stores the identifier + label, never the credentials themselves.
 """
+
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated, Literal, Optional
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-
 
 Provider = Literal["gcp", "aws", "azure", "local"]
 
@@ -28,7 +28,7 @@ class PortfolioMember(BaseModel):
 
     provider: Provider
     id: Annotated[str, Field(min_length=1, max_length=200)]
-    label: Optional[Annotated[str, Field(max_length=200)]] = None
+    label: Annotated[str, Field(max_length=200)] | None = None
 
 
 class Portfolio(BaseModel):
@@ -67,7 +67,7 @@ class PortfolioCreate(BaseModel):
     @field_validator("members")
     @classmethod
     def _cap(cls, v: list[PortfolioMember]) -> list[PortfolioMember]:
-        return Portfolio._cap_members(v)  # noqa: SLF001
+        return Portfolio._cap_members(v)
 
 
 class PortfolioUpdate(BaseModel):
@@ -76,12 +76,12 @@ class PortfolioUpdate(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    name: Optional[Annotated[str, Field(min_length=1, max_length=_MAX_NAME_LEN)]] = None
-    members: Optional[list[PortfolioMember]] = None
+    name: Annotated[str, Field(min_length=1, max_length=_MAX_NAME_LEN)] | None = None
+    members: list[PortfolioMember] | None = None
 
     @field_validator("members")
     @classmethod
-    def _cap(cls, v: Optional[list[PortfolioMember]]) -> Optional[list[PortfolioMember]]:
+    def _cap(cls, v: list[PortfolioMember] | None) -> list[PortfolioMember] | None:
         if v is None:
             return None
-        return Portfolio._cap_members(v)  # noqa: SLF001
+        return Portfolio._cap_members(v)

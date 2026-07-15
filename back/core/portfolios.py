@@ -8,12 +8,12 @@ All helpers swallow low-level errors and log them — a broken portfolio never
 crashes the caller. Reads fall back to an empty list; writes are treated as
 best-effort but surface a boolean so routes can return 500 on hard failure.
 """
+
 from __future__ import annotations
 
 import json
 import uuid
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 
 from boto3.dynamodb.conditions import Key
 
@@ -26,10 +26,10 @@ logger = get_logger(__name__)
 
 
 def _now_iso() -> str:
-    return datetime.now(tz=timezone.utc).isoformat()
+    return datetime.now(tz=UTC).isoformat()
 
 
-def _item_to_portfolio(item: dict) -> Optional[Portfolio]:
+def _item_to_portfolio(item: dict) -> Portfolio | None:
     """Deserialise a DynamoDB item into a Portfolio, tolerating shape drift."""
     try:
         raw_members = item.get("members") or "[]"
@@ -64,13 +64,11 @@ def list_portfolios(user_id: str) -> list[Portfolio]:
         out.sort(key=lambda p: p.created_at)
         return out
     except Exception as exc:
-        logger.warning(
-            "portfolio_list_failed", extra={"error": repr(exc), "user_id": user_id}
-        )
+        logger.warning("portfolio_list_failed", extra={"error": repr(exc), "user_id": user_id})
         return []
 
 
-def get_portfolio(user_id: str, portfolio_id: str) -> Optional[Portfolio]:
+def get_portfolio(user_id: str, portfolio_id: str) -> Portfolio | None:
     try:
         item = (
             portfolios_table()
@@ -94,7 +92,7 @@ def create_portfolio(
     members: list[PortfolioMember],
 ) -> Portfolio:
     """Insert a new portfolio row and return it. Raises AppError on failure."""
-    now = datetime.now(tz=timezone.utc)
+    now = datetime.now(tz=UTC)
     portfolio = Portfolio(
         id=uuid.uuid4().hex,
         name=name,
@@ -118,9 +116,7 @@ def create_portfolio(
         )
         return portfolio
     except Exception as exc:
-        logger.error(
-            "portfolio_create_failed", extra={"error": repr(exc), "user_id": user_id}
-        )
+        logger.error("portfolio_create_failed", extra={"error": repr(exc), "user_id": user_id})
         raise AppError(
             "Failed to persist portfolio.", code="INTERNAL_ERROR", status_code=500
         ) from exc
@@ -129,9 +125,9 @@ def create_portfolio(
 def update_portfolio(
     user_id: str,
     portfolio_id: str,
-    name: Optional[str] = None,
-    members: Optional[list[PortfolioMember]] = None,
-) -> Optional[Portfolio]:
+    name: str | None = None,
+    members: list[PortfolioMember] | None = None,
+) -> Portfolio | None:
     """Partial update. Returns the updated portfolio, or None if not found."""
     existing = get_portfolio(user_id, portfolio_id)
     if existing is None:
@@ -140,7 +136,7 @@ def update_portfolio(
         update={
             "name": name if name is not None else existing.name,
             "members": members if members is not None else existing.members,
-            "updated_at": datetime.now(tz=timezone.utc),
+            "updated_at": datetime.now(tz=UTC),
         }
     )
     try:
@@ -171,9 +167,7 @@ def update_portfolio(
 def delete_portfolio(user_id: str, portfolio_id: str) -> bool:
     """Delete a portfolio. Returns True on success (even if it didn't exist)."""
     try:
-        portfolios_table().delete_item(
-            Key={"user_id": user_id, "portfolio_id": portfolio_id}
-        )
+        portfolios_table().delete_item(Key={"user_id": user_id, "portfolio_id": portfolio_id})
         return True
     except Exception as exc:
         logger.warning(

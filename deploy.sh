@@ -27,17 +27,38 @@ HEALTH_INTERVAL_S=5
 DEPLOY_TIMEOUT_S=900   # App Runner deployments typically settle in 3-6 min
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
+YES=0
 while [[ $# -gt 0 ]]; do
   case $1 in
     --env)     ENV="$2";    shift 2 ;;
     --region)  REGION="$2"; shift 2 ;;
     --tag)     TAG="$2";    shift 2 ;;
+    --yes|-y)  YES=1;       shift ;;
     *) echo "Unknown argument: $1"; exit 1 ;;
   esac
 done
 
 # ── Preflight ─────────────────────────────────────────────────────────────────
 fail() { echo "❌ $*" >&2; exit 1; }
+
+# SEC-030 (I-H2): a mistyped ``--env prod`` used to fire two auto-approved
+# terraform applies against production. Require an explicit confirmation
+# (CONFIRM_PROD=1, --yes/-y, or interactive "yes") before any prod work.
+if [[ "$ENV" == "prod" ]]; then
+  if [[ "${CONFIRM_PROD:-0}" != "1" && "$YES" != "1" ]]; then
+    if [[ -t 0 ]]; then
+      printf '⚠️  You are about to deploy to PRODUCTION (env=%s, region=%s, tag=%s).\n' "$ENV" "$REGION" "$TAG"
+      printf '    Two `terraform apply -auto-approve` runs will follow.\n'
+      read -r -p '    Type "yes" to continue: ' _confirm
+      if [[ "$_confirm" != "yes" ]]; then
+        echo "Aborted — no changes made."
+        exit 1
+      fi
+    else
+      fail "Refusing prod deploy in non-interactive mode without CONFIRM_PROD=1 or --yes."
+    fi
+  fi
+fi
 
 check_cmd() {
   command -v "$1" >/dev/null 2>&1 || fail "'$1' is required but not in PATH. Install it and retry."
@@ -87,12 +108,14 @@ ECR_URL=$(terraform output -raw ecr_repository_url)
 echo "  ECR  : $ECR_URL"
 
 # ── Step 2 — Docker build ─────────────────────────────────────────────────────
+# SEC-034: only the immutable per-SHA tag is built + pushed. The old
+# ``:latest`` alias is dropped so ECR is now the source of truth for exactly
+# which image ran when. The service pins the SHA via variables.tf anyway.
 echo "[2/7] Building Docker image (linux/amd64)..."
 cd "$BACK_DIR"
 docker build \
   --platform linux/amd64 \
   --tag "${ECR_URL}:${TAG}" \
-  --tag "${ECR_URL}:latest" \
   .
 
 # ── Step 3 — ECR login & push ─────────────────────────────────────────────────
@@ -101,7 +124,6 @@ aws ecr get-login-password --region "$REGION" \
   | docker login --username AWS --password-stdin "$ECR_URL"
 
 docker push "${ECR_URL}:${TAG}"
-docker push "${ECR_URL}:latest"
 
 # ── Step 4 — Full Terraform apply (ensures service exists, envvars up to date) ─
 echo "[4/7] Applying Terraform (App Runner service, envvars, IAM)..."
@@ -131,16 +153,26 @@ echo "  prev image : $PREV_IMAGE"
 # Terraform ignores image_identifier drift (see apprunner.tf lifecycle block),
 # so we mutate the service directly via the API.
 echo "[5/7] Updating service image and triggering deployment..."
-aws apprunner update-service \
+UPDATE_JSON=$(aws apprunner update-service \
   --service-arn "$SERVICE_ARN" \
   --region "$REGION" \
   --source-configuration "ImageRepository={ImageIdentifier=${ECR_URL}:${TAG},ImageRepositoryType=ECR,ImageConfiguration={Port=8080}}" \
-  --output json >/dev/null
+  --output json)
 
-OPERATION_ID=$(aws apprunner start-deployment \
-  --service-arn "$SERVICE_ARN" \
-  --region "$REGION" \
-  --query 'OperationId' --output text)
+OPERATION_ID=$(echo "$UPDATE_JSON" | jq -r '.OperationId // empty')
+
+# update-service only triggers a deployment when source-configuration actually
+# changed. If the tag is identical to what's already running, we need an
+# explicit start-deployment — but only once the service is back in RUNNING.
+if [[ -z "$OPERATION_ID" ]]; then
+  echo "  update-service was a no-op — issuing explicit start-deployment"
+  while [[ $(aws apprunner describe-service --service-arn "$SERVICE_ARN" --region "$REGION" --query 'Service.Status' --output text) != "RUNNING" ]]; do
+    sleep 10
+  done
+  OPERATION_ID=$(aws apprunner start-deployment \
+    --service-arn "$SERVICE_ARN" --region "$REGION" \
+    --query 'OperationId' --output text)
+fi
 echo "  deployment operation : $OPERATION_ID"
 
 # ── Step 6 — Wait for the App Runner service to reach RUNNING ─────────────────

@@ -1,86 +1,180 @@
-import Link from "next/link"
-import { ArrowUpRight, Cpu, Lightbulb, PauseCircle, Sparkles } from "lucide-react"
+"use client"
+
+import { useMemo, useState } from "react"
+import { Cpu, Gauge, Layers } from "lucide-react"
 import PageShell from "@/components/layout/PageShell"
-import { SectionCard } from "@/components/ui/section-card"
-import { Button } from "@/components/ui/button"
-import { Badge } from "@/components/ui/badge"
+import {
+  SourceSelector,
+  type DataSource,
+} from "@/components/data-source/source-selector"
+import { cn } from "@/lib/utils"
+import {
+  usePortfolios,
+  LOCAL_MEMBER_ID,
+  LOCAL_MEMBER_LABEL,
+  type Portfolio,
+} from "@/lib/hooks/usePortfolios"
+import { ProjectsRoiAudit } from "./_components/ProjectsRoiAudit"
+import { ArchitectureArbitrage } from "./_components/ArchitectureArbitrage"
+import { GenAIModelAudit } from "./_components/GenAIModelAudit"
 
-// Step 5 of the FinOps journey. Live surface is a placeholder because the
-// recommendation engine is not built yet. The three teasers describe what will
-// ship — kept in sync with the sidebar hint "Recommandations".
+// Synthetic portfolio for the "Vue projet" source. Wraps the singleton events
+// store so usePortfolioAggregate transparently routes to /api/events/billing —
+// same trick as the local-only portfolio branch in the Analyse page.
+const PROJET_PORTFOLIO_ID = "__projet-events__"
+const PROJET_PORTFOLIO_NAME = "Fichiers importés"
 
-const TEASERS = [
+function buildProjetPortfolio(): Portfolio {
+  const now = new Date(0).toISOString()
+  return {
+    id: PROJET_PORTFOLIO_ID,
+    name: PROJET_PORTFOLIO_NAME,
+    members: [
+      { provider: "local", id: LOCAL_MEMBER_ID, label: LOCAL_MEMBER_LABEL },
+    ],
+    createdAt: now,
+    updatedAt: now,
+  }
+}
+
+// One tab per audit lever. Same visual language as the Collecte source nav
+// (icon + label + technical hint) so users switching pages don't relearn a
+// second tab pattern.
+const TABS = [
   {
+    id: "projects",
+    label: "Audit projets",
+    icon: Gauge,
+    hint: "Continuer · Ralentir · Stopper",
+  },
+  {
+    id: "architecture",
+    label: "Architecture",
+    icon: Layers,
+    hint: "EC2 · ECS · Lambda · RDS",
+  },
+  {
+    id: "genai",
+    label: "GenAI",
     icon: Cpu,
-    title: "Choix de modèles",
-    description:
-      "Comparaison automatique entre familles (STL·ARIMA, Prophet, N-HiTS…) pour trancher sur la précision attendue vs. le coût de calcul.",
-  },
-  {
-    icon: PauseCircle,
-    title: "Projets à ralentir ou à stopper",
-    description:
-      "Détection des workloads dont la trajectoire de coût dépasse la valeur métier, avec seuils déclenchant une alerte à l'engagement partner.",
-  },
-  {
-    icon: Lightbulb,
-    title: "Arbitrages d'architecture",
-    description:
-      "Suggestions de rightsizing, de commitments (Savings Plans, CUDs) et de migrations de service. Priorisées par gain net estimé.",
+    hint: "Bedrock · Claude · Nova",
   },
 ] as const
 
+type TabId = (typeof TABS)[number]["id"]
+
 export default function OptimiserPage() {
+  const { portfolios } = usePortfolios()
+
+  const [tab, setTab] = useState<TabId>("projects")
+  const [source, setSource] = useState<DataSource>("projet")
+  const [portfolioId, setPortfolioId] = useState<string | null>(null)
+
+  const projetPortfolio = useMemo(() => buildProjetPortfolio(), [])
+  const effectivePortfolioId = portfolioId ?? portfolios[0]?.id ?? null
+  const portfolio = useMemo<Portfolio | null>(() => {
+    if (source === "projet") return projetPortfolio
+    return portfolios.find((p) => p.id === effectivePortfolioId) ?? null
+  }, [source, portfolios, effectivePortfolioId, projetPortfolio])
+
+  const handleSourceChange = (s: DataSource) => {
+    setSource(s)
+    if (s === "projet") setPortfolioId(null)
+  }
+
+  // The source selector is meaningless for the GenAI audit (which drives a
+  // simulator, not a portfolio scan). Hide it there so the header stays
+  // focused on what actually applies.
+  const showSourceSelector = tab !== "genai"
+
   return (
     <PageShell
       eyebrow="Diagnostic · Optimiser"
       title="Recommandations FinOps"
-      description="Formulation de recommandations concrètes à partir de l'analyse et de la projection : modèles, projets, arbitrages d'infrastructure."
+      description="Formulation de recommandations concrètes à partir de l'analyse et de la projection : projets à ralentir, arbitrages d'infrastructure, choix de modèles GenAI."
       actions={
-        <Badge variant="warning">
-          <Sparkles className="h-3 w-3" aria-hidden />
-          Bientôt
-        </Badge>
+        showSourceSelector ? (
+          <SourceSelector
+            source={source}
+            onSourceChange={handleSourceChange}
+            portfolios={portfolios}
+            portfolioId={effectivePortfolioId}
+            onPortfolioIdChange={setPortfolioId}
+            variant="header"
+            ariaLabel="Source de l'audit"
+          />
+        ) : null
       }
     >
-      <SectionCard
-        title="Cette section arrive dans une prochaine itération"
-        description="Elle s'appuiera sur l'analyse et la projection déjà en place — pas besoin de re-brancher vos données."
-        accent="green"
-        contentClassName="space-y-5"
+      {/* Audit selector — visual clone of the Collecte source nav so the two
+          pages share a consistent tab pattern. */}
+      <nav
+        aria-label="Type d'audit"
+        className="inline-flex rounded-xl border border-border bg-card p-1 gap-1 flex-wrap shadow-sm"
       >
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-          {TEASERS.map(({ icon: Icon, title, description }) => (
-            <div
-              key={title}
-              className="flex flex-col gap-2 rounded-xl border border-border bg-muted/20 p-4"
+        {TABS.map(({ id, label, icon: Icon, hint }) => {
+          const active = tab === id
+          return (
+            <button
+              key={id}
+              type="button"
+              onClick={() => setTab(id)}
+              aria-pressed={active}
+              className={cn(
+                "group inline-flex items-center gap-2 rounded-lg px-3.5 py-2 text-sm font-medium transition-all",
+                active
+                  ? "bg-brand text-brand-foreground shadow-sm"
+                  : "text-muted-foreground hover:bg-muted hover:text-foreground",
+              )}
             >
-              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-card border border-border">
-                <Icon className="h-4 w-4 text-[color:var(--accent-green)]" aria-hidden />
-              </div>
-              <p className="font-heading text-sm font-semibold text-foreground">
-                {title}
-              </p>
-              <p className="text-xs text-muted-foreground leading-relaxed">{description}</p>
-            </div>
-          ))}
-        </div>
+              <Icon
+                className={cn(
+                  "h-3.5 w-3.5",
+                  active
+                    ? "text-[color:var(--accent-green)]"
+                    : "text-muted-foreground",
+                )}
+                aria-hidden
+              />
+              <span>{label}</span>
+              <span
+                className={cn(
+                  "text-[10px] font-medium",
+                  active ? "text-white/60" : "text-muted-foreground/60",
+                )}
+              >
+                {hint}
+              </span>
+            </button>
+          )
+        })}
+      </nav>
 
-        <div className="flex flex-wrap items-center gap-2 pt-1">
-          <Link href="/analyse">
-            <Button variant="outline" className="gap-2">
-              Continuer l&apos;analyse
-              <ArrowUpRight className="h-3.5 w-3.5" />
-            </Button>
-          </Link>
-          <Link href="/projection">
-            <Button variant="outline" className="gap-2">
-              Voir la projection
-              <ArrowUpRight className="h-3.5 w-3.5" />
-            </Button>
-          </Link>
+      {/* Mobile fallback for the source picker — PageShell hides ``actions``
+          on the narrow top bar. Only shown for tabs that actually use it. */}
+      {showSourceSelector && (
+        <div className="lg:hidden">
+          <SourceSelector
+            source={source}
+            onSourceChange={handleSourceChange}
+            portfolios={portfolios}
+            portfolioId={effectivePortfolioId}
+            onPortfolioIdChange={setPortfolioId}
+            variant="inline"
+            ariaLabel="Source de l'audit"
+          />
         </div>
-      </SectionCard>
+      )}
+
+      {/* Active audit body — remounts on tab change so intra-audit state
+          (usage inputs, dropdowns) resets cleanly. */}
+      <div key={tab}>
+        {tab === "projects" && <ProjectsRoiAudit portfolio={portfolio} />}
+        {tab === "architecture" && (
+          <ArchitectureArbitrage portfolio={portfolio} />
+        )}
+        {tab === "genai" && <GenAIModelAudit />}
+      </div>
     </PageShell>
   )
 }

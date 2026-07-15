@@ -1,17 +1,15 @@
 from __future__ import annotations
 
 import math
-from typing import List, Tuple
 
 import numpy as np
 import pandas as pd
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 
-from data.loader import load_daily_costs
-from schemas.forecast import ForecastPoint, ForecastSummary, ModelBenchmark
 from core.cache import app_cache
 from core.errors import NotEnoughData
-
+from data.loader import load_daily_costs
+from schemas.forecast import ForecastPoint, ForecastSummary, ModelBenchmark
 
 # ---------------------------------------------------------------------------
 # Metric helpers
@@ -63,7 +61,8 @@ def _rmse(y_true: np.ndarray, y_pred: np.ndarray) -> float:
 # Individual model implementations
 # ---------------------------------------------------------------------------
 
-def _ets_forecast(train: np.ndarray, h: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+
+def _ets_forecast(train: np.ndarray, h: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """ExponentialSmoothing with Holt's additive trend (ETS)."""
     from statsmodels.tsa.holtwinters import ExponentialSmoothing
 
@@ -89,7 +88,7 @@ def _ets_forecast(train: np.ndarray, h: int) -> Tuple[np.ndarray, np.ndarray, np
     return forecast, ci80, ci95
 
 
-def _theta_forecast(train: np.ndarray, h: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+def _theta_forecast(train: np.ndarray, h: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Theta method: decompose into SES (theta=0) + linear trend (theta=2)."""
     n = len(train)
     x = np.arange(n, dtype=float)
@@ -115,18 +114,24 @@ def _theta_forecast(train: np.ndarray, h: int) -> Tuple[np.ndarray, np.ndarray, 
     resid = detrended - ses
     std_r = float(np.std(resid, ddof=1))
     z80, z95 = 1.282, 1.96
-    ci80 = np.stack([
-        np.maximum(0, forecast - z80 * std_r),
-        forecast + z80 * std_r,
-    ], axis=1)
-    ci95 = np.stack([
-        np.maximum(0, forecast - z95 * std_r),
-        forecast + z95 * std_r,
-    ], axis=1)
+    ci80 = np.stack(
+        [
+            np.maximum(0, forecast - z80 * std_r),
+            forecast + z80 * std_r,
+        ],
+        axis=1,
+    )
+    ci95 = np.stack(
+        [
+            np.maximum(0, forecast - z95 * std_r),
+            forecast + z95 * std_r,
+        ],
+        axis=1,
+    )
     return forecast, ci80, ci95
 
 
-def _arima_forecast(train: np.ndarray, h: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+def _arima_forecast(train: np.ndarray, h: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     from statsmodels.tsa.arima.model import ARIMA
 
     model = ARIMA(train, order=(1, 1, 1))
@@ -140,7 +145,7 @@ def _arima_forecast(train: np.ndarray, h: int) -> Tuple[np.ndarray, np.ndarray, 
     return forecast, ci80, ci95
 
 
-def _ses_forecast(train: np.ndarray, h: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+def _ses_forecast(train: np.ndarray, h: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Simple Exponential Smoothing (fast + naive baseline)."""
     from statsmodels.tsa.holtwinters import SimpleExpSmoothing
 
@@ -153,7 +158,7 @@ def _ses_forecast(train: np.ndarray, h: int) -> Tuple[np.ndarray, np.ndarray, np
     return forecast, ci80, ci95
 
 
-def _holt_winters_forecast(train: np.ndarray, h: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+def _holt_winters_forecast(train: np.ndarray, h: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Holt-Winters additive seasonal (period=7)."""
     from statsmodels.tsa.holtwinters import ExponentialSmoothing
 
@@ -173,12 +178,14 @@ def _holt_winters_forecast(train: np.ndarray, h: int) -> Tuple[np.ndarray, np.nd
     return forecast, ci80, ci95
 
 
-def _naive_seasonal_forecast(train: np.ndarray, h: int, period: int = 7) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+def _naive_seasonal_forecast(
+    train: np.ndarray, h: int, period: int = 7
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Seasonal Naive (last observed season repeated)."""
     last_season = train[-period:]
     tiles = math.ceil(h / period)
     forecast = np.tile(last_season, tiles)[:h].astype(float)
-    std_r = float(np.std(train[-period * 4:], ddof=1))
+    std_r = float(np.std(train[-period * 4 :], ddof=1))
     z80, z95 = 1.282, 1.96
     ci80 = np.stack([np.maximum(0, forecast - z80 * std_r), forecast + z80 * std_r], axis=1)
     ci95 = np.stack([np.maximum(0, forecast - z95 * std_r), forecast + z95 * std_r], axis=1)
@@ -236,6 +243,7 @@ def _finite_or_none(x: float | None) -> float | None:
 # Walk-forward CV for benchmark
 # ---------------------------------------------------------------------------
 
+
 def _walk_forward_cv(arr: np.ndarray, fn, n_splits: int = 5, h: int = 14) -> dict:
     n = len(arr)
     min_train = max(30, n - n_splits * h)
@@ -246,16 +254,21 @@ def _walk_forward_cv(arr: np.ndarray, fn, n_splits: int = 5, h: int = 14) -> dic
         if split + h > n:
             break
         train = arr[:split]
-        test = arr[split: split + h]
+        test = arr[split : split + h]
         try:
             pred, _, _ = fn(train, h)
             all_y_true.append(test)
-            all_y_pred.append(pred[:len(test)])
+            all_y_pred.append(pred[: len(test)])
         except Exception:
             continue
 
     if not all_y_true:
-        return {"mae": float("inf"), "rmse": float("inf"), "mape": float("inf"), "r2": -float("inf")}
+        return {
+            "mae": float("inf"),
+            "rmse": float("inf"),
+            "mape": float("inf"),
+            "r2": -float("inf"),
+        }
 
     y_true = np.concatenate(all_y_true)
     y_pred = np.concatenate(all_y_pred)
@@ -271,7 +284,8 @@ def _walk_forward_cv(arr: np.ndarray, fn, n_splits: int = 5, h: int = 14) -> dic
 # Public API
 # ---------------------------------------------------------------------------
 
-def get_model_benchmarks() -> List[ModelBenchmark]:
+
+def get_model_benchmarks() -> list[ModelBenchmark]:
     cached = app_cache.get("forecast:benchmarks")
     if cached is not None:
         return cached
@@ -316,7 +330,9 @@ def get_model_benchmarks() -> List[ModelBenchmark]:
     return result
 
 
-def get_forecast(horizon: int = 60, model: str = "ETS") -> tuple[List[ForecastPoint], ForecastSummary]:
+def get_forecast(
+    horizon: int = 60, model: str = "ETS"
+) -> tuple[list[ForecastPoint], ForecastSummary]:
     resolved = resolve_model(model)
     if resolved is None:
         raise ValueError(f"Unknown model '{model}'. Available: {list(MODELS.keys())}")
@@ -335,7 +351,7 @@ def get_forecast(horizon: int = 60, model: str = "ETS") -> tuple[List[ForecastPo
             f"Not enough data to forecast: {len(df)} daily point(s) available, "
             f"at least {_MIN_SERIES_POINTS} required. Ingest data via /api/events "
             f"or /api/gcp/sync first.",
-            details={"points": int(len(df)), "min_required": _MIN_SERIES_POINTS},
+            details={"points": len(df), "min_required": _MIN_SERIES_POINTS},
         )
     arr = df["y"].values.astype(float)
     last_date = df["ds"].iloc[-1]
@@ -351,9 +367,9 @@ def get_forecast(horizon: int = 60, model: str = "ETS") -> tuple[List[ForecastPo
     n_hist = 30
     hist = df.iloc[-n_hist:]
 
-    points: List[ForecastPoint] = []
+    points: list[ForecastPoint] = []
 
-    for i, row in enumerate(hist.itertuples()):
+    for row in hist.itertuples():
         points.append(
             ForecastPoint(
                 date=row.ds.strftime("%Y-%m-%d"),

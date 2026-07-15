@@ -19,6 +19,48 @@ function backendBaseUrl(): string {
   )
 }
 
+// SEC-027 (F-H1): CSRF defence for the cookie-authenticated proxy routes.
+// SameSite=Lax blocks the most common cross-site scripted POST, but Node
+// clients, non-standard fetchers, and same-site subdomains slip past it.
+// We enforce here that the Origin (or Referer as fallback) matches the
+// current request Host — a strict same-origin check that catches the
+// residual attack surface without adding a token round-trip.
+function isSameOriginRequest(request: Request): boolean {
+  const host = request.headers.get("host")
+  if (!host) return false
+
+  const origin = request.headers.get("origin")
+  if (origin) {
+    try {
+      return new URL(origin).host === host
+    } catch {
+      return false
+    }
+  }
+
+  // Some browsers (older Firefox, Safari private mode) omit Origin on
+  // same-origin requests. Fall back to Referer when present.
+  const referer = request.headers.get("referer")
+  if (referer) {
+    try {
+      return new URL(referer).host === host
+    } catch {
+      return false
+    }
+  }
+
+  // No Origin AND no Referer — refuse rather than allow silently. In
+  // practice all browsers and every fetch/XHR client will send at least one.
+  return false
+}
+
+function csrfDenied(): Response {
+  return Response.json(
+    { detail: "Cross-site request refused." },
+    { status: 403 },
+  )
+}
+
 /**
  * Forward a POST request to the backend at `path`, preserving the query
  * string, the body (raw bytes — works for JSON as well as multipart, whose
@@ -27,6 +69,8 @@ function backendBaseUrl(): string {
  * backend lets requests through in dev when no key is configured).
  */
 export async function proxyPost(request: Request, path: string): Promise<Response> {
+  if (!isSameOriginRequest(request)) return csrfDenied()
+
   const search = new URL(request.url).search
   const target = `${backendBaseUrl()}${path}${search}`
 
@@ -77,6 +121,11 @@ export async function proxyWithCookies(
   path: string,
   method: "GET" | "POST" | "PUT" | "DELETE" = "POST",
 ): Promise<Response> {
+  // SEC-027: same-origin check applies to every mutating method. Safe idempotent
+  // reads (GET) skip the check so cross-origin instrumentation (link previews,
+  // rare RSS-style clients) still works.
+  if (method !== "GET" && !isSameOriginRequest(request)) return csrfDenied()
+
   const search = new URL(request.url).search
   const target = `${backendBaseUrl()}${path}${search}`
 

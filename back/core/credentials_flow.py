@@ -18,10 +18,11 @@ Nothing here talks to the database or the request — it only wraps the
 in-memory session cache, so it can be imported freely without triggering the
 network side effects of the ``routes`` layer.
 """
+
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Callable, Sequence
 
 from core.logging import get_logger
 

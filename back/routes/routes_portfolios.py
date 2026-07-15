@@ -4,6 +4,7 @@ Portfolios are user-scoped bags of billing sources (AWS accounts, GCP
 projects, Azure subscriptions) used by the frontend to compute consolidated
 views. The server stores only identifiers + labels; no credentials.
 """
+
 from __future__ import annotations
 
 from typing import Annotated
@@ -20,7 +21,6 @@ from core.portfolios import (
 )
 from core.session import require_current_user_id
 from schemas.portfolios import Portfolio, PortfolioCreate, PortfolioUpdate
-
 
 router = APIRouter(prefix="/api/portfolios", tags=["portfolios"])
 
@@ -62,9 +62,7 @@ def update(
     body: PortfolioUpdate,
     user_id: Annotated[str, Depends(require_current_user_id)],
 ) -> Portfolio:
-    updated = update_portfolio(
-        user_id, portfolio_id, name=body.name, members=body.members
-    )
+    updated = update_portfolio(user_id, portfolio_id, name=body.name, members=body.members)
     if updated is None:
         raise NotFound("Portfolio not found.")
     return updated

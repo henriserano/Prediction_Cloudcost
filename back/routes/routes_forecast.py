@@ -1,17 +1,24 @@
 from __future__ import annotations
 
-from typing import List, Annotated
+from typing import Annotated
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 
+from core.errors import BadRequest
+from core.session import require_current_user_id
 from forecast.engine import MODELS, get_forecast, get_model_benchmarks, resolve_model
 from schemas.forecast import ForecastPoint, ForecastSummary, ModelBenchmark
-from core.errors import BadRequest
 
-router = APIRouter(prefix="/api/forecast", tags=["forecast"])
+# SEC-020: forecast routes are per-user (analytics pipeline is fed by the
+# authenticated caller's slice of the events store).
+router = APIRouter(
+    prefix="/api/forecast",
+    tags=["forecast"],
+    dependencies=[Depends(require_current_user_id)],
+)
 
 
-@router.get("", response_model=List[ForecastPoint])
+@router.get("", response_model=list[ForecastPoint])
 def forecast(
     horizon: Annotated[int, Query(ge=7, le=180, description="Forecast horizon in days")] = 60,
     model: Annotated[str, Query(description="Model name (legacy aliases accepted)")] = "ETS",
@@ -45,7 +52,7 @@ def forecast_summary(
     return summary
 
 
-@router.get("/models", response_model=List[ModelBenchmark])
+@router.get("/models", response_model=list[ModelBenchmark])
 def model_benchmarks():
     """
     Walk-forward cross-validation benchmark across all 6 models.

@@ -6,7 +6,7 @@ from typing import Any
 
 
 class _CacheEntry:
-    __slots__ = ("value", "expires_at", "created_at", "last_access")
+    __slots__ = ("created_at", "expires_at", "last_access", "value")
 
     def __init__(self, value: Any, expires_at: float | None) -> None:
         now = time.monotonic()

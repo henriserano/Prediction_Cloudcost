@@ -14,7 +14,8 @@ import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { cn } from "@/lib/utils"
 
-import { THREAD_KEY } from "./constants"
+import { threadStorageKey } from "./constants"
+import { useAuth } from "@/lib/context/auth-context"
 import { ConversationSidebar, MobileDrawer } from "./ConversationSidebar"
 import { EmptyChat } from "./EmptyChat"
 import { MessageBubble } from "./MessageBubble"
@@ -106,6 +107,10 @@ function useDeleteConversation() {
 
 export function ChatInterface() {
   const qc = useQueryClient()
+  const { user } = useAuth()
+  // SEC-028 (F-H2): scope the persisted thread id by user so a shared
+  // workstation (log out A → log in B) never resurfaces A's last thread.
+  const threadKey = React.useMemo(() => threadStorageKey(user?.userId), [user?.userId])
   const [messages, setMessages] = React.useState<ChatMessage[]>([])
   const [input, setInput] = React.useState("")
   const [streaming, setStreaming] = React.useState(false)
@@ -150,12 +155,19 @@ export function ChatInterface() {
   const { mutate: deleteConversation, isPending: deletingConversation } =
     useDeleteConversation()
 
-  // Restore last active thread on mount.
+  // Restore last active thread for the CURRENT user on mount / user change.
+  // Re-running when threadKey changes (i.e. when the auth user resolves) is
+  // what keeps SEC-028 tight: on login we look up the fresh key, on logout
+  // the caller flips to the anon key and we don't accidentally reload the
+  // previous user's thread.
   React.useEffect(() => {
     let cancelled = false
+    setHydrated(false)
+    setMessages([])
+    setThreadId(null)
     ;(async () => {
       try {
-        const t = localStorage.getItem(THREAD_KEY)
+        const t = localStorage.getItem(threadKey)
         if (t) {
           setThreadId(t)
           try {
@@ -165,7 +177,7 @@ export function ChatInterface() {
             // Broken/deleted thread — start fresh silently.
             if (!cancelled) {
               setThreadId(null)
-              localStorage.removeItem(THREAD_KEY)
+              localStorage.removeItem(threadKey)
             }
           }
         }
@@ -177,17 +189,17 @@ export function ChatInterface() {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [threadKey])
 
   React.useEffect(() => {
     if (!hydrated) return
     try {
-      if (threadId) localStorage.setItem(THREAD_KEY, threadId)
-      else localStorage.removeItem(THREAD_KEY)
+      if (threadId) localStorage.setItem(threadKey, threadId)
+      else localStorage.removeItem(threadKey)
     } catch {
       /* ignore */
     }
-  }, [threadId, hydrated])
+  }, [threadId, hydrated, threadKey])
 
   const onScrollAreaScroll = React.useCallback(() => {
     const el = scrollRef.current
@@ -383,7 +395,7 @@ export function ChatInterface() {
     setSidebarOpen(false)
     stickToBottomRef.current = true
     try {
-      localStorage.removeItem(THREAD_KEY)
+      localStorage.removeItem(threadKey)
     } catch {
       /* ignore */
     }
@@ -428,7 +440,7 @@ export function ChatInterface() {
             setMessages([])
             setThreadId(null)
             try {
-              localStorage.removeItem(THREAD_KEY)
+              localStorage.removeItem(threadKey)
             } catch {
               /* ignore */
             }

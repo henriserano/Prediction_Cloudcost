@@ -4,14 +4,15 @@ Every function is registered via :mod:`agent.registry`; the registry produces
 LangChain ``StructuredTool``s on demand for the LangGraph agent, and also
 serves the MCP-style descriptor list at ``GET /api/tools``.
 """
+
 from __future__ import annotations
 
 from agent.registry import register
 
-
 # ---------------------------------------------------------------------------
 # Data provenance / status
 # ---------------------------------------------------------------------------
+
 
 @register(
     name="get_data_status",
@@ -27,12 +28,14 @@ from agent.registry import register
 )
 def get_data_status():
     from routes.routes_data import data_status
+
     return data_status()
 
 
 # ---------------------------------------------------------------------------
 # Global KPIs & service breakdown
 # ---------------------------------------------------------------------------
+
 
 @register(
     name="get_kpi_snapshot",
@@ -46,6 +49,7 @@ def get_data_status():
 )
 def get_kpi_snapshot():
     from analysis.services import get_kpi
+
     return get_kpi()
 
 
@@ -61,12 +65,14 @@ def get_kpi_snapshot():
 )
 def get_service_breakdown():
     from analysis.services import get_service_shares
+
     return get_service_shares()
 
 
 # ---------------------------------------------------------------------------
 # Time-series diagnostics
 # ---------------------------------------------------------------------------
+
 
 @register(
     name="get_daily_series_summary",
@@ -80,6 +86,7 @@ def get_service_breakdown():
 )
 def get_daily_series_summary(last_n: int = 30):
     from analysis.timeseries import get_daily_series
+
     last_n = max(7, min(60, int(last_n)))
     return get_daily_series(last_n)
 
@@ -95,6 +102,7 @@ def get_daily_series_summary(last_n: int = 30):
 )
 def get_descriptive_stats():
     from analysis.timeseries import get_descriptive_stats
+
     return get_descriptive_stats()
 
 
@@ -110,6 +118,7 @@ def get_descriptive_stats():
 )
 def get_stationarity():
     from analysis.timeseries import get_stationarity
+
     return get_stationarity()
 
 
@@ -124,6 +133,7 @@ def get_stationarity():
 )
 def get_stl_strengths():
     from analysis.timeseries import get_stl_decomposition
+
     _, strengths = get_stl_decomposition()
     return strengths
 
@@ -139,6 +149,7 @@ def get_stl_strengths():
 )
 def get_anomalies(z_threshold: float = 2.0):
     from analysis.timeseries import get_anomalies
+
     z = max(1.0, min(4.0, float(z_threshold)))
     anomalies = get_anomalies(z)
     flagged = [row for row in anomalies if row.is_anomaly]
@@ -150,8 +161,12 @@ def get_anomalies(z_threshold: float = 2.0):
 # ---------------------------------------------------------------------------
 
 _ALLOWED_MODELS = {
-    "AutoETS", "AutoTheta", "AutoARIMA",
-    "Prophet (SES)", "N-HiTS (HW)", "TimesNet (SNaive)",
+    "AutoETS",
+    "AutoTheta",
+    "AutoARIMA",
+    "Prophet (SES)",
+    "N-HiTS (HW)",
+    "TimesNet (SNaive)",
 }
 
 
@@ -167,6 +182,7 @@ _ALLOWED_MODELS = {
 )
 def get_forecast(horizon: int = 60, model: str = "AutoETS"):
     from forecast.engine import get_forecast
+
     if model not in _ALLOWED_MODELS:
         return {"error": f"unknown model '{model}'", "allowed": sorted(_ALLOWED_MODELS)}
     h = max(7, min(180, int(horizon)))
@@ -185,6 +201,7 @@ def get_forecast(horizon: int = 60, model: str = "AutoETS"):
 )
 def get_model_benchmarks():
     from forecast.engine import get_model_benchmarks
+
     return get_model_benchmarks()
 
 
@@ -200,6 +217,7 @@ def get_model_benchmarks():
 )
 def get_ensemble_forecast(horizon: int = 60):
     from analysis.advanced import compute_ensemble_forecast
+
     h = max(7, min(180, int(horizon)))
     r = compute_ensemble_forecast(horizon=h)
     return {
@@ -215,6 +233,7 @@ def get_ensemble_forecast(horizon: int = 60):
 # Advanced analytics
 # ---------------------------------------------------------------------------
 
+
 @register(
     name="get_outliers",
     description=(
@@ -228,10 +247,10 @@ def get_ensemble_forecast(horizon: int = 60):
 )
 def get_outliers():
     from analysis.advanced import compute_outliers
+
     result = compute_outliers()
     flagged = [
-        r for r in result.rows
-        if r.iqr_flag or r.isolation_flag or r.lof_flag or abs(r.zscore) > 2
+        r for r in result.rows if r.iqr_flag or r.isolation_flag or r.lof_flag or abs(r.zscore) > 2
     ]
     return {
         "summary": [s.model_dump() for s in result.summary],
@@ -252,6 +271,7 @@ def get_outliers():
 )
 def get_drift():
     from analysis.advanced import compute_drift
+
     r = compute_drift()
     return {
         "ks": r.ks.model_dump(),
@@ -272,6 +292,7 @@ def get_drift():
 )
 def get_distribution():
     from analysis.advanced import compute_distribution
+
     r = compute_distribution()
     return {
         "skewness": r.skewness,
@@ -292,6 +313,7 @@ def get_distribution():
 )
 def get_missingness():
     from analysis.advanced import compute_missingness
+
     return compute_missingness()
 
 
@@ -306,6 +328,7 @@ def get_missingness():
 )
 def get_pca_summary(n_components: int = 3):
     from analysis.advanced import compute_dim_reduction
+
     n = max(2, min(5, int(n_components)))
     r = compute_dim_reduction(n_components=n, run_tsne=False)
     return {
@@ -320,6 +343,7 @@ def get_pca_summary(n_components: int = 3):
 # Cloud provider status (read-only)
 # ---------------------------------------------------------------------------
 
+
 @register(
     name="get_aws_status",
     description=(
@@ -331,6 +355,7 @@ def get_pca_summary(n_components: int = 3):
 )
 def get_aws_status():
     from routes.routes_aws import aws_status
+
     return aws_status()
 
 
@@ -338,7 +363,9 @@ def get_aws_status():
 # Public bundle used by the LangGraph agent — generated from the registry.
 # ---------------------------------------------------------------------------
 
+
 def get_all_langchain_tools():
     """Return every registered tool adapted as LangChain StructuredTools."""
     from agent.registry import as_langchain_tools
+
     return as_langchain_tools()

@@ -21,9 +21,8 @@ skips:
   #        forecast/engine.py. Failures there are intentionally non-fatal.
   - B110
   - B112
-  # B608 — BigQuery table FQN interpolation in routes_gcp.py (billing export
-  #        sync). Table identifiers cannot be bound as query parameters in
-  #        BigQuery; project/dataset/table values are validated upstream before
-  #        interpolation. TODO (2026-07-03): revisit if query construction
-  #        changes, or replace the skip with targeted `# nosec B608` comments.
-  - B608
+  # B608 (SQL/BigQuery injection) is intentionally NOT globally skipped: a
+  # future accidental interpolation elsewhere must fail CI. The two known
+  # BigQuery FQN sites in routes_gcp.py carry targeted ``# nosec B608``
+  # comments after review (settings-validated identifiers, parameterised
+  # user input).

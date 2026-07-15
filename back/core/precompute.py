@@ -3,7 +3,8 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import time
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from core.cache import app_cache
 from core.logging import get_logger
@@ -40,7 +41,9 @@ def _run_task(key: str, fn: Callable) -> tuple[str, float, bool]:
         return key, elapsed_ms, True
     except Exception as exc:
         elapsed_ms = (time.perf_counter() - t0) * 1000
-        logger.error("precompute_failed", extra={"key": key, "error": str(exc), "ms": round(elapsed_ms, 1)})
+        logger.error(
+            "precompute_failed", extra={"key": key, "error": str(exc), "ms": round(elapsed_ms, 1)}
+        )
         return key, elapsed_ms, False
 
 
@@ -83,10 +86,7 @@ async def warm_cache() -> dict[str, Any]:
     with concurrent.futures.ThreadPoolExecutor(
         max_workers=4, thread_name_prefix="precompute"
     ) as pool:
-        awaitables = [
-            loop.run_in_executor(pool, _run_task, key, fn)
-            for key, fn in tasks
-        ]
+        awaitables = [loop.run_in_executor(pool, _run_task, key, fn) for key, fn in tasks]
         outcomes: list[tuple[str, float, bool]] = await asyncio.gather(*awaitables)
 
     ok = sum(1 for _, _, success in outcomes if success)

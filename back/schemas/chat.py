@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -13,7 +13,7 @@ class ChatRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     message: str = Field(min_length=1, max_length=4000, description="User prompt")
-    thread_id: Optional[str] = Field(
+    thread_id: str | None = Field(
         default=None,
         description="Optional conversation identifier. When provided, prior turns "
         "for the same thread are replayed as context. Server generates one when omitted.",
@@ -36,4 +36,4 @@ class ChatResponse(BaseModel):
     reply: str
     tool_calls: list[ChatToolCall] = Field(default_factory=list)
     model: str
-    total_tokens: Optional[int] = None
+    total_tokens: int | None = None

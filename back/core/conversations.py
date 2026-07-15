@@ -6,10 +6,11 @@ visible in the UI as chips during the live stream; we don't persist them.
 The full Bedrock message shape (toolUse / toolResult blocks) is flattened
 via :func:`agent.graph.extract_plain_transcript` before it reaches us.
 """
+
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from boto3.dynamodb.conditions import Key
@@ -24,7 +25,7 @@ _MAX_MESSAGES_STORED = 200  # keep the payload well under DynamoDB's 400KB limit
 
 
 def _now_iso() -> str:
-    return datetime.now(tz=timezone.utc).isoformat()
+    return datetime.now(tz=UTC).isoformat()
 
 
 def _title_from_first_user_message(messages: list[dict]) -> str:

@@ -7,15 +7,19 @@ here is exactly what the LangGraph agent has access to. Handy for:
 - Building a "capabilities" panel in the frontend that lists what the agent
   can do without hardcoding it there.
 """
+
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
 from core.auth import require_api_key
 from core.errors import AppError, NotFound
+from core.logging import get_logger
+
+logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api", tags=["tools"])
 
@@ -39,7 +43,7 @@ class ToolCatalog(BaseModel):
 
 class ToolInvokeRequest(BaseModel):
     name: str = Field(min_length=1, max_length=128)
-    arguments: Optional[dict[str, Any]] = None
+    arguments: dict[str, Any] | None = None
 
 
 class ToolInvokeResponse(BaseModel):
@@ -94,7 +98,7 @@ def get_tool(name: str) -> ToolDescriptor:
     try:
         spec = reg.get(name)
     except KeyError:
-        raise NotFound(f"Tool '{name}' does not exist.")
+        raise NotFound(f"Tool '{name}' does not exist.") from None
     return ToolDescriptor(
         name=spec.name,
         description=spec.description,
@@ -121,18 +125,26 @@ def invoke_tool(body: ToolInvokeRequest) -> ToolInvokeResponse:
     try:
         result = reg.execute(body.name, body.arguments or {})
     except KeyError:
-        raise NotFound(f"Tool '{body.name}' does not exist.")
+        raise NotFound(f"Tool '{body.name}' does not exist.") from None
     except TypeError as exc:
         # Wrong / missing argument for the tool signature.
         raise AppError(
             f"Invalid arguments for tool '{body.name}': {exc}",
             code="BAD_REQUEST",
             status_code=400,
-        )
+        ) from exc
     except Exception as exc:
+        # SEC-026 (H-4): tool implementations (e.g. Bedrock) can raise with
+        # AWS ARNs and request IDs in the message. Log server-side, return
+        # a generic string so credentials/infra details never reach the client.
+        logger.error(
+            "tool_invocation_failed",
+            extra={"tool_name": body.name, "error": repr(exc)},
+            exc_info=True,
+        )
         raise AppError(
-            f"Tool '{body.name}' failed: {exc.__class__.__name__}: {exc}",
+            f"Tool '{body.name}' failed.",
             code="TOOL_ERROR",
             status_code=500,
-        )
+        ) from exc
     return ToolInvokeResponse(name=body.name, result=result)

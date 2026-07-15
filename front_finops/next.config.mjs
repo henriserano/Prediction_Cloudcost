@@ -14,23 +14,30 @@ const nextConfig = {
   reactStrictMode: true,
   async headers() {
     const isProduction = process.env.NODE_ENV === "production"
+    // SEC-033: X-XSS-Protection removed — obsolete on modern browsers, and
+    // known to introduce XS-Leak vectors on older Chromium. Replaced with a
+    // conservative CSP that still allows the Next.js runtime (unsafe-inline
+    // and unsafe-eval are limited to script and style since Next injects
+    // hashed inline snippets at runtime that we cannot enumerate ahead of
+    // time). Tighten further once nonce-based CSP is wired via middleware.
+    const csp = [
+      "default-src 'self'",
+      "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
+      "style-src 'self' 'unsafe-inline'",
+      "img-src 'self' data: blob:",
+      "font-src 'self' data:",
+      "connect-src 'self'",
+      "frame-ancestors 'none'",
+      "base-uri 'self'",
+      "form-action 'self'",
+      "object-src 'none'",
+    ].join("; ")
+
     const securityHeaders = [
-      {
-        key: "X-Frame-Options",
-        value: "DENY",
-      },
-      {
-        key: "X-Content-Type-Options",
-        value: "nosniff",
-      },
-      {
-        key: "Referrer-Policy",
-        value: "strict-origin-when-cross-origin",
-      },
-      {
-        key: "X-XSS-Protection",
-        value: "1; mode=block",
-      },
+      { key: "X-Frame-Options", value: "DENY" },
+      { key: "X-Content-Type-Options", value: "nosniff" },
+      { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+      { key: "Content-Security-Policy", value: csp },
       {
         key: "Permissions-Policy",
         value: "camera=(), microphone=(), geolocation=()",

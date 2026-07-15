@@ -9,11 +9,13 @@ The heavy lifting (Bedrock Converse, tool-use loop, streaming) lives in
 - writes the final transcript back to DynamoDB so a new process picks up
   the same conversation on cold start.
 """
+
 from __future__ import annotations
 
 import json
 import uuid
-from typing import Annotated, AsyncIterator
+from collections.abc import AsyncIterator
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
@@ -44,7 +46,7 @@ router = APIRouter(prefix="/api", tags=["chat"])
 
 def _sse(event: str, payload: dict) -> bytes:
     """Format a Server-Sent Event frame. Single-line JSON keeps parsing trivial."""
-    return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n".encode("utf-8")
+    return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n".encode()
 
 
 def _seed_messages(user_id: str | None, thread_id: str, user_message: str) -> list[dict]:
@@ -66,6 +68,7 @@ def _seed_messages(user_id: str | None, thread_id: str, user_message: str) -> li
 # ---------------------------------------------------------------------------
 # Sync chat — one turn, one JSON payload
 # ---------------------------------------------------------------------------
+
 
 @router.post(
     "/chat",
@@ -95,12 +98,16 @@ def chat(request: Request, body: ChatRequest) -> ChatResponse:
             extra={"error": repr(exc), "thread_id": thread_id},
             exc_info=True,
         )
+        # SEC-026 (H-4): never surface the upstream exception text — Bedrock
+        # / boto errors routinely include request IDs, ARNs and IAM principal
+        # identifiers. The full trace is already in the server log with the
+        # request_id set by the middleware.
         raise AppError(
-            f"Agent invocation failed: {exc.__class__.__name__}: {exc}",
+            "Agent invocation failed.",
             code="AGENT_ERROR",
             status_code=502,
             details={"thread_id": thread_id},
-        )
+        ) from exc
 
     if user_id and get_settings().auth_enabled:
         save_conversation(user_id, thread_id, extract_plain_transcript(result.messages))
@@ -124,6 +131,7 @@ def chat(request: Request, body: ChatRequest) -> ChatResponse:
 # ---------------------------------------------------------------------------
 # Streaming chat — SSE
 # ---------------------------------------------------------------------------
+
 
 @router.post(
     "/chat/stream",
@@ -167,16 +175,22 @@ async def chat_stream(request: Request, body: ChatRequest) -> StreamingResponse:
                 if kind == "token":
                     yield _sse("token", {"text": ev["text"]})
                 elif kind == "tool_start":
-                    yield _sse("tool_start", {
-                        "id": ev["id"],
-                        "name": ev["name"],
-                        "arguments": ev.get("arguments") or {},
-                    })
+                    yield _sse(
+                        "tool_start",
+                        {
+                            "id": ev["id"],
+                            "name": ev["name"],
+                            "arguments": ev.get("arguments") or {},
+                        },
+                    )
                 elif kind == "tool_end":
-                    yield _sse("tool_end", {
-                        "id": ev["id"],
-                        "result_preview": ev.get("result_preview", ""),
-                    })
+                    yield _sse(
+                        "tool_end",
+                        {
+                            "id": ev["id"],
+                            "result_preview": ev.get("result_preview", ""),
+                        },
+                    )
                 elif kind == "done":
                     total_tokens = ev.get("total_tokens")
                     final_messages = ev.get("messages", messages)
@@ -184,32 +198,33 @@ async def chat_stream(request: Request, body: ChatRequest) -> StreamingResponse:
             yield _sse("error", {"message": exc.message, "code": exc.code})
             return
         except Exception as exc:
+            # SEC-026 (H-4): log full context server-side; return a generic
+            # message so upstream exception text (AWS ARNs, request IDs,
+            # credentials fragments) never reaches the browser.
             logger.error(
                 "chat_stream_failed",
                 extra={"error": repr(exc), "thread_id": thread_id},
                 exc_info=True,
             )
-            detail = str(exc)
-            if len(detail) > 300:
-                detail = detail[:300] + "..."
-            msg = f"Agent stream failed: {exc.__class__.__name__}"
-            if detail and detail != exc.__class__.__name__:
-                msg += f" — {detail}"
-            yield _sse("error", {"message": msg, "code": "AGENT_ERROR"})
+            yield _sse(
+                "error",
+                {"message": "Agent stream failed.", "code": "AGENT_ERROR"},
+            )
             return
 
         # Persist the flattened transcript. Never raises — save_conversation
         # logs and swallows so a Dynamo hiccup doesn't break the response.
         if user_id and get_settings().auth_enabled:
-            save_conversation(
-                user_id, thread_id, extract_plain_transcript(final_messages)
-            )
+            save_conversation(user_id, thread_id, extract_plain_transcript(final_messages))
 
-        yield _sse("done", {
-            "thread_id": thread_id,
-            "model": DEFAULT_MODEL,
-            "total_tokens": total_tokens,
-        })
+        yield _sse(
+            "done",
+            {
+                "thread_id": thread_id,
+                "model": DEFAULT_MODEL,
+                "total_tokens": total_tokens,
+            },
+        )
 
     return StreamingResponse(
         event_source(),
@@ -225,6 +240,7 @@ async def chat_stream(request: Request, body: ChatRequest) -> StreamingResponse:
 # ---------------------------------------------------------------------------
 # Reset — wipe the persisted transcript for a thread
 # ---------------------------------------------------------------------------
+
 
 @router.delete(
     "/chat/{thread_id}",

@@ -18,17 +18,19 @@ Layered design:
 3. **Credentials encryption** — AES-GCM with the KEK, per-record random
    96-bit nonce, 128-bit auth tag. Ciphertext + nonce stored as base64.
 """
+
 from __future__ import annotations
 
 import base64
 import os
 from dataclasses import dataclass
+from functools import cache
 
-from argon2 import PasswordHasher, exceptions as argon2_exceptions
+from argon2 import PasswordHasher
+from argon2 import exceptions as argon2_exceptions
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-
 
 _KEK_LEN = 32
 _NONCE_LEN = 12
@@ -37,6 +39,30 @@ _PBKDF2_SALT_LEN = 16
 
 
 _hasher = PasswordHasher()
+
+
+# SEC-024: a fixed Argon2id hash used to burn constant time when a login
+# attempt names a user that doesn't exist. Without this, the "no such user"
+# branch skipped Argon2 verification entirely and returned ~100 ms sooner
+# than the "wrong PIN" branch — a remote attacker could enumerate valid
+# display_names by timing alone. Computed lazily at first use so import
+# time stays cheap; @cache makes it thread-safe.
+@cache
+def _dummy_hash() -> str:
+    return _hasher.hash("dummy-pin-for-timing-000000")
+
+
+def verify_pin_or_dummy(pin: str, pin_hash: str | None) -> bool:
+    """Constant-time verify that always runs one Argon2 pass.
+
+    When ``pin_hash`` is None (unknown user), we still verify against a
+    static dummy hash so total wall-clock time matches a real "wrong PIN"
+    outcome. Returns True only on a real match.
+    """
+    if pin_hash is None:
+        verify_pin(pin, _dummy_hash())
+        return False
+    return verify_pin(pin, pin_hash)
 
 
 def smoke_test_argon2() -> None:
@@ -54,6 +80,7 @@ def smoke_test_argon2() -> None:
 # ---------------------------------------------------------------------------
 # PIN hashing
 # ---------------------------------------------------------------------------
+
 
 def hash_pin(pin: str) -> str:
     """Argon2id hash of the PIN. Return value already includes salt+params."""
@@ -74,6 +101,7 @@ def verify_pin(pin: str, pin_hash: str) -> bool:
 # ---------------------------------------------------------------------------
 # KEK generation + wrapping with PIN-derived key
 # ---------------------------------------------------------------------------
+
 
 @dataclass(frozen=True)
 class WrappedKek:
@@ -132,13 +160,16 @@ def unwrap_kek(pin: str, wrapped: WrappedKek) -> bytes | None:
 # Credential encryption with the raw KEK
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True)
 class EncryptedBlob:
     ciphertext_b64: str
     nonce_b64: str
 
 
-def encrypt_with_kek(kek: bytes, plaintext: str, associated_data: bytes | None = None) -> EncryptedBlob:
+def encrypt_with_kek(
+    kek: bytes, plaintext: str, associated_data: bytes | None = None
+) -> EncryptedBlob:
     """AES-GCM encrypt. Associated data (e.g. b"gcp") binds the ciphertext
     to a context — flipping the DynamoDB ``provider`` key won't authenticate."""
     nonce = os.urandom(_NONCE_LEN)
@@ -149,7 +180,9 @@ def encrypt_with_kek(kek: bytes, plaintext: str, associated_data: bytes | None =
     )
 
 
-def decrypt_with_kek(kek: bytes, blob: EncryptedBlob, associated_data: bytes | None = None) -> str | None:
+def decrypt_with_kek(
+    kek: bytes, blob: EncryptedBlob, associated_data: bytes | None = None
+) -> str | None:
     """Return plaintext, or ``None`` on any decryption failure (wrong KEK,
     tampered ciphertext, wrong AAD)."""
     try:

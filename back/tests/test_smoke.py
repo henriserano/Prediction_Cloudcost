@@ -10,6 +10,7 @@ The app lifespan event loads parquet files and warms a cache.
 Both loaders are monkeypatched to return empty DataFrames so the
 test suite runs without any data files (e.g., in CI).
 """
+
 from __future__ import annotations
 
 import pandas as pd
@@ -18,10 +19,23 @@ import pytest
 pytest_plugins = ("asyncio",)
 
 
+def _auth_cookies() -> dict:
+    """Issue a valid session JWT + return the cookie mapping for httpx.
+
+    SEC-020: mutating and data-bearing endpoints now require an
+    authenticated session — smoke tests carry a real JWT so the tests
+    exercise the whole middleware chain end-to-end.
+    """
+    from core.config import get_settings
+    from core.session import issue_session
+
+    return {get_settings().session_cookie_name: issue_session("smoke-test-user")}
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Fixtures
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 @pytest.fixture(autouse=True)
 def mock_data_loader(monkeypatch):
@@ -51,16 +65,20 @@ def mock_data_loader(monkeypatch):
 # 1. Import test
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def test_app_import():
     """Importing main and obtaining the FastAPI app object must not raise."""
-    from main import app
     from fastapi import FastAPI
+
+    from main import app
+
     assert isinstance(app, FastAPI)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 2. Pydantic schema validation
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def test_events_ingest_request_empty_list_is_accepted_by_pydantic():
     """
@@ -69,6 +87,7 @@ def test_events_ingest_request_empty_list_is_accepted_by_pydantic():
     This test simply confirms the model instantiates without error.
     """
     from schemas.gcp import EventsIngestRequest
+
     req = EventsIngestRequest(events=[], replace=False)
     assert req.events == []
 
@@ -76,6 +95,7 @@ def test_events_ingest_request_empty_list_is_accepted_by_pydantic():
 def test_billing_event_negative_cost_raises():
     """BillingEvent.cost must be >= 0; a negative value must raise ValidationError."""
     from pydantic import ValidationError
+
     from schemas.gcp import BillingEvent
 
     with pytest.raises(ValidationError) as exc_info:
@@ -89,6 +109,7 @@ def test_billing_event_negative_cost_raises():
 def test_billing_event_invalid_date_format_raises():
     """BillingEvent.date must match YYYY-MM-DD."""
     from pydantic import ValidationError
+
     from schemas.gcp import BillingEvent
 
     with pytest.raises(ValidationError):
@@ -108,14 +129,18 @@ def test_billing_event_valid():
 # 3. Route tests — ASGI transport (no real HTTP, no network)
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_health_endpoint_returns_200():
     """GET /health must return HTTP 200."""
     import httpx
     from httpx import ASGITransport
+
     from main import app
 
-    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
         response = await client.get("/health")
 
     assert response.status_code == 200
@@ -128,9 +153,12 @@ async def test_gcp_status_unauthenticated():
     """GET /api/gcp/status without a token must return authenticated=false."""
     import httpx
     from httpx import ASGITransport
+
     from main import app
 
-    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
         response = await client.get("/api/gcp/status")
 
     assert response.status_code == 200
@@ -143,6 +171,7 @@ async def test_events_ingest_with_valid_body():
     """POST /api/events with a valid single event must return HTTP 200."""
     import httpx
     from httpx import ASGITransport
+
     from main import app
 
     payload = {
@@ -157,8 +186,10 @@ async def test_events_ingest_with_valid_body():
         "replace": True,
     }
 
-    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.post("/api/events", json=payload)
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post("/api/events", json=payload, cookies=_auth_cookies())
 
     assert response.status_code == 200
     body = response.json()
@@ -170,12 +201,15 @@ async def test_events_ingest_empty_list_returns_400():
     """POST /api/events with an empty events list must return HTTP 400."""
     import httpx
     from httpx import ASGITransport
+
     from main import app
 
     payload = {"events": [], "replace": False}
 
-    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.post("/api/events", json=payload)
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post("/api/events", json=payload, cookies=_auth_cookies())
 
     # The route raises BadRequest when events list is empty
     assert response.status_code == 400
@@ -185,14 +219,18 @@ async def test_events_ingest_empty_list_returns_400():
 # 4. GCP billing-accounts route (no token → 401)
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_gcp_billing_accounts_unauthenticated():
     """Without an OAuth token, /api/gcp/billing-accounts must return 401."""
     import httpx
     from httpx import ASGITransport
+
     from main import app
 
-    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
         response = await client.get("/api/gcp/billing-accounts")
 
     assert response.status_code == 401
@@ -204,24 +242,28 @@ async def test_gcp_billing_accounts_unauthenticated():
 # 5. AWS status route — must never crash, even without credentials
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_aws_status_returns_200_even_without_credentials(monkeypatch):
     """GET /api/aws/status must return 200 with authenticated=False when creds are absent."""
     import httpx
     from httpx import ASGITransport
-    from main import app
+
+    import routes.routes_aws as routes_aws
 
     # Force STS to look unauthenticated regardless of the developer's local
     # ~/.aws/credentials — otherwise the test asserts against real AWS.
     from core.errors import AppError
-    import routes.routes_aws as routes_aws
+    from main import app
 
     def _fake_sts(*_args, **_kwargs):
         raise AppError("no creds", code="UNAUTHORIZED", status_code=401)
 
     monkeypatch.setattr(routes_aws, "_sts_get_caller_identity", _fake_sts)
 
-    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
         response = await client.get("/api/aws/status")
 
     assert response.status_code == 200
@@ -235,10 +277,13 @@ async def test_data_status_reports_empty_when_no_events_and_no_fallback():
     """GET /api/data/status must respond with source=empty when nothing is loaded."""
     import httpx
     from httpx import ASGITransport
+
     from main import app
 
-    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/data/status")
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get("/api/data/status", cookies=_auth_cookies())
 
     assert response.status_code == 200
     body = response.json()
@@ -252,9 +297,12 @@ async def test_gcp_sync_returns_401_without_token():
     """POST /api/gcp/sync without OAuth must return 401."""
     import httpx
     from httpx import ASGITransport
+
     from main import app
 
-    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
         response = await client.post("/api/gcp/sync?project_id=my-project-id-123")
 
     assert response.status_code == 401
@@ -267,17 +315,19 @@ async def test_aws_billing_without_credentials_returns_401(monkeypatch):
     """GET /api/aws/billing must surface 401 when STS rejects the request."""
     import httpx
     from httpx import ASGITransport
-    from main import app
 
-    from core.errors import AppError
     import routes.routes_aws as routes_aws
+    from core.errors import AppError
+    from main import app
 
     def _fake_sts(*_args, **_kwargs):
         raise AppError("no creds", code="UNAUTHORIZED", status_code=401)
 
     monkeypatch.setattr(routes_aws, "_sts_get_caller_identity", _fake_sts)
 
-    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
         response = await client.get("/api/aws/billing")
 
     assert response.status_code == 401
@@ -287,6 +337,7 @@ async def test_aws_billing_without_credentials_returns_401(monkeypatch):
 # 6. MCP-style tools registry + chat route contract
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_tools_catalog_lists_every_registered_tool():
     """GET /api/tools must return a non-empty catalog covering the categories
@@ -294,9 +345,12 @@ async def test_tools_catalog_lists_every_registered_tool():
     """
     import httpx
     from httpx import ASGITransport
+
     from main import app
 
-    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
         response = await client.get("/api/tools")
 
     assert response.status_code == 200
@@ -316,14 +370,17 @@ async def test_tool_invoke_get_data_status_works_without_api_key(monkeypatch):
     """
     import httpx
     from httpx import ASGITransport
-    from main import app
+
     from core.config import get_settings
+    from main import app
 
     settings = get_settings()
     monkeypatch.setattr(settings, "api_key", "")
     monkeypatch.setattr(settings, "env", "dev")
 
-    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
         response = await client.post(
             "/api/tools/invoke",
             json={"name": "get_data_status", "arguments": {}},
@@ -341,11 +398,11 @@ async def test_chat_route_reports_missing_bedrock_credentials(monkeypatch):
     """When AWS_BEARER_TOKEN_BEDROCK and standard AWS creds are absent, /api/chat
     must fail with a clear configuration error (500) — never crash silently.
     """
-    import os
     import httpx
     from httpx import ASGITransport
-    from main import app
+
     from core.config import get_settings
+    from main import app
 
     settings = get_settings()
     monkeypatch.setattr(settings, "api_key", "")
@@ -358,9 +415,12 @@ async def test_chat_route_reports_missing_bedrock_credentials(monkeypatch):
     # cache also protects against a stale boto3.Session lingering from an
     # earlier test that had credentials set).
     import agent.graph as graph
+
     graph._client.cache_clear()
 
-    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
         response = await client.post(
             "/api/chat",
             json={"message": "hello"},

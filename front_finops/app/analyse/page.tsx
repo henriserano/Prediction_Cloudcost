@@ -1,12 +1,9 @@
 "use client"
 
 import { Suspense, useCallback } from "react"
-import Link from "next/link"
 import { useRouter, useSearchParams } from "next/navigation"
 import {
   AlertOctagon,
-  Briefcase,
-  HardDrive,
   LayoutDashboard,
   LineChart,
   PieChart,
@@ -20,6 +17,7 @@ import { TableauDeBordTab } from "./_tabs/TableauDeBordTab"
 import { RepartitionTab } from "./_tabs/RepartitionTab"
 import { TendancesTab } from "./_tabs/TendancesTab"
 import { AnomaliesTab } from "./_tabs/AnomaliesTab"
+import { SourcePicker } from "./_components/SourcePicker"
 
 const TABS = [
   {
@@ -86,21 +84,11 @@ function AnalyseContent() {
     ? portfolios.find((p) => p.id === portfolioId) ?? null
     : null
 
-  const pushUrl = useCallback(
-    (patch: { tab?: TabId; source?: AnalyseSource; portfolio?: string | null }) => {
+  const pushTab = useCallback(
+    (nextTab: TabId) => {
       const next = new URLSearchParams(searchParams)
-      if (patch.tab !== undefined) {
-        if (patch.tab === DEFAULT_TAB) next.delete("tab")
-        else next.set("tab", patch.tab)
-      }
-      if (patch.source !== undefined) {
-        if (patch.source === DEFAULT_SOURCE) next.delete("source")
-        else next.set("source", patch.source)
-      }
-      if (patch.portfolio !== undefined) {
-        if (patch.portfolio === null) next.delete("portfolio")
-        else next.set("portfolio", patch.portfolio)
-      }
+      if (nextTab === DEFAULT_TAB) next.delete("tab")
+      else next.set("tab", nextTab)
       router.replace(next.size > 0 ? `/analyse?${next.toString()}` : "/analyse", {
         scroll: false,
       })
@@ -108,12 +96,11 @@ function AnalyseContent() {
     [router, searchParams],
   )
 
-  const portfolioAvailable = portfolios.length > 0
   const tabProps: AnalyseTabProps = { source, portfolio }
 
   return (
     <>
-      {/* Sub-tab nav — same as before */}
+      {/* Sub-tab nav */}
       <nav
         aria-label="Sous-section d'analyse"
         className="inline-flex rounded-xl border border-border bg-card p-1 gap-1 flex-wrap shadow-sm"
@@ -124,7 +111,7 @@ function AnalyseContent() {
             <button
               key={id}
               type="button"
-              onClick={() => pushUrl({ tab: id })}
+              onClick={() => pushTab(id)}
               aria-pressed={active}
               className={cn(
                 "group inline-flex items-center gap-2 rounded-lg px-3.5 py-2 text-sm font-medium transition-all",
@@ -154,105 +141,10 @@ function AnalyseContent() {
         })}
       </nav>
 
-      {/* Global source picker — Vue projet vs Vue portefeuille. Sits below the
-          sub-tab nav so it visually applies to whichever sub-tab is active. */}
-      <div className="flex flex-wrap items-center gap-3">
-        <nav
-          aria-label="Source des données"
-          className="inline-flex rounded-xl border border-border bg-card p-1 gap-1 shadow-sm"
-        >
-          <button
-            type="button"
-            onClick={() => pushUrl({ source: "projet", portfolio: null })}
-            aria-pressed={source === "projet"}
-            className={cn(
-              "inline-flex items-center gap-2 rounded-lg px-3.5 py-2 text-sm font-medium transition-all",
-              source === "projet"
-                ? "bg-brand text-brand-foreground shadow-sm"
-                : "text-muted-foreground hover:bg-muted hover:text-foreground",
-            )}
-          >
-            <HardDrive
-              className={cn(
-                "h-3.5 w-3.5",
-                source === "projet" ? "text-[color:var(--accent-green)]" : "text-muted-foreground",
-              )}
-              aria-hidden
-            />
-            <span>Vue projet</span>
-            <span
-              className={cn(
-                "text-[10px] font-medium",
-                source === "projet" ? "text-white/60" : "text-muted-foreground/60",
-              )}
-            >
-              Données ingérées
-            </span>
-          </button>
-          <button
-            type="button"
-            onClick={() => pushUrl({ source: "portefeuille", portfolio: portfolioId })}
-            disabled={!portfolioAvailable}
-            aria-pressed={source === "portefeuille"}
-            title={
-              portfolioAvailable
-                ? undefined
-                : "Créez un portefeuille depuis la page Portefeuille pour activer cette vue"
-            }
-            className={cn(
-              "inline-flex items-center gap-2 rounded-lg px-3.5 py-2 text-sm font-medium transition-all disabled:opacity-40 disabled:cursor-not-allowed",
-              source === "portefeuille"
-                ? "bg-brand text-brand-foreground shadow-sm"
-                : "text-muted-foreground hover:bg-muted hover:text-foreground",
-            )}
-          >
-            <Briefcase
-              className={cn(
-                "h-3.5 w-3.5",
-                source === "portefeuille" ? "text-[color:var(--accent-green)]" : "text-muted-foreground",
-              )}
-              aria-hidden
-            />
-            <span>Vue portefeuille</span>
-            <span
-              className={cn(
-                "text-[10px] font-medium max-w-[140px] truncate",
-                source === "portefeuille" ? "text-white/60" : "text-muted-foreground/60",
-              )}
-            >
-              {portfolioAvailable
-                ? `${portfolios.length} défini${portfolios.length > 1 ? "s" : ""}`
-                : "aucun"}
-            </span>
-          </button>
-        </nav>
-
-        {source === "portefeuille" && portfolioAvailable && (
-          <select
-            value={portfolioId ?? ""}
-            onChange={(e) => pushUrl({ portfolio: e.target.value })}
-            aria-label="Portefeuille actif"
-            className="rounded-lg border border-border bg-card px-3 py-2 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-[color:var(--accent-green)]/40"
-          >
-            {portfolios.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name} · {p.members.length} src
-              </option>
-            ))}
-          </select>
-        )}
-
-        {source === "portefeuille" && !portfolioAvailable && (
-          <p className="text-xs text-muted-foreground">
-            <Link
-              href="/portefeuille"
-              className="underline underline-offset-2 text-foreground hover:text-[color:var(--accent-green)]"
-            >
-              Créer un portefeuille
-            </Link>{" "}
-            pour activer cette vue.
-          </p>
-        )}
+      {/* Mobile / narrow-screen fallback for the source picker. On lg+ screens
+          the header slot renders it instead — see AnalysePage below. */}
+      <div className="lg:hidden">
+        <SourcePicker variant="inline" />
       </div>
 
       {/* Active tab body — remounts on tab OR source change so intra-tab state
@@ -273,6 +165,14 @@ export default function AnalysePage() {
       eyebrow="Comprendre · Analyse"
       title="Visualiser les flux et suivre les dépenses"
       description="Tableau de bord, répartition des coûts, tendances statistiques et détection d'anomalies — tout ce dont vous avez besoin pour comprendre où part la facture."
+      actions={
+        // SourcePicker reads searchParams so it must sit inside Suspense.
+        // Hidden on mobile because PageShell doesn't render actions on the
+        // narrow top bar — the inline fallback in AnalyseContent takes over.
+        <Suspense fallback={null}>
+          <SourcePicker variant="header" />
+        </Suspense>
+      }
     >
       <Suspense fallback={<Skeleton className="h-[400px]" />}>
         <AnalyseContent />

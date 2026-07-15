@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-from typing import Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -16,7 +15,7 @@ _GUID_RE = re.compile(
 class AzureSyncRequest(BaseModel):
     """Ingest Azure Cost Management data into the FinOps store."""
 
-    subscription_id: Optional[str] = Field(
+    subscription_id: str | None = Field(
         default=None,
         description="Filter to a specific subscription. None = the active subscription cached at unlock time.",
     )
@@ -29,7 +28,7 @@ class AzureSyncRequest(BaseModel):
 
     @field_validator("subscription_id")
     @classmethod
-    def _validate_sub(cls, v: Optional[str]) -> Optional[str]:
+    def _validate_sub(cls, v: str | None) -> str | None:
         if v is None:
             return v
         if not _GUID_RE.match(v):
@@ -39,7 +38,7 @@ class AzureSyncRequest(BaseModel):
 
 class AzureSyncResponse(BaseModel):
     ingested: int
-    subscription_id: Optional[str]
+    subscription_id: str | None
     period_start: str
     period_end: str
     services_count: int
@@ -53,8 +52,8 @@ class AzureSubscription(BaseModel):
 
     subscription_id: str
     name: str
-    state: Optional[str] = None
-    tenant_id: Optional[str] = None
+    state: str | None = None
+    tenant_id: str | None = None
 
 
 class AzureAuthStatus(BaseModel):
@@ -65,14 +64,14 @@ class AzureAuthStatus(BaseModel):
     """
 
     authenticated: bool
-    tenant_id: Optional[str] = None
-    subscription_id: Optional[str] = None
-    display_name: Optional[str] = Field(
+    tenant_id: str | None = None
+    subscription_id: str | None = None
+    display_name: str | None = Field(
         default=None,
         description="Human-readable identity: SP display name or subscription name",
     )
-    location: Optional[str] = None
-    detail: Optional[str] = Field(
+    location: str | None = None
+    detail: str | None = Field(
         default=None,
         description="Human-readable error/context when authenticated is False",
     )
@@ -96,7 +95,7 @@ class AzureBillingByDay(BaseModel):
 
 
 class AzureBillingResponse(BaseModel):
-    subscription_id: Optional[str]
+    subscription_id: str | None
     period: DateRange
     total: float
     by_service: list[AzureBillingByService]
@@ -113,13 +112,13 @@ class AzureBillingResponse(BaseModel):
 class AzureBillingQuery(BaseModel):
     """Optional query params validated up-front to prevent invalid Cost Management calls."""
 
-    start: Optional[str] = Field(default=None, description="YYYY-MM-DD")
-    end: Optional[str] = Field(default=None, description="YYYY-MM-DD")
+    start: str | None = Field(default=None, description="YYYY-MM-DD")
+    end: str | None = Field(default=None, description="YYYY-MM-DD")
     granularity: str = Field(default="Daily")
 
     @field_validator("start", "end")
     @classmethod
-    def _validate_date(cls, v: Optional[str]) -> Optional[str]:
+    def _validate_date(cls, v: str | None) -> str | None:
         if v is None:
             return v
         if not _DATE_RE.match(v):

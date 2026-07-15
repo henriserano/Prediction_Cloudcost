@@ -5,9 +5,8 @@ populated — the route layer just serializes them. All heavy sklearn imports
 are done lazily inside the functions so the app can start without the
 optional dependencies loaded eagerly.
 """
-from __future__ import annotations
 
-from typing import Optional
+from __future__ import annotations
 
 import numpy as np
 import pandas as pd
@@ -26,8 +25,8 @@ from schemas.advanced import (
     MissingnessResponse,
     NormalityTest,
     OutlierRow,
-    OutlierSummary,
     OutliersResponse,
+    OutlierSummary,
     PageHinkleyPoint,
     PCAComponent,
     PSIBin,
@@ -36,10 +35,10 @@ from schemas.advanced import (
     ScalingResponse,
 )
 
-
 # ---------------------------------------------------------------------------
 # Common helpers
 # ---------------------------------------------------------------------------
+
 
 def _daily_series() -> pd.DataFrame:
     df = load_daily_costs()
@@ -58,6 +57,7 @@ def _service_matrix() -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 # Outliers — Z, modified Z (MAD), IQR, Isolation Forest, LOF, Mahalanobis
 # ---------------------------------------------------------------------------
+
 
 def _mad_zscores(y: np.ndarray) -> np.ndarray:
     """Iglewicz-Hoaglin robust Z-score using the median absolute deviation.
@@ -123,21 +123,35 @@ def compute_outliers(z_thresh: float = 2.0, iqr_mult: float = 1.5) -> OutliersRe
         for i in range(len(y))
     ]
 
-    n = len(y)
     summary = [
-        OutlierSummary(method="zscore", flagged_count=int(np.sum(np.abs(z) > z_thresh)),
-                       flagged_pct=round(float(np.mean(np.abs(z) > z_thresh) * 100), 2),
-                       threshold=z_thresh),
-        OutlierSummary(method="modified_zscore", flagged_count=int(np.sum(np.abs(mz) > 3.5)),
-                       flagged_pct=round(float(np.mean(np.abs(mz) > 3.5) * 100), 2),
-                       threshold=3.5),
-        OutlierSummary(method="iqr", flagged_count=int(np.sum(iqr_flag)),
-                       flagged_pct=round(float(np.mean(iqr_flag) * 100), 2),
-                       threshold=iqr_mult),
-        OutlierSummary(method="isolation_forest", flagged_count=int(np.sum(iso_flag)),
-                       flagged_pct=round(float(np.mean(iso_flag) * 100), 2)),
-        OutlierSummary(method="lof", flagged_count=int(np.sum(lof_flag)),
-                       flagged_pct=round(float(np.mean(lof_flag) * 100), 2)),
+        OutlierSummary(
+            method="zscore",
+            flagged_count=int(np.sum(np.abs(z) > z_thresh)),
+            flagged_pct=round(float(np.mean(np.abs(z) > z_thresh) * 100), 2),
+            threshold=z_thresh,
+        ),
+        OutlierSummary(
+            method="modified_zscore",
+            flagged_count=int(np.sum(np.abs(mz) > 3.5)),
+            flagged_pct=round(float(np.mean(np.abs(mz) > 3.5) * 100), 2),
+            threshold=3.5,
+        ),
+        OutlierSummary(
+            method="iqr",
+            flagged_count=int(np.sum(iqr_flag)),
+            flagged_pct=round(float(np.mean(iqr_flag) * 100), 2),
+            threshold=iqr_mult,
+        ),
+        OutlierSummary(
+            method="isolation_forest",
+            flagged_count=int(np.sum(iso_flag)),
+            flagged_pct=round(float(np.mean(iso_flag) * 100), 2),
+        ),
+        OutlierSummary(
+            method="lof",
+            flagged_count=int(np.sum(lof_flag)),
+            flagged_pct=round(float(np.mean(lof_flag) * 100), 2),
+        ),
     ]
 
     # 6. Mahalanobis on the per-service cost matrix
@@ -162,8 +176,8 @@ def _mahalanobis_outliers() -> list[MahalanobisRow]:
         return []
 
     try:
-        from sklearn.covariance import MinCovDet
         from scipy.stats import chi2
+        from sklearn.covariance import MinCovDet
 
         mcd = MinCovDet(support_fraction=None, random_state=42).fit(X)
         dist = mcd.mahalanobis(X)
@@ -188,14 +202,21 @@ def _mahalanobis_outliers() -> list[MahalanobisRow]:
 # Drift — KS test, PSI, Page-Hinkley
 # ---------------------------------------------------------------------------
 
+
 def compute_drift(reference_frac: float = 0.5, psi_bins: int = 10) -> DriftResponse:
     df = _daily_series()
     y = df["y"].to_numpy(dtype=float) if len(df) else np.array([])
     if len(y) < 30:
         return DriftResponse(
-            ks=KSResult(statistic=0, p_value=1, drift_detected=False,
-                        reference_period="", current_period="",
-                        n_ref=0, n_cur=0),
+            ks=KSResult(
+                statistic=0,
+                p_value=1,
+                drift_detected=False,
+                reference_period="",
+                current_period="",
+                n_ref=0,
+                n_cur=0,
+            ),
             psi=PSIResult(psi=0.0, verdict="insufficient-data", bins=[]),
             page_hinkley=[],
             n_changepoints_detected=0,
@@ -213,10 +234,10 @@ def compute_drift(reference_frac: float = 0.5, psi_bins: int = 10) -> DriftRespo
         statistic=round(float(ks_stat), 6),
         p_value=round(float(ks_p), 6),
         drift_detected=bool(ks_p < 0.05),
-        reference_period=f"{ds[0]} → {ds[split-1]}",
+        reference_period=f"{ds[0]} → {ds[split - 1]}",
         current_period=f"{ds[split]} → {ds[-1]}",
-        n_ref=int(len(ref)),
-        n_cur=int(len(cur)),
+        n_ref=len(ref),
+        n_cur=len(cur),
     )
 
     # 2. Population Stability Index — bin edges from the reference quantiles,
@@ -278,9 +299,7 @@ def compute_drift(reference_frac: float = 0.5, psi_bins: int = 10) -> DriftRespo
         if detected:
             n_changes += 1
         ph_points.append(
-            PageHinkleyPoint(
-                date=ds[i], ph_stat=round(float(gap), 4), change_detected=detected
-            )
+            PageHinkleyPoint(date=ds[i], ph_stat=round(float(gap), 4), change_detected=detected)
         )
 
     return DriftResponse(
@@ -295,6 +314,7 @@ def compute_drift(reference_frac: float = 0.5, psi_bins: int = 10) -> DriftRespo
 # Distribution — skew/kurtosis, Box-Cox, normality tests, QQ
 # ---------------------------------------------------------------------------
 
+
 def compute_distribution() -> DistributionResponse:
     from scipy import stats
 
@@ -302,8 +322,11 @@ def compute_distribution() -> DistributionResponse:
     y = df["y"].to_numpy(dtype=float) if len(df) else np.array([])
     if len(y) < 10:
         return DistributionResponse(
-            skewness=0.0, kurtosis=0.0, boxcox_lambda=None,
-            normality_tests=[], qq_points=[],
+            skewness=0.0,
+            kurtosis=0.0,
+            boxcox_lambda=None,
+            normality_tests=[],
+            qq_points=[],
         )
 
     # Constant / near-constant series (very common right after a simulation
@@ -319,7 +342,7 @@ def compute_distribution() -> DistributionResponse:
         kurt = float(stats.kurtosis(y, bias=False))  # excess kurtosis
 
     # Box-Cox needs strictly positive values
-    boxcox_lambda: Optional[float] = None
+    boxcox_lambda: float | None = None
     if np.all(y > 0):
         try:
             _, boxcox_lambda = stats.boxcox(y)
@@ -331,36 +354,44 @@ def compute_distribution() -> DistributionResponse:
 
     # Jarque-Bera (asymptotic, good for n > 2000, informative for smaller)
     jb_stat, jb_p = stats.jarque_bera(y)
-    tests.append(NormalityTest(
-        name="jarque_bera",
-        statistic=round(float(jb_stat), 6),
-        p_value=round(float(jb_p), 6),
-        is_normal=bool(jb_p > 0.05),
-    ))
+    tests.append(
+        NormalityTest(
+            name="jarque_bera",
+            statistic=round(float(jb_stat), 6),
+            p_value=round(float(jb_p), 6),
+            is_normal=bool(jb_p > 0.05),
+        )
+    )
 
     # Shapiro-Wilk (best for n < 5000)
     if len(y) <= 5000:
         sh_stat, sh_p = stats.shapiro(y)
-        tests.append(NormalityTest(
-            name="shapiro_wilk",
-            statistic=round(float(sh_stat), 6),
-            p_value=round(float(sh_p), 6),
-            is_normal=bool(sh_p > 0.05),
-        ))
+        tests.append(
+            NormalityTest(
+                name="shapiro_wilk",
+                statistic=round(float(sh_stat), 6),
+                p_value=round(float(sh_p), 6),
+                is_normal=bool(sh_p > 0.05),
+            )
+        )
 
     # D'Agostino K^2
     da_stat, da_p = stats.normaltest(y)
-    tests.append(NormalityTest(
-        name="dagostino_k2",
-        statistic=round(float(da_stat), 6),
-        p_value=round(float(da_p), 6),
-        is_normal=bool(da_p > 0.05),
-    ))
+    tests.append(
+        NormalityTest(
+            name="dagostino_k2",
+            statistic=round(float(da_stat), 6),
+            p_value=round(float(da_p), 6),
+            is_normal=bool(da_p > 0.05),
+        )
+    )
 
     # QQ points — theoretical vs sample quantiles
     theoretical = stats.norm.ppf(np.linspace(0.01, 0.99, min(50, len(y))))
     sample = np.quantile(y, np.linspace(0.01, 0.99, min(50, len(y))))
-    qq_points = [[round(float(t), 6), round(float(s), 6)] for t, s in zip(theoretical, sample)]
+    qq_points = [
+        [round(float(t), 6), round(float(s), 6)] for t, s in zip(theoretical, sample, strict=True)
+    ]
 
     return DistributionResponse(
         skewness=round(skew, 6),
@@ -374,6 +405,7 @@ def compute_distribution() -> DistributionResponse:
 # ---------------------------------------------------------------------------
 # Scaling comparison — StandardScaler vs MinMaxScaler vs RobustScaler
 # ---------------------------------------------------------------------------
+
 
 def compute_scaling() -> ScalingResponse:
     df = _daily_series()
@@ -417,12 +449,16 @@ def compute_scaling() -> ScalingResponse:
 # Missing data — gaps, per-service missing %, MCAR/MAR/MNAR hint
 # ---------------------------------------------------------------------------
 
+
 def compute_missingness() -> MissingnessResponse:
     df = _daily_series()
     if len(df) < 5:
         return MissingnessResponse(
-            calendar_days_expected=0, actual_days=0, missing_days=0,
-            gaps=[], per_service_missing_pct={},
+            calendar_days_expected=0,
+            actual_days=0,
+            missing_days=0,
+            gaps=[],
+            per_service_missing_pct={},
             mechanism_hint="insufficient-data",
         )
 
@@ -437,11 +473,13 @@ def compute_missingness() -> MissingnessResponse:
         d = pd.Series(missing_dates)
         groups = (d.diff().dt.days.fillna(1) != 1).cumsum()
         for _, g in d.groupby(groups):
-            gaps.append(GapRow(
-                start=g.iloc[0].strftime("%Y-%m-%d"),
-                end=g.iloc[-1].strftime("%Y-%m-%d"),
-                days=int(len(g)),
-            ))
+            gaps.append(
+                GapRow(
+                    start=g.iloc[0].strftime("%Y-%m-%d"),
+                    end=g.iloc[-1].strftime("%Y-%m-%d"),
+                    days=len(g),
+                )
+            )
 
     # Compute per-service missing rate using the RAW events store (not the
     # zero-filled pivot). A day where a service has no row in the raw store
@@ -493,9 +531,9 @@ def compute_missingness() -> MissingnessResponse:
         hint = "insufficient-data"
 
     return MissingnessResponse(
-        calendar_days_expected=int(len(calendar)),
-        actual_days=int(len(present)),
-        missing_days=int(len(missing_dates)),
+        calendar_days_expected=len(calendar),
+        actual_days=len(present),
+        missing_days=len(missing_dates),
         gaps=gaps,
         per_service_missing_pct=per_service_missing_pct,
         mechanism_hint=hint,
@@ -506,13 +544,17 @@ def compute_missingness() -> MissingnessResponse:
 # Dimensionality reduction — PCA + t-SNE on per-service matrix
 # ---------------------------------------------------------------------------
 
+
 def compute_dim_reduction(n_components: int = 5, run_tsne: bool = True) -> DimReductionResponse:
     svc = _service_matrix()
     cols = [c for c in svc.columns if c != "ds"]
     if len(cols) < 3 or len(svc) < 10:
         return DimReductionResponse(
-            n_services=len(cols), n_days=len(svc),
-            pca_components=[], total_variance_explained=0.0, tsne_2d=[],
+            n_services=len(cols),
+            n_days=len(svc),
+            pca_components=[],
+            total_variance_explained=0.0,
+            tsne_2d=[],
         )
 
     from sklearn.decomposition import PCA
@@ -530,8 +572,11 @@ def compute_dim_reduction(n_components: int = 5, run_tsne: bool = True) -> DimRe
     col_variances = np.var(X, axis=0, ddof=1)
     if not np.any(col_variances > 1e-12):
         return DimReductionResponse(
-            n_services=len(cols), n_days=len(svc),
-            pca_components=[], total_variance_explained=0.0, tsne_2d=[],
+            n_services=len(cols),
+            n_days=len(svc),
+            pca_components=[],
+            total_variance_explained=0.0,
+            tsne_2d=[],
         )
 
     X_scaled = StandardScaler().fit_transform(X)
@@ -545,9 +590,9 @@ def compute_dim_reduction(n_components: int = 5, run_tsne: bool = True) -> DimRe
         var_ratio = float(pca.explained_variance_ratio_[i])
         cumulative += var_ratio
         loadings = pca.components_[i]
-        pairs = sorted(
-            zip(cols, loadings), key=lambda kv: abs(kv[1]), reverse=True
-        )[:5]
+        pairs = sorted(zip(cols, loadings, strict=True), key=lambda kv: abs(kv[1]), reverse=True)[
+            :5
+        ]
         components.append(
             PCAComponent(
                 component=i + 1,
@@ -574,14 +619,18 @@ def compute_dim_reduction(n_components: int = 5, run_tsne: bool = True) -> DimRe
                 random_state=42,
             )
             import inspect
+
             if "max_iter" in inspect.signature(TSNE).parameters:
                 tsne_kwargs["max_iter"] = 500
             else:
                 tsne_kwargs["n_iter"] = 500
             embed = TSNE(**tsne_kwargs).fit_transform(X_scaled.T)
             tsne_2d = [
-                {"service": cols[i], "x": round(float(embed[i, 0]), 4),
-                 "y": round(float(embed[i, 1]), 4)}
+                {
+                    "service": cols[i],
+                    "x": round(float(embed[i, 0]), 4),
+                    "y": round(float(embed[i, 1]), 4),
+                }
                 for i in range(len(cols))
             ]
         except Exception:
@@ -600,14 +649,18 @@ def compute_dim_reduction(n_components: int = 5, run_tsne: bool = True) -> DimRe
 # Ensemble forecast + bias/variance decomposition
 # ---------------------------------------------------------------------------
 
+
 def compute_ensemble_forecast(horizon: int = 60) -> EnsembleForecastResponse:
     from forecast.engine import MODELS
 
     df = _daily_series()
     if len(df) < 60:
         return EnsembleForecastResponse(
-            horizon=horizon, base_models=list(MODELS.keys()), weights={},
-            points=[], bias_variance=[],
+            horizon=horizon,
+            base_models=list(MODELS.keys()),
+            weights={},
+            points=[],
+            bias_variance=[],
         )
 
     y = df["y"].to_numpy(dtype=float)
@@ -643,7 +696,7 @@ def compute_ensemble_forecast(horizon: int = 60) -> EnsembleForecastResponse:
             forecasts[name] = np.full(horizon, float(np.mean(y)))
 
         preds_fold: list[np.ndarray] = []
-        for split, end in fold_ranges:
+        for split, _end in fold_ranges:
             try:
                 p, _, _ = fn(y[:split], h_cv)
                 preds_fold.append(np.array(p[:h_cv]))
@@ -651,10 +704,7 @@ def compute_ensemble_forecast(horizon: int = 60) -> EnsembleForecastResponse:
                 preds_fold.append(np.full(h_cv, float(np.mean(y[:split]))))
         cv_preds[name] = preds_fold
 
-        errs = [
-            float(np.mean(np.abs(cv_trues[i] - preds_fold[i])))
-            for i in range(len(cv_trues))
-        ]
+        errs = [float(np.mean(np.abs(cv_trues[i] - preds_fold[i]))) for i in range(len(cv_trues))]
         cv_maes[name] = float(np.mean(errs)) if errs else float("inf")
 
     # Weighted ensemble — inverse-MAE weights normalised to sum to 1
@@ -666,7 +716,7 @@ def compute_ensemble_forecast(horizon: int = 60) -> EnsembleForecastResponse:
     stacked = np.vstack(list(forecasts.values()))
     mean_pred = np.mean(stacked, axis=0)
 
-    weight_arr = np.array([weights[k] for k in forecasts.keys()])
+    weight_arr = np.array([weights[k] for k in forecasts])
     weighted_pred = np.average(stacked, axis=0, weights=weight_arr)
 
     # 80% band from cross-model dispersion — a rough interval showing the
@@ -705,7 +755,7 @@ def compute_ensemble_forecast(horizon: int = 60) -> EnsembleForecastResponse:
         for name, preds_fold in cv_preds.items():
             preds_stack = np.vstack(preds_fold)  # (n_folds, h_cv)
             residuals = preds_stack - true_stack  # (n_folds, h_cv)
-            total = float(np.mean(residuals ** 2))
+            total = float(np.mean(residuals**2))
             # Variance of the residual across folds (per step), averaged
             var = float(np.mean(np.var(residuals, axis=0)))
             # Bias^2 as the remainder; clamp non-negative to guard against

@@ -9,12 +9,12 @@ Flow:
 - ``POST /api/simulation/push`` ingests the projection into the FinOps
   model as 12 monthly billing events (replace=false).
 """
+
 from __future__ import annotations
 
-from typing import Literal, Optional
+from typing import Literal
 
 from pydantic import BaseModel, Field
-
 
 DeploymentTarget = Literal["bedrock", "anthropic_api", "openai_api", "azure_openai"]
 
@@ -27,7 +27,7 @@ class LLMPricingEntry(BaseModel):
     input_per_million: float = Field(description="USD per 1M input tokens")
     output_per_million: float = Field(description="USD per 1M output tokens")
     context_window: int = Field(description="Max context tokens")
-    notes: Optional[str] = None
+    notes: str | None = None
 
 
 class ToolPricingEntry(BaseModel):
@@ -102,19 +102,19 @@ class Risk(BaseModel):
     category: RiskCategory
     title: str
     detail: str
-    mitigation: Optional[str] = Field(
+    mitigation: str | None = Field(
         default=None,
         description="Concrete next step that closes the risk (one sentence, actionable).",
     )
-    owner: Optional[RiskOwner] = Field(
+    owner: RiskOwner | None = Field(
         default=None,
         description="Who typically owns fixing this in the org.",
     )
-    time_horizon: Optional[RiskTimeHorizon] = Field(
+    time_horizon: RiskTimeHorizon | None = Field(
         default=None,
         description="When this should be handled — before go-live vs. during ops.",
     )
-    estimated_impact_usd: Optional[float] = Field(
+    estimated_impact_usd: float | None = Field(
         default=None,
         description="Best-effort quantification of the risk cost (monthly USD).",
     )
@@ -153,7 +153,7 @@ class ArchitectureRecommendation(BaseModel):
     impact: ArchitectureImpact = "reliability"
     effort: ArchitectureEffort = "M"
     phase: ArchitecturePhase = "mvp"
-    est_cost_delta_pct: Optional[float] = Field(
+    est_cost_delta_pct: float | None = Field(
         default=None,
         description=(
             "Signed delta on the total_monthly bill if this recommendation is "
@@ -173,7 +173,9 @@ class AnalysisAxis(BaseModel):
     title: str
     rationale: str
     how_to: str
-    category: Literal["sensitivity", "unit_economics", "quality", "ops", "commercial"] = "sensitivity"
+    category: Literal["sensitivity", "unit_economics", "quality", "ops", "commercial"] = (
+        "sensitivity"
+    )
 
 
 class ExecutiveSummary(BaseModel):
@@ -193,9 +195,7 @@ class ExecutiveSummary(BaseModel):
     unit_cost_per_interaction_usd: float = Field(
         description="Total monthly cost divided by projected interactions per month."
     )
-    unit_cost_per_user_usd: float = Field(
-        description="Total monthly cost divided by MAU."
-    )
+    unit_cost_per_user_usd: float = Field(description="Total monthly cost divided by MAU.")
     confidence: Literal["low", "medium", "high"] = Field(
         default="medium",
         description="How much to trust the numbers — driven by baseline availability + token estimates.",
@@ -211,9 +211,9 @@ class BaselineContext(BaseModel):
     against which the projected agentic cost is compared."""
 
     monthly_avg: float
-    period_start: Optional[str] = None
-    period_end: Optional[str] = None
-    top_service: Optional[str] = None
+    period_start: str | None = None
+    period_end: str | None = None
+    top_service: str | None = None
     source: str
 
 

@@ -13,6 +13,7 @@ Rules:
 - Unknown services default to ``other`` — surfaced in the UI so an operator
   can spot an unlabelled service and extend the map.
 """
+
 from __future__ import annotations
 
 from typing import Literal

@@ -14,9 +14,11 @@ Callers wanting a proper envelope can build one on top of the headers; the
 headers themselves are cheap to add and follow the same convention used by
 GitHub and other public REST APIs.
 """
+
 from __future__ import annotations
 
-from typing import Optional, Sequence, TypeVar
+from collections.abc import Sequence
+from typing import TypeVar
 
 from fastapi import Response
 
@@ -27,7 +29,7 @@ def apply_pagination(
     items: Sequence[T],
     response: Response,
     *,
-    limit: Optional[int],
+    limit: int | None,
     offset: int = 0,
 ) -> list[T]:
     """Slice ``items`` and stamp pagination headers on ``response``.

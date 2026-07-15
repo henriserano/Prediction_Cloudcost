@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 
 from analysis.advanced import (
     compute_dim_reduction,
@@ -14,6 +14,8 @@ from analysis.advanced import (
     compute_scaling,
 )
 from core.cache import app_cache
+from core.session import require_current_user_id
+from core.user_context import current_user_scope
 from schemas.advanced import (
     DimReductionResponse,
     DistributionResponse,
@@ -24,7 +26,14 @@ from schemas.advanced import (
     ScalingResponse,
 )
 
-router = APIRouter(prefix="/api/analysis", tags=["advanced-analysis"])
+# SEC-020: analysis routes depend on the authenticated user — every cache key
+# is prefixed by ``current_user_scope()`` so user A's cached outliers cannot
+# be returned to user B.
+router = APIRouter(
+    prefix="/api/analysis",
+    tags=["advanced-analysis"],
+    dependencies=[Depends(require_current_user_id)],
+)
 
 
 # SEC: float query params are quantized before being embedded in a cache key.
@@ -33,6 +42,11 @@ router = APIRouter(prefix="/api/analysis", tags=["advanced-analysis"])
 # bound. 2 decimals is far finer than any meaningful choice for these params.
 def _q(x: float) -> str:
     return f"{round(x, 2):.2f}"
+
+
+def _k(*parts: str) -> str:
+    """Build a cache key prefixed with the current user's scope (SEC-020)."""
+    return ":".join((current_user_scope(), *parts))
 
 
 @router.get("/outliers", response_model=OutliersResponse)
@@ -48,7 +62,7 @@ def outliers(
     matrix and appears in the ``mahalanobis`` field when there are at least
     2 services and 10 days of history.
     """
-    cache_key = f"analysis:outliers:{_q(z_threshold)}:{_q(iqr_multiplier)}"
+    cache_key = _k("analysis:outliers", _q(z_threshold), _q(iqr_multiplier))
     cached = app_cache.get(cache_key)
     if cached is not None:
         return cached
@@ -70,7 +84,7 @@ def drift(
     - Population Stability Index (PSI) with a verdict thresholded at 0.1 / 0.25
     - Page-Hinkley online change-point statistic across every day
     """
-    cache_key = f"analysis:drift:{_q(reference_frac)}:{psi_bins}"
+    cache_key = _k("analysis:drift", _q(reference_frac), str(psi_bins))
     cached = app_cache.get(cache_key)
     if cached is not None:
         return cached
@@ -85,7 +99,7 @@ def distribution() -> DistributionResponse:
     3 normality tests (Jarque-Bera, Shapiro-Wilk, D'Agostino K^2) and QQ-plot
     coordinates for visual inspection.
     """
-    cache_key = "analysis:distribution"
+    cache_key = _k("analysis:distribution")
     cached = app_cache.get(cache_key)
     if cached is not None:
         return cached
@@ -102,7 +116,7 @@ def scaling() -> ScalingResponse:
     - **MinMax**: (x - min) / (max - min) — bounds to [0,1], very sensitive to outliers
     - **Robust**: (x - median) / IQR — outlier-resistant, best default for real cost data
     """
-    cache_key = "analysis:scaling"
+    cache_key = _k("analysis:scaling")
     cached = app_cache.get(cache_key)
     if cached is not None:
         return cached
@@ -119,7 +133,7 @@ def missing() -> MissingnessResponse:
     hint (MCAR / MAR / MNAR-like) derived from the correlation between
     missingness and cost level.
     """
-    cache_key = "analysis:missing"
+    cache_key = _k("analysis:missing")
     cached = app_cache.get(cache_key)
     if cached is not None:
         return cached
@@ -139,7 +153,7 @@ def dim_reduction(
     Useful to spot which services drive cost variance and which services cluster
     together in usage patterns.
     """
-    cache_key = f"analysis:dimred:{n_components}:{run_tsne}"
+    cache_key = _k("analysis:dimred", str(n_components), str(run_tsne))
     cached = app_cache.get(cache_key)
     if cached is not None:
         return cached
@@ -160,7 +174,7 @@ def ensemble_forecast(
     - **lo80/hi80**: 10th/90th percentile of the 6 model outputs (cross-model spread)
     - **bias_variance**: per-model bias² + variance + total MSE, sorted ascending
     """
-    cache_key = f"analysis:ensemble:{horizon}"
+    cache_key = _k("analysis:ensemble", str(horizon))
     cached = app_cache.get(cache_key)
     if cached is not None:
         return cached

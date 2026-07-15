@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
 
 from pydantic import BaseModel, Field, field_validator
-
 
 _PIN_PATTERN = r"^\d{6}$"
 
@@ -39,13 +37,9 @@ class UserPublic(BaseModel):
     user_id: str
     display_name: str
     created_at: datetime
-    has_credentials: bool = Field(
-        description="At least one provider is stored for this user."
-    )
+    has_credentials: bool = Field(description="At least one provider is stored for this user.")
 
 
 class AuthResponse(BaseModel):
     user: UserPublic
-    is_new: bool = Field(
-        description="True when the signup created a fresh user record."
-    )
+    is_new: bool = Field(description="True when the signup created a fresh user record.")

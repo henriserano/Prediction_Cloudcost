@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from typing import List, Annotated
+from typing import Annotated
 
-from fastapi import APIRouter, Query, Response
+from fastapi import APIRouter, Depends, Query, Response
 
-from core.pagination import apply_pagination
+from analysis.services import get_kpi, get_service_shares
 from analysis.timeseries import (
     get_acf_pacf,
     get_anomalies,
@@ -13,21 +13,29 @@ from analysis.timeseries import (
     get_stationarity,
     get_stl_decomposition,
 )
-from analysis.services import get_kpi, get_service_shares
+from core.pagination import apply_pagination
+from core.session import require_current_user_id
 from schemas.analytics import (
     ACFPoint,
     AnomalyPoint,
-    DescriptiveStats,
     DailyPoint,
+    DescriptiveStats,
     KPIData,
-    STLPoint,
-    STLStrengths,
     ServiceShare,
     StationarityResult,
+    STLPoint,
+    STLStrengths,
 )
-from core.errors import BadRequest
 
-router = APIRouter(prefix="/api", tags=["analytics"])
+# SEC-020: every analytics route depends on require_current_user_id — the
+# underlying loaders/store are keyed by the authenticated user's JWT ``sub``,
+# so an anonymous request would otherwise fall back to the empty anonymous
+# scope and receive parquet-fallback numbers regardless of who ingested what.
+router = APIRouter(
+    prefix="/api",
+    tags=["analytics"],
+    dependencies=[Depends(require_current_user_id)],
+)
 
 
 @router.get("/kpi", response_model=KPIData)
@@ -36,11 +44,14 @@ def kpi():
     return get_kpi()
 
 
-@router.get("/daily", response_model=List[DailyPoint])
+@router.get("/daily", response_model=list[DailyPoint])
 def daily_costs(
     response: Response,
     last_n: Annotated[int | None, Query(ge=7, le=365, description="Limit to last N days")] = None,
-    limit: Annotated[int | None, Query(ge=1, le=1000, description="Opt-in pagination — omit to get the full series")] = None,
+    limit: Annotated[
+        int | None,
+        Query(ge=1, le=1000, description="Opt-in pagination — omit to get the full series"),
+    ] = None,
     offset: Annotated[int, Query(ge=0)] = 0,
 ):
     """Daily aggregated costs with 7-day MA and 95% CI bands.
@@ -54,10 +65,13 @@ def daily_costs(
     return apply_pagination(series, response, limit=limit, offset=offset)
 
 
-@router.get("/services", response_model=List[ServiceShare])
+@router.get("/services", response_model=list[ServiceShare])
 def services(
     response: Response,
-    limit: Annotated[int | None, Query(ge=1, le=1000, description="Opt-in pagination — omit to get the full Pareto list")] = None,
+    limit: Annotated[
+        int | None,
+        Query(ge=1, le=1000, description="Opt-in pagination — omit to get the full Pareto list"),
+    ] = None,
     offset: Annotated[int, Query(ge=0)] = 0,
 ):
     """Per-service cost totals, share %, CV, and cumulative % (Pareto-sorted).
@@ -68,7 +82,7 @@ def services(
     return apply_pagination(shares, response, limit=limit, offset=offset)
 
 
-@router.get("/anomalies", response_model=List[AnomalyPoint])
+@router.get("/anomalies", response_model=list[AnomalyPoint])
 def anomalies(
     z_threshold: Annotated[float, Query(ge=1.0, le=4.0)] = 2.0,
 ):
@@ -88,7 +102,7 @@ def stationarity():
     return get_stationarity()
 
 
-@router.get("/stl", response_model=List[STLPoint])
+@router.get("/stl", response_model=list[STLPoint])
 def stl():
     """STL decomposition (trend + seasonal + residual) for every day."""
     points, _ = get_stl_decomposition()
@@ -102,7 +116,7 @@ def stl_strengths():
     return strengths
 
 
-@router.get("/acf", response_model=List[ACFPoint])
+@router.get("/acf", response_model=list[ACFPoint])
 def acf_pacf(
     nlags: Annotated[int, Query(ge=5, le=60)] = 28,
 ):

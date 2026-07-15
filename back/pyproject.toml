@@ -1,0 +1,37 @@
+[project]
+name = "finops-backend"
+version = "0.1.0"
+requires-python = ">=3.11"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+exclude = [".venv", "__pycache__", "data"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes (unused imports, undefined names)
+    "W",   # pycodestyle warnings
+    "I",   # isort (import ordering)
+    "B",   # flake8-bugbear (likely bugs)
+    "UP",  # pyupgrade (modern syntax, e.g. list[str] over List[str])
+    "SIM", # flake8-simplify
+    "RUF", # ruff-specific rules
+]
+ignore = [
+    "E501",   # line too long. formatter handles it; leaves long strings/URLs alone
+    "B008",   # function call in default arg. FastAPI Depends() pattern relies on this
+    "SIM108", # ternary over if/else. hurts readability for non-trivial branches
+    "RUF001", # ambiguous unicode char in string (em-dash used intentionally in messages)
+    "RUF002", # ambiguous unicode char in docstring
+    "RUF003", # ambiguous unicode char in comment
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011"]  # allow assert False in tests
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"

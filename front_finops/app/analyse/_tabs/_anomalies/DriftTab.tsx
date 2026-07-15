@@ -149,8 +149,8 @@ export default function DriftTab() {
 
       {/* KS periods */}
       <SectionCard
-        title="Test de Kolmogorov-Smirnov (2 échantillons)"
-        description="Comparaison de distribution entre période de référence et période courante"
+        title="Comparaison période de référence vs période courante"
+        description="Test de Kolmogorov-Smirnov (2 échantillons) — vérifie si les deux distributions diffèrent significativement"
       >
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
           <div className="rounded-lg border border-border bg-muted/20 p-3.5">

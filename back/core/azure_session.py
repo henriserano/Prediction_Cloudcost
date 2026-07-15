@@ -10,12 +10,13 @@ The plaintext client_secret never leaves this module; nothing is persisted
 on disk. Process restart = every user must re-unlock via their PIN. That is
 by design: only the AES-GCM ciphertext lives in DynamoDB.
 """
+
 from __future__ import annotations
 
 import threading
 import time
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 from core.logging import get_logger
 
@@ -30,9 +31,9 @@ _TTL_SECONDS = 60 * 60
 class _CachedAzure:
     credential: Any  # azure.identity.ClientSecretCredential (typed loosely to keep imports lazy)
     tenant_id: str
-    subscription_id: Optional[str]
+    subscription_id: str | None
     location: str
-    display_name: Optional[str]
+    display_name: str | None
     expires_at: float
 
 
@@ -52,9 +53,9 @@ def activate_user_azure(
     tenant_id: str,
     client_id: str,
     client_secret: str,
-    subscription_id: Optional[str],
+    subscription_id: str | None,
     location: str,
-    display_name: Optional[str] = None,
+    display_name: str | None = None,
 ) -> None:
     """Build an azure-identity credential and cache it for the user.
 
@@ -96,7 +97,7 @@ def activate_user_azure(
     )
 
 
-def get_user_azure(user_id: Optional[str]) -> Optional[_CachedAzure]:
+def get_user_azure(user_id: str | None) -> _CachedAzure | None:
     """Return the cached Azure entry for ``user_id`` (or None if none/expired)."""
     if not user_id:
         return None
@@ -111,5 +112,5 @@ def deactivate_user_azure(user_id: str) -> None:
         _cache.pop(user_id, None)
 
 
-def is_active(user_id: Optional[str]) -> bool:
+def is_active(user_id: str | None) -> bool:
     return get_user_azure(user_id) is not None

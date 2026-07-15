@@ -5,11 +5,35 @@ into one of the analysis functions and asserts the result matches the
 expected value within a tolerance. If any assertion breaks, a real calc bug
 has crept in — the tests are not smoke checks, they are contracts on math.
 """
+
 from __future__ import annotations
 
 import numpy as np
 import pandas as pd
 import pytest
+
+_TEST_USER_ID = "test-user"
+
+
+def _inject_for_test_user(rows: list[dict]) -> None:
+    """Populate the per-user events store slot for the test user and set the
+    request-scoped ContextVar so downstream loaders resolve to that slice.
+
+    SEC-020: the store is now keyed by user_id; a plain
+    ``routes_events._injected_events = rows`` no longer works because
+    ``get_injected_events_df()`` reads from the ContextVar-derived slot.
+    """
+    from core.user_context import set_current_user_id
+    from routes import routes_events
+
+    routes_events._injected_events[_TEST_USER_ID] = list(rows)
+    return set_current_user_id(_TEST_USER_ID)
+
+
+def _cleanup_test_user() -> None:
+    from routes import routes_events
+
+    routes_events._injected_events.pop(_TEST_USER_ID, None)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -17,44 +41,54 @@ import pytest
 # it via the loader's events-first resolution path.
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 @pytest.fixture
 def synthetic_events(monkeypatch):
-    """Populate _injected_events with 180 days × 3 services of clean data."""
-    from routes import routes_events
+    """Populate the test user's events store with 180 days × 3 services."""
+    from core.user_context import reset_current_user_id
 
     dates = pd.date_range("2026-01-01", periods=180, freq="D")
     rows: list[dict] = []
     rng = np.random.default_rng(seed=42)
     for i, d in enumerate(dates):
-        rows.append({
-            "ds": d.strftime("%Y-%m-%d"),
-            "Sous-total (€)": float(100 + 10 * np.sin(2 * np.pi * i / 30) + rng.normal(0, 2)),
-            "service": "Cloud SQL",
-            "description": "",
-        })
-        rows.append({
-            "ds": d.strftime("%Y-%m-%d"),
-            "Sous-total (€)": float(50 + rng.normal(0, 1)),
-            "service": "BigQuery",
-            "description": "",
-        })
-        rows.append({
-            "ds": d.strftime("%Y-%m-%d"),
-            "Sous-total (€)": float(30 + 5 * (i % 7 == 0) + rng.normal(0, 0.5)),
-            "service": "Cloud Storage",
-            "description": "",
-        })
+        rows.append(
+            {
+                "ds": d.strftime("%Y-%m-%d"),
+                "Sous-total (€)": float(100 + 10 * np.sin(2 * np.pi * i / 30) + rng.normal(0, 2)),
+                "service": "Cloud SQL",
+                "description": "",
+            }
+        )
+        rows.append(
+            {
+                "ds": d.strftime("%Y-%m-%d"),
+                "Sous-total (€)": float(50 + rng.normal(0, 1)),
+                "service": "BigQuery",
+                "description": "",
+            }
+        )
+        rows.append(
+            {
+                "ds": d.strftime("%Y-%m-%d"),
+                "Sous-total (€)": float(30 + 5 * (i % 7 == 0) + rng.normal(0, 0.5)),
+                "service": "Cloud Storage",
+                "description": "",
+            }
+        )
 
-    monkeypatch.setattr(routes_events, "_injected_events", rows)
+    tok = _inject_for_test_user(rows)
 
     from data.loader import invalidate_cache
+
     invalidate_cache()
     from core.cache import app_cache
+
     app_cache.clear()
 
     yield dates
 
-    # Cleanup happens automatically via monkeypatch teardown
+    reset_current_user_id(tok)
+    _cleanup_test_user()
     invalidate_cache()
     app_cache.clear()
 
@@ -62,6 +96,7 @@ def synthetic_events(monkeypatch):
 # ─────────────────────────────────────────────────────────────────────────────
 # Loader — pivot correctness
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def test_daily_from_events_sums_by_date(synthetic_events):
     """load_daily_costs must sum all services per day."""
@@ -89,13 +124,16 @@ def test_per_service_pivot_shape(synthetic_events):
 # Drift — mathematical invariants
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def test_ks_identical_distributions_gives_high_pvalue(synthetic_events):
     """When ref and cur come from the same distribution, KS p-value must be > 0.05."""
     from analysis.advanced import compute_drift
 
     result = compute_drift(reference_frac=0.5, psi_bins=10)
     # The synthetic series is stationary; drift must not be detected
-    assert result.ks.p_value > 0.05, f"KS falsely detected drift on stationary series: p={result.ks.p_value}"
+    assert result.ks.p_value > 0.05, (
+        f"KS falsely detected drift on stationary series: p={result.ks.p_value}"
+    )
     assert result.ks.drift_detected is False
 
 
@@ -115,41 +153,54 @@ def test_psi_shifted_distribution_detects_drift(monkeypatch):
     edges to be well-defined — a perfectly constant reference is a degenerate
     case where PSI is undefined and we return "insufficient-data".
     """
-    from routes import routes_events
+    from core.user_context import reset_current_user_id
 
     n = 200
     dates = pd.date_range("2026-01-01", periods=n, freq="D")
     rng = np.random.default_rng(seed=7)
-    values = np.concatenate([
-        100.0 + rng.normal(0, 5, 100),
-        500.0 + rng.normal(0, 5, 100),
-    ])
+    values = np.concatenate(
+        [
+            100.0 + rng.normal(0, 5, 100),
+            500.0 + rng.normal(0, 5, 100),
+        ]
+    )
     rows = [
-        {"ds": d.strftime("%Y-%m-%d"), "Sous-total (€)": float(v), "service": "X", "description": ""}
-        for d, v in zip(dates, values)
+        {
+            "ds": d.strftime("%Y-%m-%d"),
+            "Sous-total (€)": float(v),
+            "service": "X",
+            "description": "",
+        }
+        for d, v in zip(dates, values, strict=True)
     ]
-    monkeypatch.setattr(routes_events, "_injected_events", rows)
+    tok = _inject_for_test_user(rows)
 
-    from data.loader import invalidate_cache
     from core.cache import app_cache
+    from data.loader import invalidate_cache
+
     invalidate_cache()
     app_cache.clear()
 
-    from analysis.advanced import compute_drift
+    try:
+        from analysis.advanced import compute_drift
 
-    result = compute_drift(reference_frac=0.5, psi_bins=10)
-    assert result.psi.psi > 0.25, f"PSI failed to detect a 5x mean shift: {result.psi.psi}"
-    assert result.psi.verdict == "significant"
-    assert result.ks.drift_detected is True
+        result = compute_drift(reference_frac=0.5, psi_bins=10)
+        assert result.psi.psi > 0.25, f"PSI failed to detect a 5x mean shift: {result.psi.psi}"
+        assert result.psi.verdict == "significant"
+        assert result.ks.drift_detected is True
+    finally:
+        reset_current_user_id(tok)
+        _cleanup_test_user()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Outliers — Z-score / IQR / IsolationForest on planted anomaly
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def test_outlier_methods_agree_on_planted_spike(monkeypatch):
     """A single 10-sigma spike in an otherwise flat series must be flagged."""
-    from routes import routes_events
+    from core.user_context import reset_current_user_id
 
     n = 120
     dates = pd.date_range("2026-01-01", periods=n, freq="D")
@@ -159,30 +210,41 @@ def test_outlier_methods_agree_on_planted_spike(monkeypatch):
     values = 100.0 + rng.normal(0, 0.5, n)
     values[60] = 1000.0  # extreme outlier
     rows = [
-        {"ds": d.strftime("%Y-%m-%d"), "Sous-total (€)": float(v), "service": "X", "description": ""}
-        for d, v in zip(dates, values)
+        {
+            "ds": d.strftime("%Y-%m-%d"),
+            "Sous-total (€)": float(v),
+            "service": "X",
+            "description": "",
+        }
+        for d, v in zip(dates, values, strict=True)
     ]
-    monkeypatch.setattr(routes_events, "_injected_events", rows)
+    tok = _inject_for_test_user(rows)
 
-    from data.loader import invalidate_cache
     from core.cache import app_cache
+    from data.loader import invalidate_cache
+
     invalidate_cache()
     app_cache.clear()
 
-    from analysis.advanced import compute_outliers
+    try:
+        from analysis.advanced import compute_outliers
 
-    r = compute_outliers(z_thresh=2.0, iqr_mult=1.5)
-    spike_row = next(row for row in r.rows if row.date == dates[60].strftime("%Y-%m-%d"))
+        r = compute_outliers(z_thresh=2.0, iqr_mult=1.5)
+        spike_row = next(row for row in r.rows if row.date == dates[60].strftime("%Y-%m-%d"))
 
-    # Every method must flag the planted outlier
-    assert abs(spike_row.zscore) > 5, f"Z-score too small: {spike_row.zscore}"
-    assert spike_row.iqr_flag is True
-    assert spike_row.isolation_flag is True
+        # Every method must flag the planted outlier
+        assert abs(spike_row.zscore) > 5, f"Z-score too small: {spike_row.zscore}"
+        assert spike_row.iqr_flag is True
+        assert spike_row.isolation_flag is True
+    finally:
+        reset_current_user_id(tok)
+        _cleanup_test_user()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Scaling — invariants of each scaler
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def test_scaling_standard_has_mean_zero_var_one(synthetic_events):
     """StandardScaler output must have mean ≈ 0 and std ≈ 1."""
@@ -211,6 +273,7 @@ def test_scaling_minmax_bounded(synthetic_events):
 # PCA — variance ratios must be positive, non-increasing, and cumulative
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def test_pca_variance_ratios_non_increasing_and_bounded(synthetic_events):
     """PCA components must be sorted by variance descending, all in [0, 1]."""
     from analysis.advanced import compute_dim_reduction
@@ -229,6 +292,7 @@ def test_pca_variance_ratios_non_increasing_and_bounded(synthetic_events):
 # KPI — no NaN on tiny series (regression for services.py CV bug)
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def test_kpi_service_shares_never_nan(monkeypatch):
     """No CV / pct / cum_pct should ever be NaN, even on tiny/single-datapoint services.
 
@@ -236,33 +300,44 @@ def test_kpi_service_shares_never_nan(monkeypatch):
     a Pydantic float silently serializes to `null` on the wire, which the
     frontend can't chart.
     """
-    from routes import routes_events
+    from core.user_context import reset_current_user_id
 
     rows = [
         {"ds": "2026-01-01", "Sous-total (€)": 100.0, "service": "SoloService", "description": ""},
         {"ds": "2026-01-01", "Sous-total (€)": 50.0, "service": "OtherService", "description": ""},
         {"ds": "2026-01-02", "Sous-total (€)": 60.0, "service": "OtherService", "description": ""},
     ]
-    monkeypatch.setattr(routes_events, "_injected_events", rows)
+    tok = _inject_for_test_user(rows)
 
-    from data.loader import invalidate_cache
     from core.cache import app_cache
+    from data.loader import invalidate_cache
+
     invalidate_cache()
     app_cache.clear()
 
-    from analysis.services import get_service_shares
+    try:
+        from analysis.services import get_service_shares
 
-    shares = get_service_shares()
-    assert len(shares) == 2
-    for s in shares:
-        # NaN != NaN in IEEE 754 — this catches every NaN leaking to the API.
-        for field, value in [("cost", s.cost), ("pct", s.pct), ("cv", s.cv), ("cum_pct", s.cum_pct)]:
-            assert value == value, f"NaN in {s.service}.{field}: {s}"
+        shares = get_service_shares()
+        assert len(shares) == 2
+        for s in shares:
+            # NaN != NaN in IEEE 754 — this catches every NaN leaking to the API.
+            for field, value in [
+                ("cost", s.cost),
+                ("pct", s.pct),
+                ("cv", s.cv),
+                ("cum_pct", s.cum_pct),
+            ]:
+                assert value == value, f"NaN in {s.service}.{field}: {s}"
+    finally:
+        reset_current_user_id(tok)
+        _cleanup_test_user()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Ensemble — weights sum to 1, bias² + var ≈ MSE
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def test_ensemble_weights_sum_to_one(synthetic_events):
     """Inverse-MAE weights must be normalised to sum to 1."""

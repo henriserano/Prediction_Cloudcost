@@ -8,14 +8,17 @@ branch. See :mod:`schemas.local_billing` for the exact response contract.
 Aggregation is on the same fingerprint the rest of Analyse reads from — the
 events store when populated, the parquet demo fallback otherwise.
 """
+
 from __future__ import annotations
 
 from typing import Annotated
 
 import pandas as pd
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 
 from core.cache import app_cache
+from core.session import require_current_user_id
+from core.user_context import current_user_scope
 from data.loader import get_last_source, load_daily_per_service
 from schemas.gcp import DateRange
 from schemas.local_billing import (
@@ -24,8 +27,11 @@ from schemas.local_billing import (
     LocalBillingResponse,
 )
 
-
-router = APIRouter(prefix="/api/events", tags=["events"])
+router = APIRouter(
+    prefix="/api/events",
+    tags=["events"],
+    dependencies=[Depends(require_current_user_id)],
+)
 
 
 @router.get(
@@ -43,7 +49,8 @@ def local_billing(
     parquet demo fallback if empty), so the numbers stay consistent between
     the per-file view (Fichier tab) and the consolidated portfolio view.
     """
-    cache_key = f"local_billing:{months}"
+    # SEC-020: scope the cache key by user to prevent cross-tenant reads.
+    cache_key = f"{current_user_scope()}:local_billing:{months}"
     cached = app_cache.get(cache_key)
     if cached is not None:
         return cached
@@ -80,7 +87,7 @@ def local_billing(
             by_month=[],
             currency="EUR",
             source=get_last_source().get("daily_per_service", "unknown"),
-            event_count=int(len(df)),
+            event_count=len(df),
         )
         app_cache.set(cache_key, response)
         return response
@@ -116,7 +123,7 @@ def local_billing(
         by_month=by_month,
         currency="EUR",
         source=get_last_source().get("daily_per_service", "unknown"),
-        event_count=int(len(df)),
+        event_count=len(df),
     )
     app_cache.set(cache_key, response)
     return response

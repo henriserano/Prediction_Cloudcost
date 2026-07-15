@@ -1,14 +1,17 @@
 from __future__ import annotations
 
-from typing import Optional
-
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
 from core.config import get_settings
+from core.session import require_current_user_id
 from data.loader import get_last_source, load_daily_costs, load_daily_per_service
 
-router = APIRouter(prefix="/api/data", tags=["data"])
+router = APIRouter(
+    prefix="/api/data",
+    tags=["data"],
+    dependencies=[Depends(require_current_user_id)],
+)
 
 
 class DataStatus(BaseModel):
@@ -24,8 +27,8 @@ class DataStatus(BaseModel):
     rows_daily: int
     rows_per_service: int
     services_count: int
-    period_start: Optional[str] = None
-    period_end: Optional[str] = None
+    period_start: str | None = None
+    period_end: str | None = None
     parquet_fallback_enabled: bool
     bigquery_export_configured: bool = Field(
         description="True when GCP_BILLING_EXPORT_* env vars are all set."
@@ -59,8 +62,8 @@ def data_status() -> DataStatus:
 
     return DataStatus(
         source=source,
-        rows_daily=int(len(daily)),
-        rows_per_service=int(len(per_svc)),
+        rows_daily=len(daily),
+        rows_per_service=len(per_svc),
         services_count=services_count,
         period_start=period_start,
         period_end=period_end,
