@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 
 from analysis.service_taxonomy import categorize
-from core.cache import app_cache
+from core.cache import app_cache, scoped_key
 from data.loader import load_daily_costs, load_daily_per_service
 from schemas.analytics import KPIData, ServiceShare
 
@@ -14,7 +14,9 @@ def _service_cols(df: pd.DataFrame) -> list[str]:
 
 
 def get_service_shares() -> list[ServiceShare]:
-    cached = app_cache.get("analytics:services")
+    # SEC-020: scoped per user — the per-service loader underneath is.
+    _cache_key = scoped_key("analytics:services")
+    cached = app_cache.get(_cache_key)
     if cached is not None:
         return cached
     df = load_daily_per_service()
@@ -49,7 +51,7 @@ def get_service_shares() -> list[ServiceShare]:
                 category=categorize(svc),
             )
         )
-    app_cache.set("analytics:services", result)
+    app_cache.set(_cache_key, result)
     return result
 
 
@@ -75,7 +77,10 @@ def _empty_kpi() -> KPIData:
 
 
 def get_kpi() -> KPIData:
-    cached = app_cache.get("analytics:kpi")
+    # SEC-020: scoped per user — an unscoped "analytics:kpi" key served user
+    # A's totals, top service and periods to user B on the next cache hit.
+    _cache_key = scoped_key("analytics:kpi")
+    cached = app_cache.get(_cache_key)
     if cached is not None:
         return cached
     daily = load_daily_costs()
@@ -83,7 +88,7 @@ def get_kpi() -> KPIData:
 
     if len(daily) == 0 or "y" not in daily.columns:
         kpi = _empty_kpi()
-        app_cache.set("analytics:kpi", kpi)
+        app_cache.set(_cache_key, kpi)
         return kpi
 
     arr = daily["y"].values.astype(float)
@@ -103,11 +108,15 @@ def get_kpi() -> KPIData:
     last_14_avg = float(np.mean(last_window))
     forecast_30 = round(last_14_avg * 30, 2)
 
-    # Anomaly count (Z > 2) — std needs ≥ 2 samples with ddof=1.
-    if len(arr) >= 2:
-        mean_, std_ = np.mean(arr), np.std(arr, ddof=1)
-        anomaly_count = int(np.sum(np.abs((arr - mean_) / std_) > 2.0)) if std_ > 0 else 0
-    else:
+    # Anomaly count (|Z| > 2) — delegate to get_anomalies so the KPI card and
+    # the anomalies tab agree (both now score STL residuals, not the raw
+    # series whose trend inflates the global std). Falls back to 0 when the
+    # series is too short for the anomaly pipeline.
+    try:
+        from analysis.timeseries import get_anomalies
+
+        anomaly_count = sum(1 for p in get_anomalies(2.0) if p.is_anomaly)
+    except Exception:
         anomaly_count = 0
 
     # Top service
@@ -132,5 +141,5 @@ def get_kpi() -> KPIData:
         period_start=daily["ds"].iloc[0].strftime("%Y-%m-%d"),
         period_end=daily["ds"].iloc[-1].strftime("%Y-%m-%d"),
     )
-    app_cache.set("analytics:kpi", kpi)
+    app_cache.set(_cache_key, kpi)
     return kpi

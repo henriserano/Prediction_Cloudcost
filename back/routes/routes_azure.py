@@ -526,8 +526,8 @@ def azure_sync(request: Request, body: AzureSyncRequest) -> AzureSyncResponse:
             details={"start": start_iso, "end": end_iso, "subscription_id": sub_id},
         )
 
-    from routes.routes_events import ingest_events
     from core.session import require_current_user_id
+    from routes.routes_events import ingest_events
 
     # ingest_events is a FastAPI route: its ``user_id`` param is a Depends()
     # sentinel that only gets resolved through the router. Calling it directly

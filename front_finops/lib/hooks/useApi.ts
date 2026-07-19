@@ -176,12 +176,18 @@ export function useForecastSummary(horizon = 60, model: string | null = "AutoETS
   })
 }
 
-export function useModelBenchmarks() {
+/**
+ * Benchmark walk-forward des 6 modèles. Passer `horizon` (celui affiché sur
+ * la page forecast) pour recevoir le bucket de CV (7/14/28) que le backend a
+ * utilisé pour élire `summary.bestModel` — sans lui, le tableau (bucket 14)
+ * peut désigner un champion différent de celui des cartes KPI.
+ */
+export function useModelBenchmarks(horizon?: number) {
   return useQuery<ModelBenchmark[]>({
-    queryKey: ["model-benchmarks"],
+    queryKey: ["model-benchmarks", horizon ?? null],
     queryFn: () =>
       api
-        .get("/api/forecast/models")
+        .get("/api/forecast/models", horizon != null ? { params: { horizon } } : undefined)
         .then(
           (r) =>
             parseApi(

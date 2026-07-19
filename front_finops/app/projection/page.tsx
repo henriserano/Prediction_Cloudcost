@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useMemo, useState } from "react"
 import {
   ComposedChart, Line, Area, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, Legend, ReferenceLine,
@@ -177,13 +177,30 @@ export default function ForecastPage() {
   const [userSelectedModel, setUserSelectedModel] = useState<string | null>(null)
   const [horizon, setHorizon] = useState(60)
 
-  const { data: benchmarks, isLoading: benchLoading, error: benchError, refetch: refetchBench } = useModelBenchmarks()
-  const bestModel = benchmarks?.find((m) => m.winner)?.model ?? null
+  // Bucket de CV aligné sur l'horizon affiché : le tableau et summary.bestModel
+  // sont ainsi élus par le même benchmark (sinon tableau=CV14 vs cartes=CV28).
+  const { data: benchmarks, isLoading: benchLoading, error: benchError, refetch: refetchBench } = useModelBenchmarks(horizon)
+  // Séries trop courtes pour la CV : aucun winner n'est désigné — retomber sur
+  // la première ligne pour que la page ait quand même un modèle par défaut.
+  const bestModel = benchmarks?.find((m) => m.winner)?.model ?? benchmarks?.[0]?.model ?? null
   const selectedModel = userSelectedModel ?? bestModel
   const setSelectedModel = setUserSelectedModel
 
   const { data: points, isLoading: forecastLoading, error: forecastError, refetch: refetchForecast } = useForecast(horizon, selectedModel)
   const { data: summary, isLoading: summaryLoading, error: summaryError, refetch: refetchSummary } = useForecastSummary(horizon, selectedModel)
+
+  // Les IC ne sont plus plafonnés côté backend (le clamp cosmétique détruisait
+  // la garantie de couverture des bandes 80/95%). On borne donc l'AFFICHAGE et
+  // non les données : l'axe Y est cadré sur réel/prévision/IC80, et l'IC95 est
+  // simplement coupé s'il explose sur une série courte et bruitée.
+  const yDomainMax = useMemo(() => {
+    if (!points || points.length === 0) return undefined
+    let m = 0
+    for (const p of points) {
+      m = Math.max(m, p.actual ?? 0, p.forecast, p.high80)
+    }
+    return m > 0 ? Math.ceil(m * 1.15) : undefined
+  }, [points])
 
   const hasError = !!(benchError || forecastError || summaryError)
 
@@ -296,7 +313,15 @@ export default function ForecastPage() {
                 axisLine={false}
                 interval={Math.ceil(horizon / 8)}
               />
-              <YAxis tick={{ fontSize: 10, fill: COLOR_MUTED }} tickLine={false} axisLine={false} unit=" €" width={56} />
+              <YAxis
+                tick={{ fontSize: 10, fill: COLOR_MUTED }}
+                tickLine={false}
+                axisLine={false}
+                unit=" €"
+                width={56}
+                domain={yDomainMax != null ? [0, yDomainMax] : undefined}
+                allowDataOverflow
+              />
               <Tooltip
                 cursor={{ stroke: COLOR_GREEN, strokeWidth: 1, strokeDasharray: "3 3" }}
                 contentStyle={{

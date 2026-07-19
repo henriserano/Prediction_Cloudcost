@@ -148,17 +148,21 @@ export default function DistributionTab() {
       {/* Normality tests */}
       <SectionCard
         title="Tests de normalité"
-        description="Trois tests indépendants · verdict combiné en pied de tableau"
+        description={
+          data.normalityTests.some((t) => t.basis === "stl_residual")
+            ? "Trois tests indépendants, appliqués aux résidus STL · verdict combiné en pied de tableau"
+            : "Trois tests indépendants · verdict combiné en pied de tableau"
+        }
         info={
           <Explain title="Tests de normalité" tone="info">
             <p>
-              Trois tests statistiques évaluent si votre série suit une loi normale N(μ, σ²). H₀ = &laquo; la série est normale &raquo;.
+              Trois tests statistiques évaluent la normalité N(μ, σ²). H₀ = &laquo; l&apos;échantillon est normal &raquo;. Ils sont appliqués aux <strong>résidus STL</strong> (série débarrassée de sa tendance et de sa saisonnalité hebdo) : sur la série brute, autocorrélée, leurs p-values ne seraient pas valides.
             </p>
             <p>
               <strong>Jarque-Bera</strong> : rapide, basé sur skewness + kurtosis. <strong>Shapiro-Wilk</strong> : puissant pour petits échantillons (n &lt; 5000). <strong>D&apos;Agostino K²</strong> : combine skewness et kurtosis avec correction.
             </p>
             <p className="text-muted-foreground">
-              Règle : <strong>p &lt; 0.05</strong> → on rejette H₀ → série non-normale.
+              Règle : <strong>p &lt; 0.05</strong> → on rejette H₀ → résidus non-normaux.
             </p>
           </Explain>
         }

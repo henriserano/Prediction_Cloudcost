@@ -425,3 +425,118 @@ def test_legacy_model_aliases_resolve():
         assert honest in MODELS
     assert resolve_model("ETS") == "ETS"
     assert resolve_model("nope") is None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SEC-020 — analytics/forecast result cache is scoped per user
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_analytics_and_forecast_cache_isolated_between_users(monkeypatch):
+    """Regression for the cross-tenant cache leak: user A's cached /api/kpi
+    and /api/forecast results must never be served to user B.
+
+    Before the fix, the compute layer cached under global keys
+    ("analytics:kpi", "forecast:ETS:30") while the data underneath was
+    per-user — the first user to warm the cache decided everyone's numbers.
+    """
+    from core.config import get_settings
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "api_key", "")
+    monkeypatch.setattr(settings, "env", "dev")
+
+    def _events(amount: float) -> dict:
+        dates = pd.date_range("2026-01-01", periods=30, freq="D")
+        return {
+            "events": [
+                {"date": d.strftime("%Y-%m-%d"), "service": "Cloud SQL", "cost": amount}
+                for d in dates
+            ],
+            "replace": True,
+        }
+
+    cookie_name = settings.session_cookie_name
+    cookies_a = {cookie_name: _issue_test_session("user-a")}
+    cookies_b = {cookie_name: _issue_test_session("user-b")}
+
+    async with _client() as client:
+        r = await client.post("/api/events", json=_events(100.0), cookies=cookies_a)
+        assert r.status_code == 200
+        r = await client.post("/api/events", json=_events(200.0), cookies=cookies_b)
+        assert r.status_code == 200
+
+        # A warms the cache first — B's read right after is the leak scenario.
+        kpi_a = (await client.get("/api/kpi", cookies=cookies_a)).json()
+        kpi_b = (await client.get("/api/kpi", cookies=cookies_b)).json()
+        # Second read for A hits the cache and must still be A's numbers.
+        kpi_a2 = (await client.get("/api/kpi", cookies=cookies_a)).json()
+
+        fc_a = (
+            await client.get("/api/forecast/summary?horizon=30&model=ETS", cookies=cookies_a)
+        ).json()
+        fc_b = (
+            await client.get("/api/forecast/summary?horizon=30&model=ETS", cookies=cookies_b)
+        ).json()
+
+    assert kpi_a["total_spend"] == pytest.approx(30 * 100.0)
+    assert kpi_b["total_spend"] == pytest.approx(30 * 200.0)
+    assert kpi_a2 == kpi_a
+
+    # Forecasts on a flat series converge to the series level — each user must
+    # get a total in their own order of magnitude, not the other's.
+    assert fc_a["total_forecast"] == pytest.approx(30 * 100.0, rel=0.15)
+    assert fc_b["total_forecast"] == pytest.approx(30 * 200.0, rel=0.15)
+
+
+@pytest.mark.asyncio
+async def test_ingest_invalidates_own_scope_only(monkeypatch):
+    """An ingest by user B must not evict user A's cached results (the old
+    global clear() forced a full walk-forward CV recompute for everyone), and
+    B must see fresh numbers immediately after their own re-ingest."""
+    from core.config import get_settings
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "api_key", "")
+    monkeypatch.setattr(settings, "env", "dev")
+
+    def _events(amount: float, n: int = 20) -> dict:
+        dates = pd.date_range("2026-02-01", periods=n, freq="D")
+        return {
+            "events": [
+                {"date": d.strftime("%Y-%m-%d"), "service": "BigQuery", "cost": amount}
+                for d in dates
+            ],
+            "replace": True,
+        }
+
+    cookie_name = settings.session_cookie_name
+    cookies_a = {cookie_name: _issue_test_session("user-a")}
+    cookies_b = {cookie_name: _issue_test_session("user-b")}
+
+    from core.cache import app_cache
+
+    async with _client() as client:
+        assert (
+            await client.post("/api/events", json=_events(50.0), cookies=cookies_a)
+        ).status_code == 200
+        kpi_a = (await client.get("/api/kpi", cookies=cookies_a)).json()
+        assert app_cache.get("user-a:analytics:kpi") is not None
+
+        # B ingests — A's cached entry must survive.
+        assert (
+            await client.post("/api/events", json=_events(70.0), cookies=cookies_b)
+        ).status_code == 200
+        assert app_cache.get("user-a:analytics:kpi") is not None
+
+        # B re-ingests different amounts — B's own KPI must refresh.
+        kpi_b1 = (await client.get("/api/kpi", cookies=cookies_b)).json()
+        assert (
+            await client.post("/api/events", json=_events(90.0), cookies=cookies_b)
+        ).status_code == 200
+        kpi_b2 = (await client.get("/api/kpi", cookies=cookies_b)).json()
+
+    assert kpi_a["total_spend"] == pytest.approx(20 * 50.0)
+    assert kpi_b1["total_spend"] == pytest.approx(20 * 70.0)
+    assert kpi_b2["total_spend"] == pytest.approx(20 * 90.0)

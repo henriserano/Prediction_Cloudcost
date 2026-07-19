@@ -280,24 +280,48 @@ def compute_drift(reference_frac: float = 0.5, psi_bins: int = 10) -> DriftRespo
         ]
         psi = PSIResult(psi=round(psi_value, 6), verdict=verdict, bins=bins)
 
-    # 3. Page-Hinkley test — online detection of a mean shift
-    # PH statistic: m_t = sum_{i<=t} (x_i - mean_i - delta); alarm if m_t - min(m) > lambda
-    delta = 0.005 * float(np.mean(y))
-    threshold = 5.0 * float(np.std(y))
+    # 3. Page-Hinkley test — online detection of a mean shift.
+    # Three fixes over the naive version:
+    #  - delta/lambda calibrated on the REFERENCE window only (calibrating on
+    #    the full series leaks post-change data into the threshold);
+    #  - two-sided: a cost drop is a changepoint too, not just an increase;
+    #  - reset after each alarm, so one sustained shift counts as ONE
+    #    changepoint instead of flagging every subsequent point (the old
+    #    counter reported dozens of "changepoints" for a single level shift).
+    delta = 0.005 * float(np.mean(ref))
+    ref_std = float(np.std(ref))
+    # A (near-)constant reference window is a first-class case here (simulation
+    # pushes and spread monthly exports emit flat plateaus): 5*std(ref) would
+    # be ~0 and every noisy point of the current window would alarm. Fall back
+    # to the full-series std for the threshold in that case.
+    if not np.isfinite(ref_std) or ref_std < 1e-9:
+        ref_std = float(np.std(y))
+    threshold = 5.0 * ref_std
     mean_running = 0.0
-    m_t = 0.0
-    m_min = 0.0
+    count = 0
+    m_pos = 0.0  # cumulative deviation above the mean (detects increases)
+    min_pos = 0.0
+    m_neg = 0.0  # cumulative deviation below the mean (detects decreases)
+    max_neg = 0.0
     ph_points: list[PageHinkleyPoint] = []
     n_changes = 0
     for i, val in enumerate(y):
-        n = i + 1
-        mean_running = mean_running + (val - mean_running) / n
-        m_t += val - mean_running - delta
-        m_min = min(m_min, m_t)
-        gap = m_t - m_min
+        count += 1
+        mean_running = mean_running + (val - mean_running) / count
+        m_pos += val - mean_running - delta
+        min_pos = min(min_pos, m_pos)
+        m_neg += val - mean_running + delta
+        max_neg = max(max_neg, m_neg)
+        gap = max(m_pos - min_pos, max_neg - m_neg)
         detected = gap > threshold
         if detected:
             n_changes += 1
+            # Restart accumulation post-alarm so the detector re-arms on the
+            # new regime instead of re-flagging the same shift forever.
+            count = 0
+            mean_running = 0.0
+            m_pos = min_pos = 0.0
+            m_neg = max_neg = 0.0
         ph_points.append(
             PageHinkleyPoint(date=ds[i], ph_stat=round(float(gap), 4), change_detected=detected)
         )
@@ -334,7 +358,8 @@ def compute_distribution() -> DistributionResponse:
     # spam RuntimeWarning: "catastrophic cancellation" and return NaN. Skew
     # and excess kurtosis are 0 by definition on a strictly constant signal —
     # short-circuit so we don't leak NaN downstream nor pollute the logs.
-    if float(np.std(y, ddof=1)) < 1e-12:
+    y_std = float(np.std(y, ddof=1))
+    if y_std < 1e-12:
         skew = 0.0
         kurt = 0.0
     else:
@@ -352,39 +377,64 @@ def compute_distribution() -> DistributionResponse:
 
     tests: list[NormalityTest] = []
 
-    # Jarque-Bera (asymptotic, good for n > 2000, informative for smaller)
-    jb_stat, jb_p = stats.jarque_bera(y)
-    tests.append(
-        NormalityTest(
-            name="jarque_bera",
-            statistic=round(float(jb_stat), 6),
-            p_value=round(float(jb_p), 6),
-            is_normal=bool(jb_p > 0.05),
-        )
-    )
+    # Normality tests assume i.i.d. samples — a raw daily cost series is
+    # trended and autocorrelated, so their p-values on `y` are invalid (the
+    # tests mostly reject because of the trend, not the distribution shape).
+    # Run them on the STL residuals (trend + weekly seasonality removed) when
+    # the series is long enough; the `basis` field tells the caller which
+    # input was actually tested. Skew/kurtosis/Box-Cox/QQ above stay on the
+    # raw series: they are descriptive, no p-value involved. On a strictly
+    # constant series scipy returns NaN statistics — return no tests at all
+    # rather than NaN in the JSON payload.
+    if y_std >= 1e-12:
+        test_input = y
+        basis = "raw"
+        if len(y) >= 14:
+            try:
+                from statsmodels.tsa.seasonal import STL
 
-    # Shapiro-Wilk (best for n < 5000)
-    if len(y) <= 5000:
-        sh_stat, sh_p = stats.shapiro(y)
+                test_input = np.asarray(STL(y, period=7, robust=True).fit().resid, dtype=float)
+                basis = "stl_residual"
+            except Exception:
+                test_input = y
+                basis = "raw"
+
+        # Jarque-Bera (asymptotic, good for n > 2000, informative for smaller)
+        jb_stat, jb_p = stats.jarque_bera(test_input)
         tests.append(
             NormalityTest(
-                name="shapiro_wilk",
-                statistic=round(float(sh_stat), 6),
-                p_value=round(float(sh_p), 6),
-                is_normal=bool(sh_p > 0.05),
+                name="jarque_bera",
+                statistic=round(float(jb_stat), 6),
+                p_value=round(float(jb_p), 6),
+                is_normal=bool(jb_p > 0.05),
+                basis=basis,
             )
         )
 
-    # D'Agostino K^2
-    da_stat, da_p = stats.normaltest(y)
-    tests.append(
-        NormalityTest(
-            name="dagostino_k2",
-            statistic=round(float(da_stat), 6),
-            p_value=round(float(da_p), 6),
-            is_normal=bool(da_p > 0.05),
+        # Shapiro-Wilk (best for n < 5000)
+        if len(test_input) <= 5000:
+            sh_stat, sh_p = stats.shapiro(test_input)
+            tests.append(
+                NormalityTest(
+                    name="shapiro_wilk",
+                    statistic=round(float(sh_stat), 6),
+                    p_value=round(float(sh_p), 6),
+                    is_normal=bool(sh_p > 0.05),
+                    basis=basis,
+                )
+            )
+
+        # D'Agostino K^2
+        da_stat, da_p = stats.normaltest(test_input)
+        tests.append(
+            NormalityTest(
+                name="dagostino_k2",
+                statistic=round(float(da_stat), 6),
+                p_value=round(float(da_p), 6),
+                is_normal=bool(da_p > 0.05),
+                basis=basis,
+            )
         )
-    )
 
     # QQ points — theoretical vs sample quantiles
     theoretical = stats.norm.ppf(np.linspace(0.01, 0.99, min(50, len(y))))

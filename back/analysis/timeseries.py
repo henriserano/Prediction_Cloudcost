@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
-from core.cache import app_cache
+from core.cache import app_cache, scoped_key
 from core.errors import NotEnoughData
 from data.loader import load_daily_costs
 from schemas.analytics import (
@@ -62,7 +62,11 @@ def _trend_ci(s: pd.Series, z: float = 1.96) -> tuple[pd.Series, pd.Series]:
 
 
 def get_daily_series(last_n: int | None = None) -> list[DailyPoint]:
-    _cache_key = "analytics:daily" if last_n is None else f"analytics:daily:{last_n}"
+    # SEC-020: all analytics cache keys are scoped per user — the loader
+    # underneath is, so an unscoped key would leak user A's series to user B.
+    _cache_key = (
+        scoped_key("analytics:daily") if last_n is None else scoped_key(f"analytics:daily:{last_n}")
+    )
     _cached = app_cache.get(_cache_key)
     if _cached is not None:
         return _cached
@@ -89,7 +93,8 @@ def get_daily_series(last_n: int | None = None) -> list[DailyPoint]:
 
 
 def get_descriptive_stats() -> DescriptiveStats:
-    cached = app_cache.get("analytics:stats")
+    _cache_key = scoped_key("analytics:stats")
+    cached = app_cache.get(_cache_key)
     if cached is not None:
         return cached
     s = _series()
@@ -108,12 +113,13 @@ def get_descriptive_stats() -> DescriptiveStats:
         min=round(float(np.min(arr)), 4),
         max=round(float(np.max(arr)), 4),
     )
-    app_cache.set("analytics:stats", result)
+    app_cache.set(_cache_key, result)
     return result
 
 
 def get_stationarity() -> StationarityResult:
-    cached = app_cache.get("analytics:stationarity")
+    _cache_key = scoped_key("analytics:stationarity")
+    cached = app_cache.get(_cache_key)
     if cached is not None:
         return cached
     from statsmodels.tsa.stattools import adfuller, kpss
@@ -141,12 +147,13 @@ def get_stationarity() -> StationarityResult:
     )
 
     result = StationarityResult(adf=adf, kpss=kpss_stat)
-    app_cache.set("analytics:stationarity", result)
+    app_cache.set(_cache_key, result)
     return result
 
 
 def get_stl_decomposition() -> tuple[list[STLPoint], STLStrengths]:
-    cached = app_cache.get("analytics:stl")
+    _cache_key = scoped_key("analytics:stl")
+    cached = app_cache.get(_cache_key)
     if cached is not None:
         return cached
     from statsmodels.tsa.seasonal import STL
@@ -176,21 +183,36 @@ def get_stl_decomposition() -> tuple[list[STLPoint], STLStrengths]:
     ]
     strengths = STLStrengths(ft=round(ft, 4), fs=round(fs, 4), period=7)
     result = (points, strengths)
-    app_cache.set("analytics:stl", result)
+    app_cache.set(_cache_key, result)
     return result
 
 
 def get_anomalies(z_threshold: float = 2.0) -> list[AnomalyPoint]:
     # SEC: quantize the float in the cache key so ?z_threshold=2.0000001 and
     # 2.0000002 collide instead of each spawning a new entry.
-    _cache_key = f"analytics:anomalies:{round(z_threshold, 2):.2f}"
+    _cache_key = scoped_key(f"analytics:anomalies:{round(z_threshold, 2):.2f}")
     cached = app_cache.get(_cache_key)
     if cached is not None:
         return cached
     s = _series()
     arr = s.values.astype(float)
     _require_min_points(len(arr), 2, "anomaly detection")
-    mean_, std_ = float(np.mean(arr)), float(np.std(arr, ddof=1))
+
+    # Z-scores on the raw series conflate trend and weekly seasonality with
+    # true shocks: on a growing series the global std is inflated by the trend
+    # itself, so the tail is flagged and real spikes are drowned. When the
+    # series is long enough for STL, score the residual component instead —
+    # what remains once trend + seasonality are removed is the part that can
+    # legitimately be called anomalous. Short series keep the raw fallback.
+    base = arr
+    if len(arr) >= _MIN_POINTS_SEASONAL:
+        try:
+            from statsmodels.tsa.seasonal import STL
+
+            base = STL(s, period=7, robust=True).fit().resid.values.astype(float)
+        except Exception:
+            base = arr
+    mean_, std_ = float(np.mean(base)), float(np.std(base, ddof=1))
 
     # Guard against a degenerate std (identical values across the series, which
     # happens right after a simulation push that emits N identical monthly
@@ -215,17 +237,17 @@ def get_anomalies(z_threshold: float = 2.0) -> list[AnomalyPoint]:
         AnomalyPoint(
             date=idx.strftime("%Y-%m-%d"),
             cost=round(float(val), 4),
-            zscore=round((float(val) - mean_) / std_, 4),
-            is_anomaly=bool(abs((float(val) - mean_) / std_) > z_threshold),
+            zscore=round((float(base[i]) - mean_) / std_, 4),
+            is_anomaly=bool(abs((float(base[i]) - mean_) / std_) > z_threshold),
         )
-        for idx, val in s.items()
+        for i, (idx, val) in enumerate(s.items())
     ]
     app_cache.set(_cache_key, result)
     return result
 
 
 def get_acf_pacf(nlags: int = 28) -> list[ACFPoint]:
-    _cache_key = f"analytics:acf:{nlags}"
+    _cache_key = scoped_key(f"analytics:acf:{nlags}")
     cached = app_cache.get(_cache_key)
     if cached is not None:
         return cached
@@ -233,13 +255,19 @@ def get_acf_pacf(nlags: int = 28) -> list[ACFPoint]:
 
     s = _series()
     arr = s.values.astype(float)
-    _require_min_points(len(arr), nlags + 1, f"ACF/PACF with nlags={nlags}")
-    acf_vals = acf(arr, nlags=nlags, fft=True)
-    pacf_vals = pacf(arr, nlags=nlags)
+    _require_min_points(len(arr), 8, "ACF/PACF")
+    # statsmodels pacf raises ValueError for nlags >= n//2 — with the default
+    # nlags=28 that turned every series of 29 to 56 points (the first weeks of
+    # real usage) into a 500. Cap the effective lag count instead and return
+    # however many lags the sample size statistically supports.
+    n = len(arr)
+    nlags_eff = max(1, min(nlags, n // 2 - 1))
+    acf_vals = acf(arr, nlags=nlags_eff, fft=True)
+    pacf_vals = pacf(arr, nlags=nlags_eff)
 
     result = [
         ACFPoint(lag=i, acf=round(float(acf_vals[i]), 6), pacf=round(float(pacf_vals[i]), 6))
-        for i in range(1, nlags + 1)
+        for i in range(1, nlags_eff + 1)
     ]
     app_cache.set(_cache_key, result)
     return result

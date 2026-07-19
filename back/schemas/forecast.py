@@ -25,6 +25,9 @@ class ModelBenchmark(BaseModel):
     r2: float | None = None
     score: float | None = None
     winner: bool
+    # Effective walk-forward CV horizon (days) the metrics were computed at —
+    # the ranking is only meaningful for forecasts of a comparable lead.
+    cv_horizon: int = 14
 
 
 class ForecastSummary(BaseModel):

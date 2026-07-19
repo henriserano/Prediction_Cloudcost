@@ -6,12 +6,20 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from core.cache import app_cache
 from core.logging import get_logger
+from core.user_context import reset_current_user_id, set_current_user_id
 
 logger = get_logger(__name__)
 
-# Canonical cache keys used across the application
+# Labels for the warm-up tasks (observability only — every compute function
+# below caches its own result internally under a user-scoped key, see
+# core.cache.scoped_key). Startup precompute runs with NO authenticated user,
+# so everything lands in the anonymous scope and can never shadow a real
+# user's data. Honest trade-off: authenticated routes read their own scope,
+# so each user pays the compute once at first read (then cache); the warm-up's
+# main value is exercising the full pipeline at boot (timings + failures
+# logged) and pre-filling the anonymous/demo slot. Sharing the demo results
+# across data-less users would need provenance-scoped keys — follow-up.
 CACHE_KEYS = {
     "kpi": "analytics:kpi",
     "services": "analytics:services",
@@ -32,10 +40,16 @@ def forecast_cache_key(model: str, horizon: int) -> str:
 
 
 def _run_task(key: str, fn: Callable) -> tuple[str, float, bool]:
+    # SEC-020: pin the anonymous scope explicitly. Executor threads have an
+    # empty ContextVar context anyway, but a future refactor to a
+    # context-propagating runner (anyio.to_thread) must not silently warm the
+    # cache under whichever user happened to trigger it.
+    token = set_current_user_id(None)
     t0 = time.perf_counter()
     try:
-        result = fn()
-        app_cache.set(key, result)
+        # Each compute function stores its own result under its scoped cache
+        # key — no explicit app_cache.set here, which would bypass scoping.
+        fn()
         elapsed_ms = (time.perf_counter() - t0) * 1000
         logger.info("precomputed", extra={"key": key, "ms": round(elapsed_ms, 1)})
         return key, elapsed_ms, True
@@ -45,6 +59,8 @@ def _run_task(key: str, fn: Callable) -> tuple[str, float, bool]:
             "precompute_failed", extra={"key": key, "error": str(exc), "ms": round(elapsed_ms, 1)}
         )
         return key, elapsed_ms, False
+    finally:
+        reset_current_user_id(token)
 
 
 async def warm_cache() -> dict[str, Any]:
@@ -73,7 +89,10 @@ async def warm_cache() -> dict[str, Any]:
         (CACHE_KEYS["stationarity"], get_stationarity),
         (CACHE_KEYS["stl"], get_stl_decomposition),
         (CACHE_KEYS["acf"], lambda: get_acf_pacf(28)),
+        # Both CV-horizon buckets actually served: 14 (default /models table)
+        # and 28 (the bucket every forecast with horizon >= 28 links to).
         (CACHE_KEYS["benchmarks"], get_model_benchmarks),
+        ("forecast:benchmarks:28", lambda: get_model_benchmarks(28)),
     ]
 
     for model_name in MODELS:

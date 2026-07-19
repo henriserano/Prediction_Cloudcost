@@ -359,11 +359,14 @@ def ingest_events(
             _injected_events[user_id] = current
         store_snapshot = list(_injected_events[user_id])
 
-    # Invalidate downstream caches so analytics/forecast see fresh data
+    # Invalidate downstream caches so analytics/forecast see fresh data.
+    # Scoped to the ingesting user (SEC-020): a global clear() also evicted
+    # the anonymous-scope precompute and every other user's warm entries,
+    # triggering a full walk-forward CV recompute storm for everyone.
     try:
         from core.cache import app_cache
 
-        app_cache.clear()
+        app_cache.invalidate_prefix(f"{user_id}:")
     except Exception:
         pass
 
@@ -474,10 +477,11 @@ async def upload_billing_files(
         store_snapshot = list(_injected_events[user_id])
 
     # Invalidate downstream caches so analytics/forecast see the fresh data.
+    # Scoped to the ingesting user (SEC-020) — see the JSON ingest above.
     try:
         from core.cache import app_cache
 
-        app_cache.clear()
+        app_cache.invalidate_prefix(f"{user_id}:")
     except Exception:
         pass
 

@@ -99,6 +99,10 @@ class NormalityTest(BaseModel):
     statistic: float
     p_value: float
     is_normal: bool
+    # What the test actually ran on: "stl_residual" (trend + weekly
+    # seasonality removed — required for valid p-values on an autocorrelated
+    # daily series) or "raw" (series too short for STL).
+    basis: str = "raw"
 
 
 class DistributionResponse(BaseModel):

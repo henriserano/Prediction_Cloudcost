@@ -76,6 +76,8 @@ export interface ModelBenchmark {
   r2: number
   score: number
   winner: boolean
+  /** Horizon (jours) de la CV walk-forward ayant produit ces métriques. */
+  cvHorizon?: number
 }
 
 export interface KPIData {
@@ -191,6 +193,8 @@ export interface NormalityTest {
   statistic: number
   pValue: number
   isNormal: boolean
+  /** "stl_residual" (tests sur résidus STL, p-values valides) ou "raw". */
+  basis?: string
 }
 export interface DistributionResponse {
   skewness: number

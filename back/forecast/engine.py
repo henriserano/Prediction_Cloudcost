@@ -6,38 +6,24 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 
-from core.cache import app_cache
+from core.cache import app_cache, scoped_key
 from core.errors import NotEnoughData
+from core.logging import get_logger
 from data.loader import load_daily_costs
 from schemas.forecast import ForecastPoint, ForecastSummary, ModelBenchmark
+
+logger = get_logger(__name__)
+
+# Daily billing series carry a weekly cycle (weekday/weekend usage) — this is
+# a domain assumption of the platform, not a tunable: every seasonal model and
+# STL consumer uses the same period.
+SEASONAL_PERIOD = 7
+
+_Z80, _Z95 = 1.282, 1.96
 
 # ---------------------------------------------------------------------------
 # Metric helpers
 # ---------------------------------------------------------------------------
-
-# Absolute ceiling multiplier applied to the upper confidence intervals. A
-# noisy model on a short series can otherwise emit std_r > 10× the mean and
-# push high80/high95 into the 5–6 figures range, which then drives the y-axis
-# on the front-end into meaningless territory. 10× mean(train) is generous
-# enough to preserve real uncertainty while keeping charts readable.
-_CI_UPPER_MULTIPLIER = 10.0
-
-
-def _clamp_ci_upper(ci: np.ndarray, train: np.ndarray) -> np.ndarray:
-    """Cap the upper bound of a (h, 2) CI matrix at _CI_UPPER_MULTIPLIER × mean(train).
-
-    Lower bound is left alone (models already clamp it at 0 in-place). No-op
-    when the ceiling is 0/NaN so a legitimately zero-mean series stays as-is.
-    """
-    if ci.size == 0:
-        return ci
-    mean_train = float(np.mean(train)) if len(train) else 0.0
-    if not math.isfinite(mean_train) or mean_train <= 0:
-        return ci
-    ceiling = mean_train * _CI_UPPER_MULTIPLIER
-    ci = ci.copy()
-    ci[:, 1] = np.minimum(ci[:, 1], ceiling)
-    return ci
 
 
 def _mape(y_true: np.ndarray, y_pred: np.ndarray) -> float:
@@ -57,6 +43,29 @@ def _rmse(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     return float(math.sqrt(mean_squared_error(y_true, y_pred)))
 
 
+def _ci_from_std(forecast: np.ndarray, std_r: float) -> tuple[np.ndarray, np.ndarray]:
+    """Fallback prediction bands from a residual std, widened with sqrt(lead).
+
+    Only used when the series is too short for the empirical out-of-sample
+    bands computed in ``get_forecast`` (see ``_cv_sigma_by_lead``). The
+    sqrt(lead) growth is a random-walk-style default — crude, but strictly
+    better than the constant-width bands it replaces (uncertainty at D+90
+    displayed equal to D+1 violates the most basic property of a prediction
+    interval).
+    """
+    h = len(forecast)
+    steps = np.sqrt(np.arange(1, h + 1, dtype=float))
+    ci80 = np.stack(
+        [np.maximum(0, forecast - _Z80 * std_r * steps), forecast + _Z80 * std_r * steps],
+        axis=1,
+    )
+    ci95 = np.stack(
+        [np.maximum(0, forecast - _Z95 * std_r * steps), forecast + _Z95 * std_r * steps],
+        axis=1,
+    )
+    return ci80, ci95
+
+
 # ---------------------------------------------------------------------------
 # Individual model implementations
 # ---------------------------------------------------------------------------
@@ -73,18 +82,10 @@ def _ets_forecast(train: np.ndarray, h: int) -> tuple[np.ndarray, np.ndarray, np
         initialization_method="estimated",
     )
     fit = model.fit(optimized=True, remove_bias=True)
-    forecast = fit.forecast(h)
+    forecast = np.asarray(fit.forecast(h), dtype=float)
 
-    # Prediction intervals from residual std
     resid_std = float(np.std(fit.resid, ddof=1))
-    z80, z95 = 1.282, 1.96
-    low80 = forecast - z80 * resid_std * np.sqrt(np.arange(1, h + 1))
-    high80 = forecast + z80 * resid_std * np.sqrt(np.arange(1, h + 1))
-    low95 = forecast - z95 * resid_std * np.sqrt(np.arange(1, h + 1))
-    high95 = forecast + z95 * resid_std * np.sqrt(np.arange(1, h + 1))
-
-    ci80 = np.stack([np.maximum(0, low80), high80], axis=1)
-    ci95 = np.stack([np.maximum(0, low95), high95], axis=1)
+    ci80, ci95 = _ci_from_std(forecast, resid_std)
     return forecast, ci80, ci95
 
 
@@ -98,46 +99,71 @@ def _theta_forecast(train: np.ndarray, h: int) -> tuple[np.ndarray, np.ndarray, 
     trend_line = slope * x + intercept
     detrended = train - trend_line
 
-    # SES on detrended
-    alpha = 0.5  # standard Theta
-    ses = np.zeros(n)
-    ses[0] = detrended[0]
-    for i in range(1, n):
-        ses[i] = alpha * detrended[i] + (1 - alpha) * ses[i - 1]
+    # SES on the detrended component — smoothing weight estimated by MLE
+    # instead of a hardcoded alpha, which is only kept as a failure fallback.
+    try:
+        from statsmodels.tsa.holtwinters import SimpleExpSmoothing
+
+        ses_fit = SimpleExpSmoothing(detrended, initialization_method="estimated").fit(
+            optimized=True
+        )
+        fitted = np.asarray(ses_fit.fittedvalues, dtype=float)
+        level = float(np.asarray(ses_fit.forecast(1), dtype=float)[0])
+    except Exception:
+        alpha = 0.5
+        fitted = np.zeros(n)
+        fitted[0] = detrended[0]
+        for i in range(1, n):
+            fitted[i] = alpha * detrended[i] + (1 - alpha) * fitted[i - 1]
+        level = float(fitted[-1])
 
     # Forecast
     h_range = np.arange(n, n + h, dtype=float)
     trend_fc = slope * h_range + intercept
-    ses_fc = np.full(h, ses[-1])
+    ses_fc = np.full(h, level)
     forecast = 0.5 * (trend_fc + ses_fc)
 
-    resid = detrended - ses
+    resid = detrended - fitted
     std_r = float(np.std(resid, ddof=1))
-    z80, z95 = 1.282, 1.96
-    ci80 = np.stack(
-        [
-            np.maximum(0, forecast - z80 * std_r),
-            forecast + z80 * std_r,
-        ],
-        axis=1,
-    )
-    ci95 = np.stack(
-        [
-            np.maximum(0, forecast - z95 * std_r),
-            forecast + z95 * std_r,
-        ],
-        axis=1,
-    )
+    ci80, ci95 = _ci_from_std(forecast, std_r)
     return forecast, ci80, ci95
 
 
+# Candidate (order, seasonal_order) pairs, selected by AIC on each fit. Small
+# on purpose (3 fits max) so the walk-forward CV stays affordable, but no
+# longer blind to the weekly cycle the way the hardcoded (1,1,1) was.
+_ARIMA_CANDIDATES: list[tuple[tuple[int, int, int], tuple[int, int, int, int]]] = [
+    ((1, 1, 1), (0, 0, 0, 0)),
+    ((0, 1, 1), (0, 0, 0, 0)),
+    ((1, 1, 1), (1, 0, 1, SEASONAL_PERIOD)),
+]
+
+
 def _arima_forecast(train: np.ndarray, h: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """ARIMA with light AIC-based order selection (incl. a weekly seasonal
+    candidate). Keeps the analytic statsmodels prediction intervals — the only
+    model of the registry whose bands widen correctly out of the box."""
     from statsmodels.tsa.arima.model import ARIMA
 
-    model = ARIMA(train, order=(1, 1, 1))
-    fit = model.fit()
-    pred = fit.get_forecast(steps=h)
-    forecast = pred.predicted_mean
+    best_fit = None
+    best_aic = math.inf
+    for order, seasonal_order in _ARIMA_CANDIDATES:
+        # A seasonal candidate needs a few full cycles to be identifiable.
+        if seasonal_order[3] and len(train) < 3 * seasonal_order[3]:
+            continue
+        try:
+            fit = ARIMA(train, order=order, seasonal_order=seasonal_order).fit()
+        except Exception:
+            continue
+        aic = float(fit.aic)
+        if math.isfinite(aic) and aic < best_aic:
+            best_fit, best_aic = fit, aic
+
+    if best_fit is None:
+        raise RuntimeError("ARIMA: no candidate order converged on this series")
+
+    pred = best_fit.get_forecast(steps=h)
+    forecast = np.asarray(pred.predicted_mean, dtype=float)
     ci = pred.conf_int(alpha=0.05)  # 95% CI
     ci95 = np.stack([np.maximum(0, ci[:, 0]), ci[:, 1]], axis=1)
     ci_80 = pred.conf_int(alpha=0.20)
@@ -150,11 +176,9 @@ def _ses_forecast(train: np.ndarray, h: int) -> tuple[np.ndarray, np.ndarray, np
     from statsmodels.tsa.holtwinters import SimpleExpSmoothing
 
     fit = SimpleExpSmoothing(train, initialization_method="estimated").fit(optimized=True)
-    forecast = fit.forecast(h)
+    forecast = np.asarray(fit.forecast(h), dtype=float)
     std_r = float(np.std(fit.resid, ddof=1))
-    z80, z95 = 1.282, 1.96
-    ci80 = np.stack([np.maximum(0, forecast - z80 * std_r), forecast + z80 * std_r], axis=1)
-    ci95 = np.stack([np.maximum(0, forecast - z95 * std_r), forecast + z95 * std_r], axis=1)
+    ci80, ci95 = _ci_from_std(forecast, std_r)
     return forecast, ci80, ci95
 
 
@@ -166,29 +190,25 @@ def _holt_winters_forecast(train: np.ndarray, h: int) -> tuple[np.ndarray, np.nd
         train,
         trend="add",
         seasonal="add",
-        seasonal_periods=7,
+        seasonal_periods=SEASONAL_PERIOD,
         initialization_method="estimated",
     )
     fit = model.fit(optimized=True)
-    forecast = fit.forecast(h)
+    forecast = np.asarray(fit.forecast(h), dtype=float)
     std_r = float(np.std(fit.resid, ddof=1))
-    z80, z95 = 1.282, 1.96
-    ci80 = np.stack([np.maximum(0, forecast - z80 * std_r), forecast + z80 * std_r], axis=1)
-    ci95 = np.stack([np.maximum(0, forecast - z95 * std_r), forecast + z95 * std_r], axis=1)
+    ci80, ci95 = _ci_from_std(forecast, std_r)
     return forecast, ci80, ci95
 
 
 def _naive_seasonal_forecast(
-    train: np.ndarray, h: int, period: int = 7
+    train: np.ndarray, h: int, period: int = SEASONAL_PERIOD
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Seasonal Naive (last observed season repeated)."""
     last_season = train[-period:]
     tiles = math.ceil(h / period)
     forecast = np.tile(last_season, tiles)[:h].astype(float)
     std_r = float(np.std(train[-period * 4 :], ddof=1))
-    z80, z95 = 1.282, 1.96
-    ci80 = np.stack([np.maximum(0, forecast - z80 * std_r), forecast + z80 * std_r], axis=1)
-    ci95 = np.stack([np.maximum(0, forecast - z95 * std_r), forecast + z95 * std_r], axis=1)
+    ci80, ci95 = _ci_from_std(forecast, std_r)
     return forecast, ci80, ci95
 
 
@@ -202,7 +222,7 @@ def _naive_seasonal_forecast(
 MODELS = {
     "ETS": ("Exp. Smoothing", _ets_forecast),
     "Theta": ("Theta", _theta_forecast),
-    "ARIMA(1,1,1)": ("ARIMA", _arima_forecast),
+    "ARIMA": ("ARIMA", _arima_forecast),
     "SES": ("Exp. Smoothing", _ses_forecast),
     "Holt-Winters": ("Holt-Winters", _holt_winters_forecast),
     "Seasonal Naive": ("Seasonal Naive", _naive_seasonal_forecast),
@@ -213,7 +233,9 @@ MODELS = {
 MODEL_ALIASES = {
     "AutoETS": "ETS",
     "AutoTheta": "Theta",
-    "AutoARIMA": "ARIMA(1,1,1)",
+    "AutoARIMA": "ARIMA",
+    # Pre-AIC-selection name — the model is no longer pinned to (1,1,1).
+    "ARIMA(1,1,1)": "ARIMA",
     "Prophet (SES)": "SES",
     "N-HiTS (HW)": "Holt-Winters",
     "TimesNet (SNaive)": "Seasonal Naive",
@@ -225,6 +247,21 @@ def resolve_model(name: str) -> str | None:
     if name in MODELS:
         return name
     return MODEL_ALIASES.get(name)
+
+
+def cv_bucket(horizon: int) -> int:
+    """CV-horizon bucket (7/14/28) matching a served forecast horizon.
+
+    Shared by ``get_forecast`` and the /models route so the benchmark table
+    the frontend displays is the same one ``summary.best_model`` was elected
+    from — two different buckets would name two different champions side by
+    side.
+    """
+    if horizon <= 7:
+        return 7
+    if horizon < 28:
+        return 14
+    return 28
 
 
 # Minimum series length any model can be fitted on (Holt-Winters needs two
@@ -240,15 +277,24 @@ def _finite_or_none(x: float | None) -> float | None:
 
 
 # ---------------------------------------------------------------------------
-# Walk-forward CV for benchmark
+# Walk-forward CV — shared by the benchmark and the empirical intervals
 # ---------------------------------------------------------------------------
 
 
-def _walk_forward_cv(arr: np.ndarray, fn, n_splits: int = 5, h: int = 14) -> dict:
+def _cv_folds(
+    arr: np.ndarray, fn, n_splits: int = 5, h: int = 14, model_name: str = ""
+) -> list[tuple[np.ndarray, np.ndarray]]:
+    """Expanding-window walk-forward folds: fit on [:split], predict the next h.
+
+    Returns the (y_true, y_pred) pair of each successful fold. A failing fit
+    is logged (model + fold + train size) instead of being silently swallowed
+    — a model that errors on every fold used to vanish from the diagnostics
+    with no trace at all.
+    """
     n = len(arr)
     min_train = max(30, n - n_splits * h)
 
-    all_y_true, all_y_pred = [], []
+    folds: list[tuple[np.ndarray, np.ndarray]] = []
     for i in range(n_splits):
         split = min_train + i * h
         if split + h > n:
@@ -257,12 +303,25 @@ def _walk_forward_cv(arr: np.ndarray, fn, n_splits: int = 5, h: int = 14) -> dic
         test = arr[split : split + h]
         try:
             pred, _, _ = fn(train, h)
-            all_y_true.append(test)
-            all_y_pred.append(pred[: len(test)])
-        except Exception:
-            continue
+            folds.append((test, np.asarray(pred, dtype=float)[: len(test)]))
+        except Exception as exc:
+            logger.warning(
+                "cv_fold_failed",
+                extra={
+                    "model": model_name,
+                    "fold": i,
+                    "train_size": int(split),
+                    "error": repr(exc),
+                },
+            )
+    return folds
 
-    if not all_y_true:
+
+def _walk_forward_cv(
+    arr: np.ndarray, fn, n_splits: int = 5, h: int = 14, model_name: str = ""
+) -> dict:
+    folds = _cv_folds(arr, fn, n_splits=n_splits, h=h, model_name=model_name)
+    if not folds:
         return {
             "mae": float("inf"),
             "rmse": float("inf"),
@@ -270,8 +329,8 @@ def _walk_forward_cv(arr: np.ndarray, fn, n_splits: int = 5, h: int = 14) -> dic
             "r2": -float("inf"),
         }
 
-    y_true = np.concatenate(all_y_true)
-    y_pred = np.concatenate(all_y_pred)
+    y_true = np.concatenate([t for t, _ in folds])
+    y_pred = np.concatenate([p for _, p in folds])
     return {
         "mae": float(mean_absolute_error(y_true, y_pred)),
         "rmse": _rmse(y_true, y_pred),
@@ -280,22 +339,73 @@ def _walk_forward_cv(arr: np.ndarray, fn, n_splits: int = 5, h: int = 14) -> dic
     }
 
 
+def _cv_sigma_by_lead(
+    arr: np.ndarray,
+    fn,
+    horizon: int,
+    n_splits: int = 5,
+    h: int = 14,
+    model_name: str = "",
+) -> np.ndarray | None:
+    """Out-of-sample forecast-error scale per lead time, from walk-forward CV.
+
+    In-sample fit residuals systematically understate out-of-sample error
+    (overfitting), and a constant band width ignores that a D+90 forecast is
+    less certain than D+1. This estimates, for each lead 1..h, the RMSE of the
+    actual CV forecast errors (bias included), forces the profile to be
+    non-decreasing in the lead, and extrapolates leads beyond the CV horizon
+    with sqrt(lead / h) growth (random-walk-style, the standard conservative
+    default). Returns None when the series cannot sustain >= 2 full folds —
+    callers then keep the model's own fallback bands.
+    """
+    folds = [
+        f
+        for f in _cv_folds(arr, fn, n_splits=n_splits, h=h, model_name=model_name)
+        if len(f[0]) == h
+    ]
+    if len(folds) < 2:
+        return None
+
+    errs = np.stack([p - t for t, p in folds])  # (n_folds, h)
+    if not np.all(np.isfinite(errs)):
+        return None
+    sigma = np.sqrt(np.mean(errs**2, axis=0))  # per-lead RMSE across folds
+    sigma = np.maximum.accumulate(sigma)  # uncertainty never shrinks with lead
+
+    if horizon <= h:
+        return sigma[:horizon]
+    tail_leads = np.arange(h + 1, horizon + 1, dtype=float)
+    tail = sigma[-1] * np.sqrt(tail_leads / h)
+    return np.concatenate([sigma, tail])
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
 
-def get_model_benchmarks() -> list[ModelBenchmark]:
-    cached = app_cache.get("forecast:benchmarks")
+def get_model_benchmarks(cv_horizon: int = 14) -> list[ModelBenchmark]:
+    """Walk-forward benchmark of every model at the given CV horizon.
+
+    ``cv_horizon`` matters: the best model at h=14 is not necessarily the best
+    at h=90, so ``get_forecast`` requests a benchmark bucketed to the horizon
+    it actually serves instead of always reusing the h=14 table.
+    """
+    # SEC-020: benchmark is computed on the caller's data — scope the key.
+    _cache_key = scoped_key(f"forecast:benchmarks:{cv_horizon}")
+    cached = app_cache.get(_cache_key)
     if cached is not None:
         return cached
 
     df = load_daily_costs()
     arr = df["y"].values.astype(float)
+    # Shrink the CV horizon when the series cannot sustain a single
+    # out-of-sample fold at the requested one (a fold needs n >= 30 + h).
+    h_eff = int(max(1, min(cv_horizon, len(arr) - 30)))
 
     scores: list[dict] = []
     for name, (family, fn) in MODELS.items():
-        metrics = _walk_forward_cv(arr, fn)
+        metrics = _walk_forward_cv(arr, fn, h=h_eff, model_name=name)
         scores.append({"model": name, "family": family, **metrics})
 
     # Rank by MAE ascending (inf sorts last)
@@ -323,10 +433,14 @@ def get_model_benchmarks() -> list[ModelBenchmark]:
                 mape=round(mape, 2) if mape is not None else None,
                 r2=round(r2, 4) if r2 is not None else None,
                 score=score,
-                winner=(rank == 1),
+                # No winner at all when no model completed a single CV fold
+                # (series of 14-30 points): rank 1 would otherwise just be
+                # insertion order sold as a champion.
+                winner=(rank == 1 and mae is not None),
+                cv_horizon=h_eff,
             )
         )
-    app_cache.set("forecast:benchmarks", result)
+    app_cache.set(_cache_key, result)
     return result
 
 
@@ -338,7 +452,11 @@ def get_forecast(
         raise ValueError(f"Unknown model '{model}'. Available: {list(MODELS.keys())}")
     model = resolved
 
-    _cache_key = f"forecast:{model}:{horizon}"
+    # SEC-020: forecasts are computed on the caller's data — scope the key.
+    # Startup precompute fills the anonymous scope only (demo parquet); a user
+    # who ingested real events never receives the demo forecast, nor another
+    # user's.
+    _cache_key = scoped_key(f"forecast:{model}:{horizon}")
     _cached = app_cache.get(_cache_key)
     if _cached is not None:
         return _cached
@@ -358,10 +476,36 @@ def get_forecast(
 
     _family, fn = MODELS[model]
     forecast_vals, ci80, ci95 = fn(arr, horizon)
-    # Bound the upper CI so a noisy fit cannot yield 0–100k intervals that
-    # blow out the y-axis on the frontend chart.
-    ci80 = _clamp_ci_upper(ci80, arr)
-    ci95 = _clamp_ci_upper(ci95, arr)
+    forecast_vals = np.asarray(forecast_vals, dtype=float)
+
+    # Replace the model's own bands (in-sample residual std for most of the
+    # registry) with empirical out-of-sample intervals estimated from the
+    # walk-forward CV errors — the only construction whose 80/95% labels are
+    # backed by observed forecast errors. ARIMA keeps its analytic intervals
+    # (statsmodels conf_int already widens correctly with the lead). No
+    # cosmetic clamping is applied: the previous 10×mean cap silently
+    # destroyed the coverage guarantee the label promises.
+    if model != "ARIMA":
+        sigma = _cv_sigma_by_lead(arr, fn, horizon, model_name=model)
+        if sigma is not None and float(np.max(sigma)) > 0:
+            ci80 = np.stack(
+                [np.maximum(0, forecast_vals - _Z80 * sigma), forecast_vals + _Z80 * sigma],
+                axis=1,
+            )
+            ci95 = np.stack(
+                [np.maximum(0, forecast_vals - _Z95 * sigma), forecast_vals + _Z95 * sigma],
+                axis=1,
+            )
+
+    # Coherence with the DISPLAYED point (clamped at 0 below): on a decaying
+    # series the raw forecast can go negative, leaving high95 = fc + z*sigma
+    # below zero while low95 is floored at 0 — an inverted band with the
+    # plotted point above its own upper bound. Clamp both bounds around the
+    # displayed value instead.
+    _fc_disp = np.maximum(0, forecast_vals)
+    for _ci in (ci80, ci95):
+        _ci[:, 0] = np.minimum(np.maximum(0, _ci[:, 0]), _fc_disp)
+        _ci[:, 1] = np.maximum(_ci[:, 1], _fc_disp)
 
     # Last 30 actuals included for context in chart
     n_hist = 30
@@ -396,20 +540,24 @@ def get_forecast(
             )
         )
 
-    total_fc = round(float(np.sum(np.maximum(0, forecast_vals[:30]))), 2)
+    # KPI totals cover the FULL requested horizon. The previous [:30] slice
+    # displayed "horizon 90 days" cards with a 30-day total (3× understated)
+    # and divided a 7-day total by 30.
+    total_fc = round(float(np.sum(np.maximum(0, forecast_vals))), 2)
 
-    # Best model MAE from cached benchmark (lazy re-compute to avoid double CV)
-    bench = get_model_benchmarks()
+    # Benchmark bucketed to the served horizon so best_model reflects the CV
+    # performance at (approximately) this lead, not always h=14.
+    bench = get_model_benchmarks(cv_horizon=cv_bucket(horizon))
     winner = next((b for b in bench if b.winner), bench[0])
 
     summary = ForecastSummary(
         horizon_days=horizon,
         total_forecast=total_fc,
-        daily_avg_forecast=round(total_fc / 30, 4),
+        daily_avg_forecast=round(total_fc / horizon, 4),
         best_model=winner.model,
         best_model_mae=winner.mae,
         best_model_mape=winner.mape,
         models_evaluated=len(MODELS),
     )
-    app_cache.set(f"forecast:{model}:{horizon}", (points, summary))
+    app_cache.set(_cache_key, (points, summary))
     return points, summary

@@ -13,9 +13,8 @@ from analysis.advanced import (
     compute_outliers,
     compute_scaling,
 )
-from core.cache import app_cache
+from core.cache import app_cache, scoped_key
 from core.session import require_current_user_id
-from core.user_context import current_user_scope
 from schemas.advanced import (
     DimReductionResponse,
     DistributionResponse,
@@ -45,8 +44,12 @@ def _q(x: float) -> str:
 
 
 def _k(*parts: str) -> str:
-    """Build a cache key prefixed with the current user's scope (SEC-020)."""
-    return ":".join((current_user_scope(), *parts))
+    """Build a cache key prefixed with the current user's scope (SEC-020).
+
+    Thin alias over ``core.cache.scoped_key`` — the helper now lives in core
+    so analytics/forecast producers share the exact same scoping scheme.
+    """
+    return scoped_key(*parts)
 
 
 @router.get("/outliers", response_model=OutliersResponse)

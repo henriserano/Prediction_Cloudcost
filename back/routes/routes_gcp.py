@@ -1006,7 +1006,9 @@ def gcp_sync(
     # SEC-015 / SEC-020: replace the caller's slice atomically under the lock.
     replace_injected_events(normalized, user_id=user_id)
 
-    app_cache.clear()
+    # Scoped invalidation (SEC-020): only this user's cached analytics and
+    # forecasts are stale — a global clear() evicted every scope on each sync.
+    app_cache.invalidate_prefix(f"{user_id}:")
     invalidate_cache()
 
     import pandas as pd

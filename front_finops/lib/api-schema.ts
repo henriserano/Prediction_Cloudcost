@@ -91,6 +91,9 @@ export const ModelBenchmarkSchema = z.object({
   r2: z.number().nullable(),
   score: z.number().nullable(),
   winner: z.boolean(),
+  // z.object() strips unknown keys — without this entry the backend field
+  // never reaches the components even though types.ts declares it.
+  cvHorizon: z.number().optional(),
 })
 export const ModelBenchmarksResponseSchema = z.array(ModelBenchmarkSchema)
 

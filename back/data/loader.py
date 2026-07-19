@@ -77,6 +77,84 @@ def _set_last_source(dataset: str, value: str) -> None:
 # Helpers
 # ---------------------------------------------------------------------------
 
+# Median gap (in days) above which an ingested series is treated as a monthly
+# export (e.g. a "Mois" column) rather than a daily one with holes.
+_MONTHLY_GAP_DAYS = 21
+
+
+def _regularize_daily(df: pd.DataFrame, value_cols: list[str]) -> pd.DataFrame:
+    """Return ``df`` on a dense, regular daily calendar.
+
+    Every downstream consumer (STL with period=7, Holt-Winters/Seasonal Naive,
+    ACF lags, z-scores) treats row i-7 as "same weekday one week earlier" —
+    which is false as soon as a day is missing from the groupby output, and
+    silently desynchronizes the whole weekly seasonality. Two cases:
+
+    - daily-ish input: reindex on the full calendar; a missing billing day
+      means zero cost, so gaps are filled with 0.0;
+    - monthly export (median step >= _MONTHLY_GAP_DAYS, e.g. a "Mois" column
+      parsed to first-of-month dates): each monthly total is spread evenly
+      across the days of its calendar month — otherwise STL(period=7) computes
+      a meaningless pseudo-weekly pattern on ~12 isolated spikes. The month
+      containing today is only spread up to today (a partial total spread over
+      future days would understate the daily rate and push fake "actuals"
+      beyond the forecast start), and the spread output goes through the same
+      dense reindex so a month missing from the export becomes zeros instead
+      of a calendar hole.
+
+    Known limitation: intermediate cadences (weekly/bi-monthly exports) take
+    the daily branch and end up mostly zero-filled — a warning-worthy input
+    the platform does not resample yet.
+    """
+    if len(df) < 2:
+        return df
+
+    deltas = df["ds"].diff().dt.days.dropna()
+    if not len(deltas):
+        return df
+    median_step = float(deltas.median())
+
+    if median_step >= _MONTHLY_GAP_DAYS:
+        today = pd.Timestamp.today().normalize()
+        rows: list[dict] = []
+        # dict records, not itertuples: service column names contain spaces
+        # ("Cloud SQL") which itertuples mangles into positional attributes.
+        for row in df.to_dict("records"):
+            start = pd.Timestamp(row["ds"]).normalize().replace(day=1)
+            end = start + pd.offsets.MonthEnd(0)
+            if start <= today < end:
+                # Current month: its exported total only covers spend to date.
+                end = today
+            days = pd.date_range(start, end, freq="D")
+            for d in days:
+                new: dict = {"ds": d}
+                for c in value_cols:
+                    new[c] = float(row.get(c) or 0.0) / len(days)
+                rows.append(new)
+        out = pd.DataFrame(rows).groupby("ds", as_index=False)[value_cols].sum()
+        from core.logging import get_logger
+
+        get_logger(__name__).info(
+            "monthly_series_spread_to_daily",
+            extra={"input_rows": len(df), "output_rows": len(out)},
+        )
+        # Fall through to the dense reindex: a month absent from the export
+        # must become zeros, not a hole that desyncs the weekly seasonality.
+        df = out.sort_values("ds").reset_index(drop=True)
+
+    full = pd.date_range(df["ds"].min(), df["ds"].max(), freq="D")
+    if len(full) == len(df):
+        return df
+    out = df.set_index("ds").reindex(full, fill_value=0.0).rename_axis("ds").reset_index()
+    from core.logging import get_logger
+
+    get_logger(__name__).info(
+        "daily_series_gaps_filled",
+        extra={"missing_days": int(len(full) - len(df)), "total_days": int(len(full))},
+    )
+    return out
+
+
 def _daily_from_events(events_df: pd.DataFrame) -> pd.DataFrame:
     """Sum injected events per day → the (ds, y) schema used everywhere else."""
     if len(events_df) == 0:
@@ -84,7 +162,8 @@ def _daily_from_events(events_df: pd.DataFrame) -> pd.DataFrame:
     df = events_df.groupby("ds", as_index=False)["Sous-total (€)"].sum()
     df = df.rename(columns={"Sous-total (€)": "y"})
     df["ds"] = pd.to_datetime(df["ds"])
-    return df.sort_values("ds").reset_index(drop=True)
+    df = df.sort_values("ds").reset_index(drop=True)
+    return _regularize_daily(df, ["y"])
 
 
 def _per_service_from_events(events_df: pd.DataFrame) -> pd.DataFrame:
@@ -103,7 +182,8 @@ def _per_service_from_events(events_df: pd.DataFrame) -> pd.DataFrame:
     )
     df.columns.name = None
     df["ds"] = pd.to_datetime(df["ds"])
-    return df.sort_values("ds").reset_index(drop=True)
+    df = df.sort_values("ds").reset_index(drop=True)
+    return _regularize_daily(df, [c for c in df.columns if c != "ds"])
 
 
 def _safe_read_parquet(path: Path) -> pd.DataFrame | None:

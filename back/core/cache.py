@@ -4,6 +4,21 @@ import threading
 import time
 from typing import Any
 
+from core.user_context import current_user_scope
+
+
+def scoped_key(*parts: object) -> str:
+    """Build a cache key prefixed with the current user's scope (SEC-020).
+
+    The events store and data loader are keyed per user, so any result cached
+    from them MUST be too — a bare "analytics:kpi" key computed for user A
+    would be served verbatim to user B on the next cache hit (cross-tenant
+    leak + wrong numbers). Every ``app_cache`` producer in analytics/forecast
+    goes through this helper; anonymous callers land on the fixed ``_anon``
+    scope, which is also where startup precompute warms the demo results.
+    """
+    return ":".join((current_user_scope(), *(str(p) for p in parts)))
+
 
 class _CacheEntry:
     __slots__ = ("created_at", "expires_at", "last_access", "value")
@@ -93,6 +108,21 @@ class AppCache:
         with self._lock:
             for k in keys:
                 self._store.pop(k, None)
+
+    def invalidate_prefix(self, prefix: str) -> int:
+        """Drop every entry whose key starts with ``prefix``; returns the count.
+
+        Used by ingest endpoints to evict a single user's scope
+        (``"<user_id>:"``) instead of nuking the whole store — a global
+        ``clear()`` also threw away the anonymous-scope precompute and every
+        other user's warm entries on each upload, triggering full walk-forward
+        CV recomputes for everyone.
+        """
+        with self._lock:
+            doomed = [k for k in self._store if k.startswith(prefix)]
+            for k in doomed:
+                del self._store[k]
+            return len(doomed)
 
     def clear(self) -> None:
         with self._lock:

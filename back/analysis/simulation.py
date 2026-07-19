@@ -1105,19 +1105,26 @@ def _projected_events(inputs: SimulationInputs, cost: CostBreakdown) -> list[dic
     ]
     description_suffix = inputs.project_name.strip() or "Agentic project"
 
+    def _add_months(anchor: date, months: int) -> date:
+        """First day of the month ``months`` after anchor's month.
+
+        True calendar-month arithmetic: the previous 30-day stepping did not
+        land on 12 distinct months (run on Feb 1st, July appeared twice and
+        one month was skipped entirely — the duplicated month's events were
+        emitted twice, doubling its projected cost downstream).
+        """
+        total = anchor.year * 12 + (anchor.month - 1) + months
+        return date(total // 12, total % 12 + 1, 1)
+
     def _month_span(anchor: date) -> tuple[date, int]:
         """Return (first_day, days_in_month) for the month containing anchor."""
         first = anchor.replace(day=1)
-        # Jump forward roughly one month then walk back to the last day of the
-        # current month — timedelta+day math avoids importing calendar just for
-        # this one calc.
-        next_month = (first + timedelta(days=32)).replace(day=1)
-        last_day = next_month - timedelta(days=1)
+        last_day = _add_months(first, 1) - timedelta(days=1)
         return first, last_day.day
 
     for month_offset in range(12):
-        anchor = today + timedelta(days=30 * (month_offset + 1))
-        first_day, days_in_month = _month_span(anchor)
+        # 12 consecutive calendar months, starting with the month after today.
+        first_day, days_in_month = _month_span(_add_months(today, month_offset + 1))
         for service, monthly_amount in per_component:
             if monthly_amount <= 0:
                 continue
