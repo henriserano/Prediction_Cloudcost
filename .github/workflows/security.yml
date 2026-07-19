@@ -13,6 +13,9 @@
 #
 #   INFORMATIONAL (uploaded as an artifact, does NOT fail the job):
 #     - bandit JSON report artifact (kept even when bandit exits 0)
+#     - trivy config scan on terraform/ (IaC misconfigurations, exit-code 0 —
+#       surfaced in the job log for review; promote to blocking once the
+#       existing findings are triaged)
 #
 # To move a step from blocking to informational: add ``continue-on-error: true``
 # and note it in this header so the trade-off is auditable.
@@ -118,3 +121,28 @@ jobs:
           pip install semgrep
           semgrep --config=p/python --config=p/security-audit back/ \
             --error --metrics=off
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # C. Infrastructure-as-Code scan — trivy config on terraform/
+  # INFORMATIONAL: exit-code 0 surfaces misconfigurations (open security
+  # groups, unencrypted resources, missing logging…) in the job log without
+  # failing the run. Promote to blocking (exit-code "1") once the current
+  # findings have been triaged.
+  # ────────────────────────────────────────────────────────────────────────────
+  iac-scan:
+    name: IaC scan (Terraform)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      # SEC-036: pinned to full commit SHA.
+      - name: Trivy config scan — INFORMATIONAL
+        uses: aquasecurity/trivy-action@6e7b7d1fd3e4fef0c5fa8cce1229c54b2c9bd0d8 # v0.24.0
+        with:
+          scan-type: config
+          scan-ref: terraform
+          format: table
+          severity: MEDIUM,HIGH,CRITICAL
+          exit-code: "0"

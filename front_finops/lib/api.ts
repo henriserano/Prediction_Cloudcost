@@ -58,7 +58,9 @@ function looksLikeDataRecord(value: unknown): boolean {
   return keys.some((k) => NON_FIELD_KEY_RE.test(k))
 }
 
-function transformKeys(obj: unknown, parentKey?: string): unknown {
+// Exported for unit tests — production code only reaches it via the axios
+// response interceptor below.
+export function transformKeys(obj: unknown, parentKey?: string): unknown {
   if (Array.isArray(obj)) return obj.map((v) => transformKeys(v, parentKey))
   if (obj !== null && typeof obj === "object") {
     return Object.fromEntries(

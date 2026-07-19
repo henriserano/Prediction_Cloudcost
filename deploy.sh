@@ -19,7 +19,6 @@ set -euo pipefail
 ENV="dev"
 REGION="eu-west-1"
 TAG=$(git rev-parse --short HEAD 2>/dev/null || echo "")
-APP_NAME="finops"
 BACK_DIR="$(cd "$(dirname "$0")/back" && pwd)"
 TF_DIR="$(cd "$(dirname "$0")/terraform" && pwd)"
 HEALTH_TIMEOUT_S=180

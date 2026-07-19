@@ -1,6 +1,9 @@
 # CI pipeline — runs on pushes to main/dev and on every pull_request.
 # (push limited to main/dev to avoid double runs on PR branches.)
-# Three jobs run in parallel: backend lint/test, frontend lint/build, docker build.
+# Five jobs run in parallel, one per deliverable of the repo:
+#   backend lint/test (+ coverage floor), frontend lint/build/unit-tests,
+#   docker build + prod-config boot smoke, terraform fmt/validate,
+#   shellcheck on the deploy scripts.
 name: CI
 
 on:
@@ -13,6 +16,12 @@ on:
 # No deployments or writes are performed here — read access to the repo is sufficient.
 permissions:
   contents: read
+
+# A superseded run (new push on the same branch/PR) is cancelled instead of
+# burning runner minutes to completion.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   # ────────────────────────────────────────────────────────────────────────────
@@ -47,7 +56,7 @@ jobs:
           pip install -r requirements.txt
           # Test/lint-only deps: keep them out of requirements.txt so the runtime
           # image stays lean, but install them here for the CI job.
-          pip install pytest pytest-asyncio ruff
+          pip install pytest pytest-asyncio pytest-cov ruff
 
       # Style + likely-bug lint (config in back/pyproject.toml).
       - name: Ruff lint
@@ -58,8 +67,11 @@ jobs:
 
       # Correctness tests + smoke tests. Loaders are monkeypatched so the tests
       # do not depend on the bundled demo parquet files (tracked in back/data/).
-      - name: Run pytest
-        run: pytest -v --tb=short
+      # Coverage floor: measured at 61% when introduced — the 55% gate is a
+      # ratchet against silent erosion, not a target. Raise it as coverage
+      # grows; never lower it to make a PR green.
+      - name: Run pytest (with coverage floor)
+        run: pytest -v --tb=short --cov=. --cov-report=term --cov-fail-under=55
 
   # ────────────────────────────────────────────────────────────────────────────
   # B. Frontend: eslint, TypeScript type-check, Next.js production build
@@ -95,6 +107,12 @@ jobs:
       - name: TypeScript type check
         run: npx tsc --noEmit
 
+      # Unit tests (vitest) — currently the contract tests on the snake_case →
+      # camelCase transformer (lib/api.ts), the most fragile piece of the data
+      # layer: a regression there silently corrupts every dashboard lookup.
+      - name: Unit tests (vitest)
+        run: npm test
+
       # Next.js build — requires NEXT_PUBLIC_API_URL at build time
       - name: Next.js production build
         env:
@@ -129,11 +147,43 @@ jobs:
           print('OK — all core imports succeeded')
           "
 
+      # Boot the image in PRODUCTION configuration and require /health to
+      # answer 200. Catches the "cannot even start in prod" class of
+      # regressions (fail-fast env checks: CORS wildcard, missing API_KEY or
+      # SESSION_SECRET) that the import smoke above cannot see — this exact
+      # gap once shipped a prod config that crash-looped at boot.
+      # DATA_ALLOW_PARQUET_FALLBACK=false keeps the startup precompute short
+      # (tasks fail fast on the empty store; the lifespan tolerates that).
+      - name: Prod-config boot smoke test
+        run: |
+          docker run -d --name prod-smoke -p 8080:8080 \
+            -e ENV=prod \
+            -e API_KEY=ci-smoke-api-key \
+            -e SESSION_SECRET=ci-smoke-session-secret-0123456789abcdef \
+            -e CORS_ORIGINS=https://ci-smoke.example.com \
+            -e DATA_ALLOW_PARQUET_FALLBACK=false \
+            -e AWS_DEFAULT_REGION=eu-west-1 \
+            finops-backend:test
+          ok=0
+          for _ in $(seq 1 45); do
+            if curl -fsS http://localhost:8080/health > /dev/null 2>&1; then ok=1; break; fi
+            sleep 2
+          done
+          echo "── container logs ──"
+          docker logs prod-smoke
+          docker rm -f prod-smoke > /dev/null
+          if [ "$ok" != "1" ]; then
+            echo "::error::backend failed to serve /health within 90s in prod configuration"
+            exit 1
+          fi
+          echo "OK — backend boots and serves /health in prod configuration"
+
       # SEC-031 (I-H3): fail the build on any HIGH or CRITICAL vulnerability
       # in the built image. Blocks known-CVE deploys from ever reaching ECR.
       # ``ignore-unfixed`` avoids noise from advisories with no available fix.
+      # SEC-036: pinned to full commit SHA (was a mutable version tag).
       - name: Trivy image scan
-        uses: aquasecurity/trivy-action@0.24.0
+        uses: aquasecurity/trivy-action@6e7b7d1fd3e4fef0c5fa8cce1229c54b2c9bd0d8 # v0.24.0
         with:
           image-ref: finops-backend:test
           format: table
@@ -141,3 +191,53 @@ jobs:
           ignore-unfixed: true
           exit-code: "1"
           vuln-type: os,library
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # D. Terraform: formatting + static validation of the AWS infra definition.
+  # ``-backend=false`` skips the S3 state backend, so no AWS credentials are
+  # needed — this validates syntax, provider schemas and references only.
+  # ────────────────────────────────────────────────────────────────────────────
+  terraform-validate:
+    name: Terraform — fmt / validate
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: terraform
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      # SEC-036: pinned to full commit SHA. Version matches the one the infra
+      # was last validated with locally.
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
+        with:
+          terraform_version: "1.9.8"
+
+      - name: Terraform fmt check
+        run: terraform fmt -check -recursive -diff
+
+      - name: Terraform init (no backend)
+        run: terraform init -backend=false -input=false
+
+      - name: Terraform validate
+        run: terraform validate
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # E. Shell scripts: shellcheck on the deploy tooling. deploy.sh performs the
+  # production rollout (ECR push, App Runner update, rollback) — a quoting bug
+  # there is a production incident, not a style issue. shellcheck ships
+  # preinstalled on ubuntu-latest runners.
+  # ────────────────────────────────────────────────────────────────────────────
+  shell-lint:
+    name: Shell — shellcheck
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: shellcheck deploy scripts
+        run: shellcheck --severity=warning deploy.sh terraform/bootstrap-backend.sh
