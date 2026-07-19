@@ -105,25 +105,53 @@ terraform apply \
   -auto-approve
 
 ECR_URL=$(terraform output -raw ecr_repository_url)
+ECR_REPO_NAME=$(echo "$ECR_URL" | sed 's#.*/##')
 echo "  ECR  : $ECR_URL"
 
 # ── Step 2 — Docker build ─────────────────────────────────────────────────────
 # SEC-034: only the immutable per-SHA tag is built + pushed. The old
 # ``:latest`` alias is dropped so ECR is now the source of truth for exactly
 # which image ran when. The service pins the SHA via variables.tf anyway.
+#
+# Idempotency: if the tag already exists in ECR (e.g. the previous run got
+# past push but failed at App Runner update), skip the build+push entirely.
+# With IMMUTABLE tags, re-pushing would be either a no-op (identical digest)
+# or a 400 rejection — either way there's nothing to gain by rebuilding.
 echo "[2/7] Building Docker image (linux/amd64)..."
-cd "$BACK_DIR"
-docker build \
-  --platform linux/amd64 \
-  --tag "${ECR_URL}:${TAG}" \
-  .
+if aws ecr describe-images \
+    --repository-name "$ECR_REPO_NAME" \
+    --image-ids "imageTag=${TAG}" \
+    --region "$REGION" >/dev/null 2>&1; then
+  echo "  image ${TAG} already exists in ECR — skipping build & push."
+  SKIP_BUILD_PUSH=1
+else
+  SKIP_BUILD_PUSH=0
+fi
 
 # ── Step 3 — ECR login & push ─────────────────────────────────────────────────
-echo "[3/7] Pushing image to ECR..."
-aws ecr get-login-password --region "$REGION" \
-  | docker login --username AWS --password-stdin "$ECR_URL"
+# INFRA-017: build + push are fused into a single ``docker buildx build --push``
+# call so BuildKit streams layers straight to ECR without materialising the
+# OCI manifest list locally. ``--provenance=false --sbom=false`` strips
+# BuildKit's default attestation sub-manifests — with them attached, ECR
+# rejects the final tag PUT under IMMUTABLE mode with a 400 (layers push OK,
+# the manifest list commit fails). Together, these two changes give us a
+# plain single-arch image manifest that ECR IMMUTABLE accepts.
+if (( SKIP_BUILD_PUSH == 0 )); then
+  echo "[3/7] Building and pushing image to ECR..."
+  aws ecr get-login-password --region "$REGION" \
+    | docker login --username AWS --password-stdin "$ECR_URL"
 
-docker push "${ECR_URL}:${TAG}"
+  cd "$BACK_DIR"
+  docker buildx build \
+    --platform linux/amd64 \
+    --provenance=false \
+    --sbom=false \
+    --tag "${ECR_URL}:${TAG}" \
+    --push \
+    .
+else
+  echo "[3/7] Skipping ECR push (image already present)."
+fi
 
 # ── Step 4 — Full Terraform apply (ensures service exists, envvars up to date) ─
 echo "[4/7] Applying Terraform (App Runner service, envvars, IAM)..."
