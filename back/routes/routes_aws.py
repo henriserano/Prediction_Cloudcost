@@ -32,14 +32,34 @@ router = APIRouter(prefix="/api/aws", tags=["aws"])
 def _session_for_request(request: Request):
     """Return a boto3 Session for the caller.
 
-    Prefers the user's cached in-memory Session (built from their PIN-unlocked
-    AWS credentials). Falls back to the process default credential chain when
-    the user hasn't unlocked yet — useful for anonymous / dev flows.
+    Two paths:
+
+    - Authenticated caller (JWT user_id present) → their PIN-unlocked
+      in-memory Session. If none is cached (60-min TTL expired, process
+      restarted), we raise 401 with a specific ``AWS_SESSION_EXPIRED`` code
+      so the frontend can drop the cached auth state and prompt for a fresh
+      PIN entry. We do NOT silently fall back to the process default here,
+      because that would surface the *server's* AWS account (task role or
+      local ambient creds) to the connected user, who then wonders why
+      their linked accounts / billing look wrong.
+
+    - Anonymous caller (no JWT user_id) → falls back to the process default
+      credential chain. This keeps the /api/aws/status probe working before
+      login (returns ``authenticated=false``) and supports dev/health flows.
     """
     user_id = get_current_user_id(request)
     session = get_user_boto3_session(user_id)
     if session is not None:
         return session
+    if user_id:
+        # SEC-036: authenticated caller with an expired/absent in-memory
+        # session must re-unlock rather than silently borrow the server's
+        # default AWS identity.
+        raise AppError(
+            "AWS session expired. Re-enter your PIN to unlock credentials.",
+            code="AWS_SESSION_EXPIRED",
+            status_code=401,
+        )
     boto3, *_ = _import_boto3()
     return boto3.session.Session(region_name=get_settings().aws_region)
 

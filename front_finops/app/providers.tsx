@@ -5,6 +5,12 @@ import { useState } from "react"
 import { SidebarProvider } from "@/lib/context/sidebar-context"
 import { AuthProvider } from "@/lib/context/auth-context"
 import { AuthGate } from "@/components/auth/AuthGate"
+import { useProviderAuthExpirationListener } from "@/lib/hooks/useProviderAuthExpiration"
+
+function ProviderAuthWatchdog() {
+  useProviderAuthExpirationListener()
+  return null
+}
 
 export default function Providers({ children }: { children: React.ReactNode }) {
   const [queryClient] = useState(
@@ -21,6 +27,7 @@ export default function Providers({ children }: { children: React.ReactNode }) {
   )
   return (
     <QueryClientProvider client={queryClient}>
+      <ProviderAuthWatchdog />
       <AuthProvider>
         <SidebarProvider>
           <AuthGate>{children}</AuthGate>

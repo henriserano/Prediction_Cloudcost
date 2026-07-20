@@ -85,7 +85,33 @@ export function transformKeys(obj: unknown, parentKey?: string): unknown {
   return obj
 }
 
-api.interceptors.response.use((response) => {
-  response.data = transformKeys(response.data)
-  return response
-})
+api.interceptors.response.use(
+  (response) => {
+    response.data = transformKeys(response.data)
+    return response
+  },
+  (error) => {
+    // When a cloud provider API answers 401 (GCP token expired / revoked, AWS
+    // in-memory session lost), dispatch a global event so top-level provider
+    // status queries (and their derived views) can invalidate + refetch,
+    // resetting the UI to the connect screen instead of leaving stale
+    // "connected" panels next to red error banners. See app/providers.tsx
+    // for the corresponding listener.
+    if (typeof window !== "undefined" && error?.response?.status === 401) {
+      const url: string | undefined =
+        error?.config?.url ?? error?.request?.responseURL
+      if (url) {
+        const gcp = /\/api\/gcp\//.test(url)
+        const aws = /\/api\/aws\//.test(url)
+        if (gcp || aws) {
+          window.dispatchEvent(
+            new CustomEvent("provider-auth-expired", {
+              detail: { provider: gcp ? "gcp" : "aws" },
+            }),
+          )
+        }
+      }
+    }
+    return Promise.reject(error)
+  },
+)

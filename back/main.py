@@ -36,7 +36,6 @@ from routes.routes_health import router as health_router
 from routes.routes_local_billing import router as local_billing_router
 from routes.routes_portfolios import router as portfolios_router
 from routes.routes_simulation import router as simulation_router
-from routes.routes_tools import router as tools_router
 
 logger = get_logger(__name__)
 
@@ -247,7 +246,6 @@ app.include_router(events_router)
 app.include_router(data_router)
 app.include_router(advanced_router)
 app.include_router(chat_router)
-app.include_router(tools_router)
 app.include_router(auth_router)
 app.include_router(conversations_router)
 app.include_router(credentials_router)

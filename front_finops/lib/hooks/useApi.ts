@@ -23,7 +23,6 @@ import type {
   KPIData,
   DescriptiveStats,
   StationarityResult,
-  ACFPoint,
   GCPAuthStatus,
   GCPProject,
   GCPBillingResponse,
@@ -32,7 +31,6 @@ import type {
   GCPSyncResponse,
   EventsIngestRequest,
   EventsIngestResponse,
-  EventsUploadResponse,
   HealthStatus,
   OutliersResponse,
   DriftResponse,
@@ -130,14 +128,6 @@ export function useSTLStrengths() {
   return useQuery<STLStrengths>({
     queryKey: ["stl-strengths"],
     queryFn: () => api.get("/api/stl/strengths").then((r) => r.data),
-    staleTime: STALE,
-  })
-}
-
-export function useACF(nlags = 28) {
-  return useQuery<ACFPoint[]>({
-    queryKey: ["acf", nlags],
-    queryFn: () => api.get("/api/acf", { params: { nlags } }).then((r) => r.data),
     staleTime: STALE,
   })
 }
@@ -275,23 +265,6 @@ export function useGCPSync() {
       api
         .post("/api/gcp/sync", null, { params: { project_id: projectId, months } })
         .then((r) => r.data),
-  })
-}
-
-// Multipart upload of raw billing files (Excel notably — parsed backend-side
-// via openpyxl so ALL rows are ingested, not just the preview sample).
-export function useUploadEvents() {
-  return useMutation<EventsUploadResponse, Error, { files: File[]; replace?: boolean }>({
-    mutationFn: ({ files, replace = false }) => {
-      const form = new FormData()
-      files.forEach((f) => form.append("files", f))
-      form.append("replace", String(replace))
-      return api
-        .post("/api/events/upload", form, {
-          headers: { "Content-Type": "multipart/form-data" },
-        })
-        .then((r) => r.data)
-    },
   })
 }
 

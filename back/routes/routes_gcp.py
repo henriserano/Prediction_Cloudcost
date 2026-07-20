@@ -59,6 +59,11 @@ _SESSION_COOKIE = "gcp_sid"
 _SESSION_TTL = 7 * 24 * 3600  # seconds — sessions older than this are evicted
 _MAX_SESSIONS = 100  # hard cap; oldest session evicted beyond this
 
+# Refresh the access_token this many seconds before the upstream expiry so we
+# never make an API call with a token that's about to die between our clock
+# check and Google's server clock. Google's expires_in is typically 3600s.
+_ACCESS_TOKEN_SAFETY_MARGIN = 60
+
 # SEC-015: these dicts are mutated from sync endpoints running in the
 # threadpool — every read-modify-write must hold _state_lock.
 _state_lock = threading.Lock()
@@ -168,7 +173,18 @@ def _store_session_token(sid: str, token_data: dict, user_id: str | None) -> Non
     :func:`_get_session_token` re-checks that the current caller's JWT matches
     that owner, so an attacker who lifts a ``gcp_sid`` cookie into another
     browser cannot use it against the API.
+
+    The stored token dict is augmented with ``expires_at`` (monotonic wall clock)
+    computed from the ``expires_in`` value Google returns, so :func:`_get_credentials`
+    can transparently refresh via the ``refresh_token`` before the access_token
+    dies. Falls back to a 1-hour lifetime when ``expires_in`` is missing.
     """
+    now = time.time()
+    expires_in = int(token_data.get("expires_in") or 3600)
+    token_data = {
+        **token_data,
+        "expires_at": now + expires_in - _ACCESS_TOKEN_SAFETY_MARGIN,
+    }
     with _state_lock:
         _cleanup_expired_sessions()
         # Cap the number of concurrent sessions; evict the oldest first.
@@ -176,10 +192,86 @@ def _store_session_token(sid: str, token_data: dict, user_id: str | None) -> Non
             oldest_sid = min(_token_store, key=lambda k: _token_store[k]["created_at"])
             _token_store.pop(oldest_sid, None)
         _token_store[sid] = {
-            "created_at": time.time(),
+            "created_at": now,
             "token": token_data,
             "user_id": user_id,
         }
+
+
+def _drop_session(sid: str | None) -> None:
+    """Remove the given GCP session from the token store.
+
+    Idempotent — no-op when the sid is None or already gone. Called when we
+    detect a permanently-broken auth state (expired refresh_token, upstream
+    401 despite a fresh access_token) so the very next ``/api/gcp/status``
+    returns ``authenticated=false`` and the UI resets to the ConnectCard.
+    """
+    if not sid:
+        return
+    with _state_lock:
+        _token_store.pop(sid, None)
+
+
+def _refresh_google_token(sid: str) -> dict | None:
+    """Use the stored refresh_token to obtain a fresh access_token.
+
+    Returns the merged token dict on success (with a new ``expires_at``);
+    returns None and drops the session on failure. Google occasionally omits
+    the refresh_token from a refresh response, so we preserve the previous
+    one in that case (the token is stable across refreshes as long as the
+    grant is intact).
+    """
+    with _state_lock:
+        entry = _token_store.get(sid)
+        if entry is None:
+            return None
+        previous_token: dict = dict(entry.get("token") or {})
+    refresh_token = previous_token.get("refresh_token")
+    if not refresh_token:
+        # No refresh_token stored → nothing we can do; force full re-consent.
+        _drop_session(sid)
+        return None
+
+    settings = get_settings()
+    client_id = settings.google_client_id or _get_env("GOOGLE_CLIENT_ID")
+    client_secret = settings.google_client_secret or _get_env("GOOGLE_CLIENT_SECRET")
+
+    try:
+        resp = httpx.post(
+            _GOOGLE_TOKEN_URL,
+            data={
+                "refresh_token": refresh_token,
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "grant_type": "refresh_token",
+            },
+            timeout=_GCP_HTTP_TIMEOUT,
+        )
+        resp.raise_for_status()
+        new_fields = resp.json()
+    except Exception as exc:
+        # SEC-001: never surface the upstream body — it can carry the
+        # client_secret in reflection errors. Log verbatim server-side.
+        logger.warning("gcp_token_refresh_failed", extra={"error": repr(exc)})
+        _drop_session(sid)
+        return None
+
+    now = time.time()
+    expires_in = int(new_fields.get("expires_in") or 3600)
+    merged = {**previous_token, **new_fields}
+    if "refresh_token" not in new_fields:
+        # Google didn't rotate the refresh_token — keep the one that still works.
+        merged["refresh_token"] = refresh_token
+    merged["expires_at"] = now + expires_in - _ACCESS_TOKEN_SAFETY_MARGIN
+
+    with _state_lock:
+        entry = _token_store.get(sid)
+        if entry is None:
+            # Session evicted between the network call and the write-back.
+            return None
+        entry["token"] = merged
+    logger.info("gcp_token_refreshed", extra={"sid_hash": hash(sid)})
+    return dict(merged)
 
 
 def _get_session_token(request: Request) -> dict | None:
@@ -257,12 +349,32 @@ def _get_env(key: str, default: str = "") -> str:
 
 
 def _get_credentials(request: Request) -> dict:
-    """Return the requester's stored token dict or raise 401 (SEC-014)."""
+    """Return the requester's stored token dict or raise 401 (SEC-014).
+
+    Transparently refreshes the access_token via the stored refresh_token
+    when it's within ``_ACCESS_TOKEN_SAFETY_MARGIN`` of expiry. If the refresh
+    fails (revoked grant, upstream error, no refresh_token stored) the
+    session is dropped so subsequent ``/api/gcp/status`` calls report
+    ``authenticated=false`` and the UI can reset to the connect screen.
+    """
+    sid = request.cookies.get(_SESSION_COOKIE)
     token = _get_session_token(request)
-    if not token:
+    if not token or not sid:
         raise AppError(
-            "Not authenticated. Call /api/gcp/auth first.", code="UNAUTHORIZED", status_code=401
+            "Not authenticated. Call /api/gcp/auth first.",
+            code="UNAUTHORIZED",
+            status_code=401,
         )
+    expires_at = token.get("expires_at")
+    if expires_at is not None and time.time() >= float(expires_at):
+        refreshed = _refresh_google_token(sid)
+        if refreshed is None:
+            raise AppError(
+                "GCP session expired. Please reconnect.",
+                code="UNAUTHORIZED",
+                status_code=401,
+            )
+        return refreshed
     return token
 
 
@@ -273,15 +385,26 @@ def _build_auth_headers(token: dict) -> dict[str, str]:
 
 
 def _raise_gcp_upstream_error(
-    exc: httpx.HTTPStatusError, api_name: str, project_id: str | None = None
+    exc: httpx.HTTPStatusError,
+    api_name: str,
+    project_id: str | None = None,
+    request: Request | None = None,
 ) -> None:
     """Map a GCP HTTPStatusError onto the closest matching AppError.
 
     Preserves 401/403 so the client can act on them (re-auth vs. enable
     API / grant IAM role). Other upstream codes are surfaced as 502.
+
+    When ``request`` is provided and Google answered 401, the caller's
+    session is also dropped from the in-process store — the refresh_token
+    is presumed revoked, and every subsequent /api/gcp/status must then
+    report ``authenticated=false`` so the UI can reset to the connect
+    screen instead of showing stale "connected" state.
     """
     status = exc.response.status_code
     if status == 401:
+        if request is not None:
+            _drop_session(request.cookies.get(_SESSION_COOKIE))
         raise AppError("GCP token expired or invalid.", code="UNAUTHORIZED", status_code=401)
 
     # Extract the upstream error message when Google returned JSON — it usually
@@ -507,7 +630,7 @@ def gcp_projects(request: Request) -> list[GCPProject]:
         resp.raise_for_status()
         data = resp.json()
     except httpx.HTTPStatusError as exc:
-        _raise_gcp_upstream_error(exc, api_name="Resource Manager API")
+        _raise_gcp_upstream_error(exc, api_name="Resource Manager API", request=request)
     except Exception as exc:
         logger.error("gcp_projects_error", extra={"error": repr(exc)})
         raise AppError(
@@ -815,7 +938,7 @@ def gcp_billing_accounts(request: Request) -> list[GCPBillingAccount]:
             resp.raise_for_status()
             data = resp.json()
         except httpx.HTTPStatusError as exc:
-            _raise_gcp_upstream_error(exc, api_name="Cloud Billing API")
+            _raise_gcp_upstream_error(exc, api_name="Cloud Billing API", request=request)
         except Exception as exc:
             logger.error("gcp_billing_accounts_error", extra={"error": repr(exc)})
             raise AppError(
@@ -1091,7 +1214,9 @@ def gcp_logs(
         resp.raise_for_status()
         data = resp.json()
     except httpx.HTTPStatusError as exc:
-        _raise_gcp_upstream_error(exc, api_name="Cloud Logging API", project_id=project_id)
+        _raise_gcp_upstream_error(
+            exc, api_name="Cloud Logging API", project_id=project_id, request=request
+        )
     except Exception as exc:
         logger.error("gcp_logs_error", extra={"error": repr(exc)})
         raise AppError(
@@ -1209,7 +1334,9 @@ def gcp_services(
             resp.raise_for_status()
             data = resp.json()
         except httpx.HTTPStatusError as exc:
-            _raise_gcp_upstream_error(exc, api_name="Service Usage API", project_id=project_id)
+            _raise_gcp_upstream_error(
+                exc, api_name="Service Usage API", project_id=project_id, request=request
+            )
         except Exception as exc:
             logger.error("gcp_services_error", extra={"error": repr(exc)})
             raise AppError(
